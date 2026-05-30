@@ -49,6 +49,13 @@ class AssetStore:
             raise KeyError(asset_id)
         return self._items[asset_id]
 
+    def delete(self, asset_id: str) -> Asset:
+        if asset_id not in self._items:
+            raise KeyError(asset_id)
+        asset = self._items.pop(asset_id)
+        self._save()
+        return asset
+
 
 def save_upload(file, directory: str, kind: str) -> Asset:
     if not file.filename:

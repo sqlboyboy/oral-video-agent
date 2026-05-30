@@ -180,6 +180,25 @@ def test_link_task_rewrite_and_render_flow():
     assert progress_by_key["render"] == "completed"
 
 
+def test_delete_asset_removes_file_and_catalog_entry():
+    uploaded = client.post(
+        "/api/bgm/upload",
+        files={"file": ("delete-bgm.mp3", b"delete-bytes", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 200
+    asset = uploaded.json()["asset"]
+    asset_id = asset["asset_id"]
+    assert Path(asset["path"]).exists()
+
+    deleted = client.delete(f"/api/assets/{asset_id}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"ok": True}
+    assert not Path(asset["path"]).exists()
+
+    downloaded = client.get(f"/api/assets/{asset_id}/download")
+    assert downloaded.status_code == 404
+
+
 def test_asset_download_returns_uploaded_file():
     uploaded = client.post(
         "/api/bgm/upload",

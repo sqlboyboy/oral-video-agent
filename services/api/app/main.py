@@ -147,6 +147,16 @@ def subtitle_preview(req: SubtitlePreviewRequest):
     }
 
 
+@app.delete("/api/assets/{asset_id}", tags=["assets"])
+def delete_asset(asset_id: str):
+    try:
+        asset = asset_store.delete(asset_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="素材不存在")
+    Path(asset.path).unlink(missing_ok=True)
+    return {"ok": True}
+
+
 @app.get("/api/assets/{asset_id}/download", tags=["assets"])
 def download_asset(asset_id: str):
     try:
