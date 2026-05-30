@@ -19,6 +19,7 @@ storage/bgm/*
 storage/subtitles/*
 storage/outputs/*
 storage/tasks/*
+storage/assets/*
 
 !storage/uploads/.gitkeep
 !storage/extracted_audio/.gitkeep
@@ -27,3 +28,4 @@ storage/tasks/*
 !storage/subtitles/.gitkeep
 !storage/outputs/.gitkeep
 !storage/tasks/.gitkeep
+!storage/assets/.gitkeep

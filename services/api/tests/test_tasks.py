@@ -62,6 +62,34 @@ def test_link_task_rewrite_and_render_flow():
     assert rendered_task["output_video_path"]
 
 
+def test_custom_voice_and_bgm_uploads_are_listed():
+    voice_upload = client.post(
+        "/api/voices/upload",
+        files={"file": ("my-voice.wav", b"voice-bytes", "audio/wav")},
+    )
+    assert voice_upload.status_code == 200
+    uploaded_voice = voice_upload.json()["voice"]
+    assert uploaded_voice["built_in"] is False
+    assert uploaded_voice["voice_id"].startswith("custom:")
+
+    voices = client.get("/api/voices")
+    assert voices.status_code == 200
+    assert any(item["voice_id"] == uploaded_voice["voice_id"] for item in voices.json()["items"])
+
+    bgm_upload = client.post(
+        "/api/bgm/upload",
+        files={"file": ("my-bgm.mp3", b"bgm-bytes", "audio/mpeg")},
+    )
+    assert bgm_upload.status_code == 200
+    uploaded_bgm = bgm_upload.json()["bgm"]
+    assert uploaded_bgm["built_in"] is False
+    assert uploaded_bgm["bgm_id"].startswith("custom:")
+
+    bgm = client.get("/api/bgm")
+    assert bgm.status_code == 200
+    assert any(item["bgm_id"] == uploaded_bgm["bgm_id"] for item in bgm.json()["items"])
+
+
 def test_render_requires_script():
     created = client.post("/api/tasks", json={})
     assert created.status_code == 200

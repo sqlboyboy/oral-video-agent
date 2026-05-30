@@ -6,7 +6,8 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from .models import Asset, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, TaskStatus, storage_dir
+from .asset_store import asset_store, save_upload
+from .models import Asset, BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, TaskStatus, VoiceProfile, storage_dir
 from .pipeline.renderer import Renderer
 from .pipeline.subtitles import generate_srt
 from .providers.asr import AsrProvider
@@ -37,12 +38,68 @@ def health() -> Dict[str, str]:
 
 @app.get("/api/voices")
 def list_voices():
-    return {"items": BUILT_IN_VOICES}
+    custom_voices = [
+        VoiceProfile(
+            voice_id=f"custom:{asset.asset_id}",
+            name=Path(asset.filename).stem,
+            description="用户上传的授权声音参考",
+            built_in=False,
+            asset_id=asset.asset_id,
+        )
+        for asset in asset_store.list("voice_reference")
+    ]
+    return {"items": [*BUILT_IN_VOICES, *custom_voices]}
+
+
+@app.post("/api/voices/upload")
+def upload_voice_reference(file: UploadFile = File(...)):
+    try:
+        asset = save_upload(file, "voice_refs", "voice_reference")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "asset": asset,
+        "voice": VoiceProfile(
+            voice_id=f"custom:{asset.asset_id}",
+            name=Path(asset.filename).stem,
+            description="用户上传的授权声音参考",
+            built_in=False,
+            asset_id=asset.asset_id,
+        ),
+    }
 
 
 @app.get("/api/bgm")
 def list_bgm():
-    return {"items": BUILT_IN_BGM}
+    custom_bgm = [
+        BgmTrack(
+            bgm_id=f"custom:{asset.asset_id}",
+            name=Path(asset.filename).stem,
+            mood="custom",
+            built_in=False,
+            asset_id=asset.asset_id,
+        )
+        for asset in asset_store.list("bgm")
+    ]
+    return {"items": [*BUILT_IN_BGM, *custom_bgm]}
+
+
+@app.post("/api/bgm/upload")
+def upload_bgm(file: UploadFile = File(...)):
+    try:
+        asset = save_upload(file, "bgm", "bgm")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "asset": asset,
+        "bgm": BgmTrack(
+            bgm_id=f"custom:{asset.asset_id}",
+            name=Path(asset.filename).stem,
+            mood="custom",
+            built_in=False,
+            asset_id=asset.asset_id,
+        ),
+    }
 
 
 @app.get("/api/tasks")

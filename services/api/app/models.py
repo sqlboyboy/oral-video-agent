@@ -72,6 +72,7 @@ class VoiceProfile(BaseModel):
     name: str
     description: str
     built_in: bool = True
+    asset_id: Optional[str] = None
 
 
 class BgmTrack(BaseModel):
@@ -79,6 +80,7 @@ class BgmTrack(BaseModel):
     name: str
     mood: str
     built_in: bool = True
+    asset_id: Optional[str] = None
 
 
 def project_root() -> Path:
