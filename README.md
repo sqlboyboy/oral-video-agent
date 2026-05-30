@@ -87,14 +87,21 @@ flutter run -d android --dart-define=API_BASE=http://10.0.2.2:8000
 
 - `GET /api/health` 健康检查
 - `GET /api/providers` 当前 ASR/文案/TTS provider 配置状态
-- `GET /api/voices` 内置声音
-- `GET /api/bgm` 内置 BGM
+- `GET /api/voices` 内置声音和自定义声音列表
+- `POST /api/voices/upload` 上传授权声音参考
+- `GET /api/bgm` 内置 BGM 和自定义 BGM 列表
+- `POST /api/bgm/upload` 上传自定义 BGM
+- `GET /api/assets/{asset_id}/download` 下载素材文件
+- `DELETE /api/assets/{asset_id}` 删除素材文件
+- `POST /api/subtitles/preview` 预览字幕分行
 - `GET /api/tasks` 任务列表
 - `POST /api/tasks` 用链接创建任务
 - `POST /api/tasks/upload` 上传本地视频创建任务
 - `GET /api/tasks/{task_id}` 查询任务
+- `DELETE /api/tasks/{task_id}` 删除任务并清理本地文件
 - `POST /api/tasks/{task_id}/rewrite` 仿写文案
 - `POST /api/tasks/{task_id}/render` 合成视频
+- `GET /api/tasks/{task_id}/output` 查询成品 readiness/路径/大小
 - `GET /api/tasks/{task_id}/download` 下载成品
 
 ## 合规说明
