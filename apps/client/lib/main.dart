@@ -54,35 +54,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   @override
   void initState() {
     super.initState();
-    loadProviders();
-    loadRewriteStyles();
+    loadBootstrap();
     loadTaskSummaries();
   }
 
-  Future<void> loadProviders() async {
+  Future<void> loadBootstrap() async {
     try {
-      final res = await http.get(Uri.parse('$apiBase/api/providers'));
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw Exception('${res.statusCode}: ${res.body}');
-      }
-      setState(() => providers = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
-    } catch (e) {
-      setState(() => message = e.toString());
-    }
-  }
-
-  Future<void> loadRewriteStyles() async {
-    try {
-      final res = await http.get(Uri.parse('$apiBase/api/rewrite/styles'));
+      final res = await http.get(Uri.parse('$apiBase/api/bootstrap'));
       if (res.statusCode < 200 || res.statusCode >= 300) {
         throw Exception('${res.statusCode}: ${res.body}');
       }
       final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final items = (body['items'] as List).cast<Map<String, dynamic>>();
+      final styles = (body['rewrite_styles'] as List).cast<Map<String, dynamic>>();
       setState(() {
-        rewriteStyles = items;
-        if (items.isNotEmpty && !items.any((item) => item['name'] == selectedStyle)) {
-          selectedStyle = items.first['name'] as String;
+        providers = body['providers'] as Map<String, dynamic>;
+        rewriteStyles = styles;
+        if (styles.isNotEmpty && !styles.any((item) => item['name'] == selectedStyle)) {
+          selectedStyle = styles.first['name'] as String;
         }
       });
     } catch (e) {
@@ -225,7 +213,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 child: ListTile(
                   title: const Text('当前 AI Provider'),
                   subtitle: Text('文案仿写：$rewriteProvider${anthropicModel == null ? '' : ' · $anthropicModel'}'),
-                  trailing: IconButton(onPressed: loadProviders, icon: const Icon(Icons.refresh)),
+                  trailing: IconButton(onPressed: loadBootstrap, icon: const Icon(Icons.refresh)),
                 ),
               ),
               const SizedBox(height: 16),
