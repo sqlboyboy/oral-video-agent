@@ -24,6 +24,11 @@ class SubtitleStyle(BaseModel):
     max_chars_per_line: int = Field(default=18, ge=8, le=40)
 
 
+class SubtitlePreviewRequest(BaseModel):
+    script: str
+    style: SubtitleStyle = Field(default_factory=SubtitleStyle)
+
+
 class RenderOptions(BaseModel):
     script: Optional[str] = None
     voice_id: str = "default-female"

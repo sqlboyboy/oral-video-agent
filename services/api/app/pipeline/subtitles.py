@@ -17,8 +17,12 @@ def wrap_text(text: str, max_chars: int) -> List[str]:
     return lines or [text]
 
 
+def preview_subtitles(script: str, style: SubtitleStyle) -> List[str]:
+    return wrap_text(script, style.max_chars_per_line)
+
+
 def generate_srt(script: str, style: SubtitleStyle, output_path: Path) -> Path:
-    lines = wrap_text(script, style.max_chars_per_line)
+    lines = preview_subtitles(script, style)
     blocks = []
     for idx, line in enumerate(lines, start=1):
         start = idx - 1

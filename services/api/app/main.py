@@ -6,10 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, save_upload
-from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, TaskStatus, VoiceProfile, storage_dir
+from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, VoiceProfile, storage_dir
 from .pipeline.renderer import Renderer
 from .progress import complete_progress, start_progress
-from .pipeline.subtitles import generate_srt
+from .pipeline.subtitles import generate_srt, preview_subtitles
 from .providers.asr import AsrProvider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.rewrite import RewriteProvider
@@ -112,6 +112,14 @@ def upload_bgm(file: UploadFile = File(...)):
             built_in=False,
             asset_id=asset.asset_id,
         ),
+    }
+
+
+@app.post("/api/subtitles/preview")
+def subtitle_preview(req: SubtitlePreviewRequest):
+    return {
+        "lines": preview_subtitles(req.script, req.style),
+        "style": req.style,
     }
 
 
