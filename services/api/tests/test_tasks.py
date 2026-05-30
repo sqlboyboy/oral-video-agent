@@ -44,6 +44,8 @@ def test_link_task_rewrite_and_render_flow():
     task = created.json()
     assert task["status"] == "transcribed"
     assert task["original_script"]
+    assert task["progress_steps"][0] == {"key": "import", "label": "导入视频", "status": "completed"}
+    assert task["progress_steps"][1] == {"key": "transcribe", "label": "解析口播", "status": "completed"}
 
     rewritten = client.post(
         f"/api/tasks/{task['task_id']}/rewrite",
@@ -53,6 +55,7 @@ def test_link_task_rewrite_and_render_flow():
     rewritten_task = rewritten.json()
     assert rewritten_task["status"] == "rewritten"
     assert "智能口播软件" in rewritten_task["rewritten_script"]
+    assert rewritten_task["progress_steps"][2]["status"] == "completed"
 
     rendered = client.post(
         f"/api/tasks/{task['task_id']}/render",
@@ -75,6 +78,10 @@ def test_link_task_rewrite_and_render_flow():
     assert rendered_task["status"] == "completed"
     assert rendered_task["subtitle_path"]
     assert rendered_task["output_video_path"]
+    progress_by_key = {step["key"]: step["status"] for step in rendered_task["progress_steps"]}
+    assert progress_by_key["voice"] == "completed"
+    assert progress_by_key["subtitle"] == "completed"
+    assert progress_by_key["render"] == "completed"
 
 
 def test_custom_voice_and_bgm_uploads_are_listed():

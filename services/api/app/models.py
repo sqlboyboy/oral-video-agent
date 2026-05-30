@@ -1,6 +1,6 @@
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -52,11 +52,32 @@ class Asset(BaseModel):
     path: str
 
 
+class ProgressStep(BaseModel):
+    key: str
+    label: str
+    status: str = "pending"
+
+
+DEFAULT_PROGRESS_STEPS = [
+    ProgressStep(key="import", label="导入视频"),
+    ProgressStep(key="transcribe", label="解析口播"),
+    ProgressStep(key="rewrite", label="仿写文案"),
+    ProgressStep(key="voice", label="合成配音"),
+    ProgressStep(key="subtitle", label="生成字幕"),
+    ProgressStep(key="render", label="合成视频"),
+]
+
+
+def initial_progress_steps() -> List[ProgressStep]:
+    return [step.model_copy() for step in DEFAULT_PROGRESS_STEPS]
+
+
 class OralVideoTask(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     title: Optional[str] = None
     douyin_url: Optional[str] = None
     status: TaskStatus = TaskStatus.created
+    progress_steps: List[ProgressStep] = Field(default_factory=initial_progress_steps)
     source_video: Optional[Asset] = None
     extracted_audio_path: Optional[str] = None
     original_script: str = ""

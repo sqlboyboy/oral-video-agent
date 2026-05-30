@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from .asset_store import asset_store, save_upload
 from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, TaskStatus, VoiceProfile, storage_dir
 from .pipeline.renderer import Renderer
+from .progress import complete_progress, start_progress
 from .pipeline.subtitles import generate_srt
 from .providers.asr import AsrProvider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
@@ -30,7 +31,7 @@ voice_provider = VoiceProvider()
 renderer = Renderer()
 
 
-def custom_asset_path(value: str | None, expected_kind: str) -> Path | None:
+def custom_asset_path(value: Optional[str], expected_kind: str) -> Optional[Path]:
     if not value or not value.startswith("custom:"):
         return None
     asset_id = value.removeprefix("custom:")
@@ -123,8 +124,11 @@ def list_tasks():
 def create_task(req: CreateTaskRequest) -> OralVideoTask:
     task = OralVideoTask(title=req.title, douyin_url=req.douyin_url)
     if req.douyin_url:
+        complete_progress(task, "import")
+        start_progress(task, "transcribe")
         task.status = TaskStatus.transcribed
         task.original_script = asr_provider.transcribe(None, req.douyin_url)
+        complete_progress(task, "transcribe")
     return repo.put(task)
 
 
@@ -136,8 +140,11 @@ def upload_video(file: UploadFile = File(...)) -> OralVideoTask:
         raise HTTPException(status_code=400, detail=str(exc))
     task = OralVideoTask(title=Path(source_video.filename).stem)
     task.source_video = source_video
+    complete_progress(task, "import")
+    start_progress(task, "transcribe")
     task.status = TaskStatus.transcribed
     task.original_script = asr_provider.transcribe(None, source_video.filename)
+    complete_progress(task, "transcribe")
     return repo.put(task)
 
 
@@ -155,8 +162,10 @@ def rewrite_task(task_id: str, req: RewriteRequest) -> OralVideoTask:
         task = repo.get(task_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
+    start_progress(task, "rewrite")
     task.rewritten_script = rewrite_provider.rewrite(task.original_script, req)
     task.status = TaskStatus.rewritten
+    complete_progress(task, "rewrite")
     return repo.put(task)
 
 
@@ -176,12 +185,17 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     repo.put(task)
 
     audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
+    start_progress(task, "voice")
     voice_provider.synthesize(script, options.voice_id, audio_path)
+    complete_progress(task, "voice")
 
     subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
+    start_progress(task, "subtitle")
     generate_srt(script, options.subtitle_style, subtitle_path)
+    complete_progress(task, "subtitle")
 
     output_path = storage_dir("outputs") / f"{task_id}.mp4.txt"
+    start_progress(task, "render")
     source_video = Path(task.source_video.path) if task.source_video else None
     bgm_audio = custom_asset_path(options.bgm_id, "bgm")
     renderer.render(
@@ -195,6 +209,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         bgm_audio=bgm_audio,
     )
 
+    complete_progress(task, "render")
     task.subtitle_path = str(subtitle_path)
     task.output_video_path = str(output_path)
     task.status = TaskStatus.completed
