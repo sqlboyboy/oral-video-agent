@@ -42,6 +42,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic>? providers;
   Map<String, dynamic>? output;
   List<Map<String, dynamic>> taskSummaries = const [];
+  List<Map<String, dynamic>> rewriteStyles = const [];
   bool loading = false;
   String message = '';
   String selectedStyle = '同款口播';
@@ -54,6 +55,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   void initState() {
     super.initState();
     loadProviders();
+    loadRewriteStyles();
     loadTaskSummaries();
   }
 
@@ -64,6 +66,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         throw Exception('${res.statusCode}: ${res.body}');
       }
       setState(() => providers = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
+
+  Future<void> loadRewriteStyles() async {
+    try {
+      final res = await http.get(Uri.parse('$apiBase/api/rewrite/styles'));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${res.statusCode}: ${res.body}');
+      }
+      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final items = (body['items'] as List).cast<Map<String, dynamic>>();
+      setState(() {
+        rewriteStyles = items;
+        if (items.isNotEmpty && !items.any((item) => item['name'] == selectedStyle)) {
+          selectedStyle = items.first['name'] as String;
+        }
+      });
     } catch (e) {
       setState(() => message = e.toString());
     }
@@ -275,12 +296,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     ],
                     const SizedBox(height: 8),
                     Wrap(spacing: 12, runSpacing: 12, children: [
-                      DropdownButton<String>(value: selectedStyle, items: const [
-                        DropdownMenuItem(value: '同款口播', child: Text('同款口播')),
-                        DropdownMenuItem(value: '带货', child: Text('带货')),
-                        DropdownMenuItem(value: '知识口播', child: Text('知识口播')),
-                        DropdownMenuItem(value: '种草', child: Text('种草')),
-                      ], onChanged: (v) => setState(() => selectedStyle = v ?? selectedStyle)),
+                      DropdownButton<String>(
+                        value: selectedStyle,
+                        items: (rewriteStyles.isEmpty
+                                ? const [
+                                    {'name': '同款口播'},
+                                    {'name': '带货'},
+                                    {'name': '知识口播'},
+                                    {'name': '种草'},
+                                  ]
+                                : rewriteStyles)
+                            .map((item) => DropdownMenuItem<String>(
+                                  value: item['name'] as String,
+                                  child: Text(item['name'] as String),
+                                ))
+                            .toList(),
+                        onChanged: (v) => setState(() => selectedStyle = v ?? selectedStyle),
+                      ),
                       SizedBox(width: 220, child: TextField(controller: productController, decoration: const InputDecoration(labelText: '产品/服务信息'))),
                       SizedBox(width: 180, child: TextField(controller: audienceController, decoration: const InputDecoration(labelText: '目标人群'))),
                       FilledButton.tonal(onPressed: task == null || loading ? null : rewrite, child: const Text('一键仿写')),
