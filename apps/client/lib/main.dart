@@ -126,6 +126,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ));
   }
 
+  Future<void> deleteTask(String taskId) async {
+    try {
+      final res = await http.delete(Uri.parse('$apiBase/api/tasks/$taskId'));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${res.statusCode}: ${res.body}');
+      }
+      if (task?['task_id'] == taskId) {
+        setState(() {
+          task = null;
+          output = null;
+          scriptController.clear();
+        });
+      }
+      await loadTaskSummaries();
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
+
   Future<void> loadOutput() async {
     final taskId = task?['task_id'];
     if (taskId == null) return;
@@ -202,6 +221,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                           dense: true,
                           title: Text(item['title'] ?? item['task_id']),
                           subtitle: Text('状态：${item['status']} · 成品：${item['output_ready'] == true ? '已生成' : '未生成'}'),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () => deleteTask(item['task_id'] as String),
+                          ),
                           onTap: () async {
                             final res = await http.get(Uri.parse('$apiBase/api/tasks/${item['task_id']}'));
                             if (res.statusCode >= 200 && res.statusCode < 300) {
