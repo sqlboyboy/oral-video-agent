@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, save_upload
-from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, VoiceProfile, storage_dir
+from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, VoiceProfile, storage_dir
 from .pipeline.renderer import Renderer
 from .progress import complete_progress, start_progress
 from .pipeline.subtitles import generate_srt, preview_subtitles
@@ -140,7 +140,17 @@ def subtitle_preview(req: SubtitlePreviewRequest):
 
 @app.get("/api/tasks")
 def list_tasks():
-    return {"items": repo.list()}
+    summaries = [
+        TaskSummary(
+            task_id=task.task_id,
+            title=task.title,
+            status=task.status,
+            douyin_url=task.douyin_url,
+            output_ready=bool(task.output_video_path and Path(task.output_video_path).exists()),
+        )
+        for task in repo.list()
+    ]
+    return {"items": summaries}
 
 
 @app.post("/api/tasks")

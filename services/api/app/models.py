@@ -77,6 +77,14 @@ def initial_progress_steps() -> List[ProgressStep]:
     return [step.model_copy() for step in DEFAULT_PROGRESS_STEPS]
 
 
+class TaskSummary(BaseModel):
+    task_id: str
+    title: Optional[str]
+    status: TaskStatus
+    douyin_url: Optional[str]
+    output_ready: bool = False
+
+
 class OralVideoTask(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     title: Optional[str] = None

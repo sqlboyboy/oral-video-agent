@@ -52,6 +52,24 @@ def test_video_upload_creates_source_asset_task():
     assert task["original_script"]
 
 
+def test_task_list_returns_summaries():
+    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/list-video", "title": "列表测试"})
+    assert created.status_code == 200
+    task_id = created.json()["task_id"]
+
+    listed = client.get("/api/tasks")
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    summary = next(item for item in items if item["task_id"] == task_id)
+    assert summary == {
+        "task_id": task_id,
+        "title": "列表测试",
+        "status": "transcribed",
+        "douyin_url": "https://example.test/list-video",
+        "output_ready": False,
+    }
+
+
 def test_link_task_rewrite_and_render_flow():
     created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
     assert created.status_code == 200
