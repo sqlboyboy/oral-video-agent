@@ -90,6 +90,43 @@ def test_custom_voice_and_bgm_uploads_are_listed():
     assert any(item["bgm_id"] == uploaded_bgm["bgm_id"] for item in bgm.json()["items"])
 
 
+def test_render_accepts_uploaded_custom_bgm():
+    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
+    assert created.status_code == 200
+    task = created.json()
+
+    bgm_upload = client.post(
+        "/api/bgm/upload",
+        files={"file": ("render-bgm.mp3", b"bgm-bytes", "audio/mpeg")},
+    )
+    assert bgm_upload.status_code == 200
+    custom_bgm_id = bgm_upload.json()["bgm"]["bgm_id"]
+
+    rendered = client.post(
+        f"/api/tasks/{task['task_id']}/render",
+        json={"script": "使用自定义背景音乐合成", "voice_id": "default-female", "bgm_id": custom_bgm_id},
+    )
+
+    assert rendered.status_code == 200
+    rendered_task = rendered.json()
+    assert rendered_task["status"] == "completed"
+    assert rendered_task["render_options"]["bgm_id"] == custom_bgm_id
+
+
+def test_render_rejects_missing_custom_bgm():
+    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
+    assert created.status_code == 200
+    task_id = created.json()["task_id"]
+
+    rendered = client.post(
+        f"/api/tasks/{task_id}/render",
+        json={"script": "测试", "voice_id": "default-female", "bgm_id": "custom:missing"},
+    )
+
+    assert rendered.status_code == 404
+    assert rendered.json()["detail"] == "自定义素材不存在"
+
+
 def test_render_requires_script():
     created = client.post("/api/tasks", json={})
     assert created.status_code == 200

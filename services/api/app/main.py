@@ -31,6 +31,19 @@ voice_provider = VoiceProvider()
 renderer = Renderer()
 
 
+def custom_asset_path(value: str | None, expected_kind: str) -> Path | None:
+    if not value or not value.startswith("custom:"):
+        return None
+    asset_id = value.removeprefix("custom:")
+    try:
+        asset = asset_store.get(asset_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="自定义素材不存在")
+    if asset.kind != expected_kind:
+        raise HTTPException(status_code=400, detail="自定义素材类型不匹配")
+    return Path(asset.path)
+
+
 @app.get("/api/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -173,6 +186,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
 
     output_path = storage_dir("outputs") / f"{task_id}.mp4.txt"
     source_video = Path(task.source_video.path) if task.source_video else None
+    bgm_audio = custom_asset_path(options.bgm_id, "bgm")
     renderer.render(
         task_id,
         script,
@@ -181,6 +195,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         source_video=source_video,
         voice_audio=audio_path,
         subtitle_file=subtitle_path,
+        bgm_audio=bgm_audio,
     )
 
     task.subtitle_path = str(subtitle_path)
