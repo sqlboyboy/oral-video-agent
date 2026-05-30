@@ -94,6 +94,20 @@ def test_video_upload_creates_source_asset_task():
     assert task["original_script"]
 
 
+def test_update_task_title():
+    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/title-video"})
+    assert created.status_code == 200
+    task_id = created.json()["task_id"]
+
+    updated = client.patch(f"/api/tasks/{task_id}", json={"title": "新标题"})
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "新标题"
+
+    listed = client.get("/api/tasks")
+    summary = next(item for item in listed.json()["items"] if item["task_id"] == task_id)
+    assert summary["title"] == "新标题"
+
+
 def test_delete_task_removes_generated_files():
     uploaded = client.post(
         "/api/tasks/upload",

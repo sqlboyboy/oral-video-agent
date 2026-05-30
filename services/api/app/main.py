@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, save_upload
-from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, VoiceProfile, storage_dir
+from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, storage_dir
 from .pipeline.renderer import Renderer
 from .progress import complete_progress, start_progress
 from .pipeline.subtitles import generate_srt, preview_subtitles
@@ -241,6 +241,17 @@ def get_task(task_id: str) -> OralVideoTask:
         return repo.get(task_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
+
+
+@app.patch("/api/tasks/{task_id}", tags=["tasks"])
+def update_task(task_id: str, req: UpdateTaskRequest) -> OralVideoTask:
+    try:
+        task = repo.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if req.title is not None:
+        task.title = req.title.strip() or None
+    return repo.put(task)
 
 
 @app.delete("/api/tasks/{task_id}", tags=["tasks"])

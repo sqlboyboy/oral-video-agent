@@ -43,6 +43,10 @@ class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
 
 
+class UpdateTaskRequest(BaseModel):
+    title: Optional[str] = None
+
+
 class RewriteRequest(BaseModel):
     style: str = "同款口播"
     product_info: str = ""
