@@ -10,6 +10,11 @@ ALLOWED_SUFFIXES = {
     "voice_reference": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
     "bgm": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
 }
+MAX_UPLOAD_BYTES = {
+    "source_video": 500 * 1024 * 1024,
+    "voice_reference": 50 * 1024 * 1024,
+    "bgm": 100 * 1024 * 1024,
+}
 
 
 class AssetStore:
@@ -55,12 +60,22 @@ def save_upload(file, directory: str, kind: str) -> Asset:
         allowed = ", ".join(sorted(allowed_suffixes))
         raise ValueError(f"不支持的文件类型，允许：{allowed}")
     target_path = storage_dir(directory) / f"{asset.asset_id}{suffix}"
+    max_bytes = MAX_UPLOAD_BYTES.get(kind)
+    total_bytes = 0
+    size_error = None
     with target_path.open("wb") as out:
         while True:
             chunk = file.file.read(1024 * 1024)
             if not chunk:
                 break
+            total_bytes += len(chunk)
+            if max_bytes is not None and total_bytes > max_bytes:
+                size_error = ValueError(f"文件过大，最大允许 {max_bytes // 1024 // 1024}MB")
+                break
             out.write(chunk)
+    if size_error is not None:
+        target_path.unlink(missing_ok=True)
+        raise size_error
     asset.path = str(target_path)
     return asset_store.put(asset)
 
