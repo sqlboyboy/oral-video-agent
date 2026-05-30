@@ -17,7 +17,16 @@ from .providers.tts import create_voice_provider
 from .repository import repo
 from .settings import get_settings
 
-app = FastAPI(title="智能口播智能体 API", version="0.1.0")
+app = FastAPI(
+    title="智能口播智能体 API",
+    version="0.1.0",
+    openapi_tags=[
+        {"name": "system", "description": "服务健康和 provider 配置"},
+        {"name": "assets", "description": "声音、BGM、源视频等素材管理"},
+        {"name": "subtitles", "description": "字幕预览和样式能力"},
+        {"name": "tasks", "description": "口播视频任务创建、仿写、合成和下载"},
+    ],
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,12 +55,12 @@ def custom_asset_path(value: Optional[str], expected_kind: str) -> Optional[Path
     return Path(asset.path)
 
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["system"])
 def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/providers")
+@app.get("/api/providers", tags=["system"])
 def provider_status():
     return {
         "rewrite_provider": settings.rewrite_provider,
@@ -64,7 +73,7 @@ def provider_status():
     }
 
 
-@app.get("/api/voices")
+@app.get("/api/voices", tags=["assets"])
 def list_voices():
     custom_voices = [
         VoiceProfile(
@@ -79,7 +88,7 @@ def list_voices():
     return {"items": [*BUILT_IN_VOICES, *custom_voices]}
 
 
-@app.post("/api/voices/upload")
+@app.post("/api/voices/upload", tags=["assets"])
 def upload_voice_reference(file: UploadFile = File(...)):
     try:
         asset = save_upload(file, "voice_refs", "voice_reference")
@@ -97,7 +106,7 @@ def upload_voice_reference(file: UploadFile = File(...)):
     }
 
 
-@app.get("/api/bgm")
+@app.get("/api/bgm", tags=["assets"])
 def list_bgm():
     custom_bgm = [
         BgmTrack(
@@ -112,7 +121,7 @@ def list_bgm():
     return {"items": [*BUILT_IN_BGM, *custom_bgm]}
 
 
-@app.post("/api/bgm/upload")
+@app.post("/api/bgm/upload", tags=["assets"])
 def upload_bgm(file: UploadFile = File(...)):
     try:
         asset = save_upload(file, "bgm", "bgm")
@@ -130,7 +139,7 @@ def upload_bgm(file: UploadFile = File(...)):
     }
 
 
-@app.post("/api/subtitles/preview")
+@app.post("/api/subtitles/preview", tags=["subtitles"])
 def subtitle_preview(req: SubtitlePreviewRequest):
     return {
         "lines": preview_subtitles(req.script, req.style),
@@ -138,7 +147,7 @@ def subtitle_preview(req: SubtitlePreviewRequest):
     }
 
 
-@app.get("/api/assets/{asset_id}/download")
+@app.get("/api/assets/{asset_id}/download", tags=["assets"])
 def download_asset(asset_id: str):
     try:
         asset = asset_store.get(asset_id)
@@ -149,7 +158,7 @@ def download_asset(asset_id: str):
     return FileResponse(asset.path, filename=asset.filename)
 
 
-@app.get("/api/tasks")
+@app.get("/api/tasks", tags=["tasks"])
 def list_tasks():
     summaries = [
         TaskSummary(
@@ -164,7 +173,7 @@ def list_tasks():
     return {"items": summaries}
 
 
-@app.post("/api/tasks")
+@app.post("/api/tasks", tags=["tasks"])
 def create_task(req: CreateTaskRequest) -> OralVideoTask:
     task = OralVideoTask(title=req.title, douyin_url=req.douyin_url)
     if req.douyin_url:
@@ -176,7 +185,7 @@ def create_task(req: CreateTaskRequest) -> OralVideoTask:
     return repo.put(task)
 
 
-@app.post("/api/tasks/upload")
+@app.post("/api/tasks/upload", tags=["tasks"])
 def upload_video(file: UploadFile = File(...)) -> OralVideoTask:
     try:
         source_video = save_upload(file, "uploads", "source_video")
@@ -192,7 +201,7 @@ def upload_video(file: UploadFile = File(...)) -> OralVideoTask:
     return repo.put(task)
 
 
-@app.get("/api/tasks/{task_id}")
+@app.get("/api/tasks/{task_id}", tags=["tasks"])
 def get_task(task_id: str) -> OralVideoTask:
     try:
         return repo.get(task_id)
@@ -200,7 +209,7 @@ def get_task(task_id: str) -> OralVideoTask:
         raise HTTPException(status_code=404, detail="任务不存在")
 
 
-@app.delete("/api/tasks/{task_id}")
+@app.delete("/api/tasks/{task_id}", tags=["tasks"])
 def delete_task(task_id: str):
     try:
         repo.delete(task_id)
@@ -209,7 +218,7 @@ def delete_task(task_id: str):
     return {"ok": True}
 
 
-@app.post("/api/tasks/{task_id}/rewrite")
+@app.post("/api/tasks/{task_id}/rewrite", tags=["tasks"])
 def rewrite_task(task_id: str, req: RewriteRequest) -> OralVideoTask:
     try:
         task = repo.get(task_id)
@@ -222,7 +231,7 @@ def rewrite_task(task_id: str, req: RewriteRequest) -> OralVideoTask:
     return repo.put(task)
 
 
-@app.post("/api/tasks/{task_id}/render")
+@app.post("/api/tasks/{task_id}/render", tags=["tasks"])
 def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     try:
         task = repo.get(task_id)
@@ -269,7 +278,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     return repo.put(task)
 
 
-@app.get("/api/tasks/{task_id}/output")
+@app.get("/api/tasks/{task_id}/output", tags=["tasks"])
 def task_output(task_id: str):
     try:
         task = repo.get(task_id)
@@ -285,7 +294,7 @@ def task_output(task_id: str):
     }
 
 
-@app.get("/api/tasks/{task_id}/download")
+@app.get("/api/tasks/{task_id}/download", tags=["tasks"])
 def download_task(task_id: str):
     try:
         task = repo.get(task_id)
