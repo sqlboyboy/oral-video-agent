@@ -10,7 +10,7 @@ from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, R
 from .pipeline.renderer import Renderer
 from .progress import complete_progress, start_progress
 from .pipeline.subtitles import generate_srt, preview_subtitles
-from .providers.asr import AsrProvider
+from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.rewrite import create_rewrite_provider
 from .providers.tts import create_voice_provider
@@ -27,7 +27,7 @@ app.add_middleware(
 )
 
 settings = get_settings()
-asr_provider = AsrProvider()
+asr_provider = create_asr_provider(settings)
 rewrite_provider = create_rewrite_provider(settings)
 voice_provider = create_voice_provider(settings)
 renderer = Renderer()
@@ -57,7 +57,8 @@ def provider_status():
         "rewrite_provider": settings.rewrite_provider,
         "anthropic_model": settings.anthropic_model if settings.rewrite_provider == "anthropic" else None,
         "anthropic_configured": bool(settings.anthropic_api_key),
-        "asr_provider": "placeholder",
+        "asr_provider": settings.asr_provider,
+        "whisper_model": settings.whisper_model if settings.asr_provider == "faster-whisper" else None,
         "voice_provider": settings.voice_provider,
         "voice_configured": settings.voice_provider == "placeholder" or bool(settings.tts_api_key),
     }

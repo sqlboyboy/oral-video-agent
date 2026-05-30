@@ -22,6 +22,7 @@ def test_provider_status_reports_default_placeholder_config():
     assert body["anthropic_model"] is None
     assert body["anthropic_configured"] is False
     assert body["asr_provider"] == "placeholder"
+    assert body["whisper_model"] is None
     assert body["voice_provider"] == "placeholder"
     assert body["voice_configured"] is True
 
