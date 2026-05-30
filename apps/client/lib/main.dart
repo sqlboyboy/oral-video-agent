@@ -135,6 +135,36 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ));
   }
 
+  Future<void> renameTask(String taskId, String currentTitle) async {
+    final controller = TextEditingController(text: currentTitle);
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('重命名任务'),
+        content: TextField(controller: controller, decoration: const InputDecoration(labelText: '任务标题')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(onPressed: () => Navigator.pop(context, controller.text), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (newTitle == null) return;
+    try {
+      final res = await http.patch(
+        Uri.parse('$apiBase/api/tasks/$taskId'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'title': newTitle}),
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${res.statusCode}: ${res.body}');
+      }
+      setState(() => task = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+      await loadTaskSummaries();
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
+
   Future<void> deleteTask(String taskId) async {
     try {
       final res = await http.delete(Uri.parse('$apiBase/api/tasks/$taskId'));
@@ -230,10 +260,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                           dense: true,
                           title: Text(item['title'] ?? item['task_id']),
                           subtitle: Text('状态：${item['status']} · 成品：${item['output_ready'] == true ? '已生成' : '未生成'}'),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () => deleteTask(item['task_id'] as String),
-                          ),
+                          trailing: Wrap(spacing: 4, children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined),
+                              onPressed: () => renameTask(item['task_id'] as String, (item['title'] ?? '') as String),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              onPressed: () => deleteTask(item['task_id'] as String),
+                            ),
+                          ]),
                           onTap: () async {
                             final res = await http.get(Uri.parse('$apiBase/api/tasks/${item['task_id']}'));
                             if (res.statusCode >= 200 && res.statusCode < 300) {
