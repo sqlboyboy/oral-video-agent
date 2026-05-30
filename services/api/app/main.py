@@ -13,7 +13,7 @@ from .pipeline.subtitles import generate_srt, preview_subtitles
 from .providers.asr import AsrProvider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.rewrite import create_rewrite_provider
-from .providers.tts import VoiceProvider
+from .providers.tts import create_voice_provider
 from .repository import repo
 from .settings import get_settings
 
@@ -29,7 +29,7 @@ app.add_middleware(
 settings = get_settings()
 asr_provider = AsrProvider()
 rewrite_provider = create_rewrite_provider(settings)
-voice_provider = VoiceProvider()
+voice_provider = create_voice_provider(settings)
 renderer = Renderer()
 
 
@@ -58,7 +58,8 @@ def provider_status():
         "anthropic_model": settings.anthropic_model if settings.rewrite_provider == "anthropic" else None,
         "anthropic_configured": bool(settings.anthropic_api_key),
         "asr_provider": "placeholder",
-        "voice_provider": "placeholder",
+        "voice_provider": settings.voice_provider,
+        "voice_configured": settings.voice_provider == "placeholder" or bool(settings.tts_api_key),
     }
 
 
