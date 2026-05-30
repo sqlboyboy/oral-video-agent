@@ -154,6 +154,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final anthropicModel = providers?['anthropic_model'];
     final outputReady = output?['ready'] == true;
     final outputSize = output?['size_bytes'] ?? 0;
+    final progressSteps = (task?['progress_steps'] as List?)?.cast<Map<String, dynamic>>() ?? const <Map<String, dynamic>>[];
     return Scaffold(
       appBar: AppBar(title: const Text('智能口播智能体')),
       body: Center(
@@ -191,6 +192,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     Text('2. 文案仿写 · 状态：$status'),
                     const SizedBox(height: 8),
                     Text('原文：${task?['original_script'] ?? '-'}'),
+                    if (progressSteps.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: progressSteps.map((step) {
+                          final done = step['status'] == 'completed';
+                          final running = step['status'] == 'running';
+                          return Chip(
+                            avatar: Icon(done ? Icons.check_circle : running ? Icons.pending : Icons.radio_button_unchecked, size: 18),
+                            label: Text('${step['label']} · ${step['status']}'),
+                          );
+                        }).toList(),
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Wrap(spacing: 12, runSpacing: 12, children: [
                       DropdownButton<String>(value: selectedStyle, items: const [
