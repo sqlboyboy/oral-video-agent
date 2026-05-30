@@ -1,4 +1,15 @@
+from typing import Protocol
+
+import anthropic
+from anthropic import Anthropic
+
 from ..models import RewriteRequest
+from ..settings import Settings
+
+
+class ScriptRewriteProvider(Protocol):
+    def rewrite(self, original_script: str, req: RewriteRequest) -> str:
+        ...
 
 
 def build_rewrite_prompt(original_script: str, req: RewriteRequest) -> str:
@@ -21,7 +32,7 @@ def build_rewrite_prompt(original_script: str, req: RewriteRequest) -> str:
     )
 
 
-class RewriteProvider:
+class PlaceholderRewriteProvider:
     def rewrite(self, original_script: str, req: RewriteRequest) -> str:
         audience = f"面向{req.target_audience}" if req.target_audience else "面向目标用户"
         product = req.product_info or "你的产品/服务"
@@ -37,3 +48,37 @@ class RewriteProvider:
             f"参考原文结构：{original_script[:160]}\n\n"
             f"---\nPrompt Preview:\n{prompt[:260]}"
         )
+
+
+class AnthropicRewriteProvider:
+    def __init__(self, api_key: str, model: str) -> None:
+        self.client = Anthropic(api_key=api_key)
+        self.model = model
+
+    def rewrite(self, original_script: str, req: RewriteRequest) -> str:
+        prompt = build_rewrite_prompt(original_script, req)
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                thinking={"type": "adaptive"},
+                output_config={"effort": "medium"},
+                system="你是专业的中文短视频口播文案策划，只输出可直接口播的原创中文文案。",
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.APIError as exc:
+            raise RuntimeError(f"Claude rewrite failed: {exc.message}") from exc
+
+        texts = [block.text for block in response.content if block.type == "text"]
+        return "\n".join(texts).strip()
+
+
+def create_rewrite_provider(settings: Settings) -> ScriptRewriteProvider:
+    if settings.rewrite_provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is required when REWRITE_PROVIDER=anthropic")
+        return AnthropicRewriteProvider(settings.anthropic_api_key, settings.anthropic_model)
+    return PlaceholderRewriteProvider()
+
+
+RewriteProvider = PlaceholderRewriteProvider

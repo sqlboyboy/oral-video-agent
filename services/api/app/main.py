@@ -12,9 +12,10 @@ from .progress import complete_progress, start_progress
 from .pipeline.subtitles import generate_srt, preview_subtitles
 from .providers.asr import AsrProvider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
-from .providers.rewrite import RewriteProvider
+from .providers.rewrite import create_rewrite_provider
 from .providers.tts import VoiceProvider
 from .repository import repo
+from .settings import get_settings
 
 app = FastAPI(title="智能口播智能体 API", version="0.1.0")
 app.add_middleware(
@@ -25,8 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+settings = get_settings()
 asr_provider = AsrProvider()
-rewrite_provider = RewriteProvider()
+rewrite_provider = create_rewrite_provider(settings)
 voice_provider = VoiceProvider()
 renderer = Renderer()
 
