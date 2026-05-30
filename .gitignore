@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.uv-cache/
+.DS_Store
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+
+# Local generated media
+storage/uploads/*
+storage/extracted_audio/*
+storage/voice_refs/*
+storage/bgm/*
+storage/subtitles/*
+storage/outputs/*
+storage/tasks/*
+
+!storage/uploads/.gitkeep
+!storage/extracted_audio/.gitkeep
+!storage/voice_refs/.gitkeep
+!storage/bgm/.gitkeep
+!storage/subtitles/.gitkeep
+!storage/outputs/.gitkeep
+!storage/tasks/.gitkeep
