@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -70,6 +72,35 @@ def test_video_upload_creates_source_asset_task():
     assert task["source_video"]["filename"] == "source.mp4"
     assert task["source_video"]["asset_id"]
     assert task["original_script"]
+
+
+def test_delete_task_removes_generated_files():
+    uploaded = client.post(
+        "/api/tasks/upload",
+        files={"file": ("cleanup.mp4", b"video-bytes", "video/mp4")},
+    )
+    assert uploaded.status_code == 200
+    task_id = uploaded.json()["task_id"]
+
+    rendered = client.post(
+        f"/api/tasks/{task_id}/render",
+        json={"script": "清理测试", "voice_id": "default-female", "bgm_id": "default-light"},
+    )
+    assert rendered.status_code == 200
+    rendered_task = rendered.json()
+    paths = [
+        rendered_task["source_video"]["path"],
+        rendered_task["extracted_audio_path"],
+        rendered_task["subtitle_path"],
+        rendered_task["output_video_path"],
+    ]
+    assert all(paths)
+
+    deleted = client.delete(f"/api/tasks/{task_id}")
+    assert deleted.status_code == 200
+
+    for path in paths:
+        assert not Path(path).exists()
 
 
 def test_delete_task_removes_it_from_repository():

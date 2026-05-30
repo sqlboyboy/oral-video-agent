@@ -212,9 +212,17 @@ def get_task(task_id: str) -> OralVideoTask:
 @app.delete("/api/tasks/{task_id}", tags=["tasks"])
 def delete_task(task_id: str):
     try:
+        task = repo.get(task_id)
         repo.delete(task_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
+
+    paths = [task.extracted_audio_path, task.subtitle_path, task.output_video_path]
+    if task.source_video:
+        paths.append(task.source_video.path)
+    for path in paths:
+        if path:
+            Path(path).unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -249,6 +257,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
     start_progress(task, "voice")
     voice_provider.synthesize(script, options.voice_id, audio_path)
+    task.extracted_audio_path = str(audio_path)
     complete_progress(task, "voice")
 
     subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
