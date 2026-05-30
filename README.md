@@ -36,12 +36,21 @@ uv sync
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-如需启用 Claude 文案仿写，设置环境变量：
+常用 provider 配置：
 
 ```bash
+# 文案仿写：placeholder 或 anthropic
 REWRITE_PROVIDER=anthropic
 ANTHROPIC_API_KEY=你的密钥
 ANTHROPIC_MODEL=claude-opus-4-6
+
+# 语音识别：placeholder 或 faster-whisper
+ASR_PROVIDER=faster-whisper
+WHISPER_MODEL=small
+
+# 配音合成：placeholder 或后续接入的 TTS provider 名称，例如 cosyvoice
+VOICE_PROVIDER=placeholder
+TTS_API_KEY=
 ```
 
 不设置时默认使用本地 placeholder，便于离线开发和测试。
