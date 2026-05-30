@@ -5,6 +5,13 @@ from typing import Dict, List, Optional
 from .models import Asset, storage_dir
 
 
+ALLOWED_SUFFIXES = {
+    "source_video": {".mp4", ".mov", ".mkv", ".webm"},
+    "voice_reference": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
+    "bgm": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
+}
+
+
 class AssetStore:
     def __init__(self) -> None:
         self._db_path = storage_dir("assets") / "assets.json"
@@ -42,7 +49,11 @@ def save_upload(file, directory: str, kind: str) -> Asset:
     if not file.filename:
         raise ValueError("文件名不能为空")
     asset = Asset(kind=kind, filename=file.filename, path="")
-    suffix = Path(file.filename).suffix
+    suffix = Path(file.filename).suffix.lower()
+    allowed_suffixes = ALLOWED_SUFFIXES.get(kind)
+    if allowed_suffixes is not None and suffix not in allowed_suffixes:
+        allowed = ", ".join(sorted(allowed_suffixes))
+        raise ValueError(f"不支持的文件类型，允许：{allowed}")
     target_path = storage_dir(directory) / f"{asset.asset_id}{suffix}"
     with target_path.open("wb") as out:
         while True:

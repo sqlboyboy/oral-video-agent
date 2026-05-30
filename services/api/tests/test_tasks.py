@@ -37,6 +37,26 @@ def test_builtin_catalogs_are_available():
     assert len(bgm.json()["items"]) >= 1
 
 
+def test_video_upload_rejects_unsupported_file_type():
+    uploaded = client.post(
+        "/api/tasks/upload",
+        files={"file": ("source.txt", b"not-video", "text/plain")},
+    )
+
+    assert uploaded.status_code == 400
+    assert "不支持的文件类型" in uploaded.json()["detail"]
+
+
+def test_bgm_upload_rejects_unsupported_file_type():
+    uploaded = client.post(
+        "/api/bgm/upload",
+        files={"file": ("bgm.txt", b"not-audio", "text/plain")},
+    )
+
+    assert uploaded.status_code == 400
+    assert "不支持的文件类型" in uploaded.json()["detail"]
+
+
 def test_video_upload_creates_source_asset_task():
     uploaded = client.post(
         "/api/tasks/upload",
