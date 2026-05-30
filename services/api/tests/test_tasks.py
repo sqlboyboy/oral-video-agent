@@ -15,6 +15,15 @@ def test_health_check():
     assert res.json() == {"status": "ok"}
 
 
+def test_rewrite_style_presets_are_available():
+    res = client.get("/api/rewrite/styles")
+
+    assert res.status_code == 200
+    items = res.json()["items"]
+    names = {item["name"] for item in items}
+    assert {"同款口播", "带货", "知识口播", "种草", "情绪价值"}.issubset(names)
+
+
 def test_provider_status_reports_default_placeholder_config():
     res = client.get("/api/providers")
 

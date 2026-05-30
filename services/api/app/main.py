@@ -13,6 +13,7 @@ from .pipeline.subtitles import generate_srt, preview_subtitles
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.rewrite import create_rewrite_provider
+from .providers.rewrite_styles import REWRITE_STYLE_PRESETS
 from .providers.tts import create_voice_provider
 from .repository import repo
 from .settings import get_settings
@@ -137,6 +138,11 @@ def upload_bgm(file: UploadFile = File(...)):
             asset_id=asset.asset_id,
         ),
     }
+
+
+@app.get("/api/rewrite/styles", tags=["tasks"])
+def list_rewrite_styles():
+    return {"items": REWRITE_STYLE_PRESETS}
 
 
 @app.post("/api/subtitles/preview", tags=["subtitles"])
