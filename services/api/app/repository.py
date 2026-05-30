@@ -34,5 +34,11 @@ class TaskRepository:
         self._save()
         return task
 
+    def delete(self, task_id: str) -> None:
+        if task_id not in self._items:
+            raise KeyError(task_id)
+        del self._items[task_id]
+        self._save()
+
 
 repo = TaskRepository()

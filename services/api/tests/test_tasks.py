@@ -52,6 +52,19 @@ def test_video_upload_creates_source_asset_task():
     assert task["original_script"]
 
 
+def test_delete_task_removes_it_from_repository():
+    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/delete-video"})
+    assert created.status_code == 200
+    task_id = created.json()["task_id"]
+
+    deleted = client.delete(f"/api/tasks/{task_id}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"ok": True}
+
+    missing = client.get(f"/api/tasks/{task_id}")
+    assert missing.status_code == 404
+
+
 def test_task_list_returns_summaries():
     created = client.post("/api/tasks", json={"douyin_url": "https://example.test/list-video", "title": "列表测试"})
     assert created.status_code == 200

@@ -189,6 +189,15 @@ def get_task(task_id: str) -> OralVideoTask:
         raise HTTPException(status_code=404, detail="任务不存在")
 
 
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    try:
+        repo.delete(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {"ok": True}
+
+
 @app.post("/api/tasks/{task_id}/rewrite")
 def rewrite_task(task_id: str, req: RewriteRequest) -> OralVideoTask:
     try:
