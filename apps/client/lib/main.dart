@@ -40,6 +40,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Map<String, dynamic>? task;
   Map<String, dynamic>? providers;
+  Map<String, dynamic>? output;
   bool loading = false;
   String message = '';
   String selectedStyle = '同款口播';
@@ -109,6 +110,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ));
   }
 
+  Future<void> loadOutput() async {
+    final taskId = task?['task_id'];
+    if (taskId == null) return;
+    try {
+      final res = await http.get(Uri.parse('$apiBase/api/tasks/$taskId/output'));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${res.statusCode}: ${res.body}');
+      }
+      setState(() => output = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
+
   Future<void> render() async {
     final taskId = task?['task_id'];
     if (taskId == null) return;
@@ -129,6 +144,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             }
           }),
         ));
+    await loadOutput();
   }
 
   @override
@@ -136,6 +152,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final status = task?['status'] ?? '未创建';
     final rewriteProvider = providers?['rewrite_provider'] ?? '未知';
     final anthropicModel = providers?['anthropic_model'];
+    final outputReady = output?['ready'] == true;
+    final outputSize = output?['size_bytes'] ?? 0;
     return Scaffold(
       appBar: AppBar(title: const Text('智能口播智能体')),
       body: Center(
@@ -214,7 +232,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   ]),
                 ),
               ),
-              if (task?['output_video_path'] != null) SelectableText('成品路径：${task!['output_video_path']}'),
+              if (task?['task_id'] != null)
+                Card(
+                  child: ListTile(
+                    title: Text(outputReady ? '成品已生成' : '成品未就绪'),
+                    subtitle: SelectableText(outputReady ? '大小：$outputSize bytes\n路径：${output?['path']}' : '点击刷新检查合成结果'),
+                    trailing: IconButton(onPressed: loadOutput, icon: const Icon(Icons.refresh)),
+                  ),
+                ),
               if (message.isNotEmpty) Text(message, style: const TextStyle(color: Colors.red)),
               if (loading) const Padding(padding: EdgeInsets.all(16), child: LinearProgressIndicator()),
             ],
