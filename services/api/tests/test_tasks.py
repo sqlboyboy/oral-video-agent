@@ -13,6 +13,18 @@ def test_health_check():
     assert res.json() == {"status": "ok"}
 
 
+def test_provider_status_reports_default_placeholder_config():
+    res = client.get("/api/providers")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["rewrite_provider"] == "placeholder"
+    assert body["anthropic_model"] is None
+    assert body["anthropic_configured"] is False
+    assert body["asr_provider"] == "placeholder"
+    assert body["voice_provider"] == "placeholder"
+
+
 def test_builtin_catalogs_are_available():
     voices = client.get("/api/voices")
     bgm = client.get("/api/bgm")

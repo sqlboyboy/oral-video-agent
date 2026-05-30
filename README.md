@@ -36,6 +36,16 @@ uv sync
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+如需启用 Claude 文案仿写，设置环境变量：
+
+```bash
+REWRITE_PROVIDER=anthropic
+ANTHROPIC_API_KEY=你的密钥
+ANTHROPIC_MODEL=claude-opus-4-6
+```
+
+不设置时默认使用本地 placeholder，便于离线开发和测试。
+
 打开接口文档：
 
 ```text
@@ -61,6 +71,7 @@ flutter run -d android --dart-define=API_BASE=http://10.0.2.2:8000
 ## MVP API
 
 - `GET /api/health` 健康检查
+- `GET /api/providers` 当前 ASR/文案/TTS provider 配置状态
 - `GET /api/voices` 内置声音
 - `GET /api/bgm` 内置 BGM
 - `GET /api/tasks` 任务列表

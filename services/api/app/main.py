@@ -51,6 +51,17 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/providers")
+def provider_status():
+    return {
+        "rewrite_provider": settings.rewrite_provider,
+        "anthropic_model": settings.anthropic_model if settings.rewrite_provider == "anthropic" else None,
+        "anthropic_configured": bool(settings.anthropic_api_key),
+        "asr_provider": "placeholder",
+        "voice_provider": "placeholder",
+    }
+
+
 @app.get("/api/voices")
 def list_voices():
     custom_voices = [
