@@ -138,6 +138,17 @@ def subtitle_preview(req: SubtitlePreviewRequest):
     }
 
 
+@app.get("/api/assets/{asset_id}/download")
+def download_asset(asset_id: str):
+    try:
+        asset = asset_store.get(asset_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="素材不存在")
+    if not Path(asset.path).exists():
+        raise HTTPException(status_code=404, detail="素材文件不存在")
+    return FileResponse(asset.path, filename=asset.filename)
+
+
 @app.get("/api/tasks")
 def list_tasks():
     summaries = [

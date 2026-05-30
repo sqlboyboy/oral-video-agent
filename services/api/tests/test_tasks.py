@@ -129,6 +129,20 @@ def test_link_task_rewrite_and_render_flow():
     assert progress_by_key["render"] == "completed"
 
 
+def test_asset_download_returns_uploaded_file():
+    uploaded = client.post(
+        "/api/bgm/upload",
+        files={"file": ("download-bgm.mp3", b"download-bytes", "audio/mpeg")},
+    )
+    assert uploaded.status_code == 200
+    asset_id = uploaded.json()["asset"]["asset_id"]
+
+    downloaded = client.get(f"/api/assets/{asset_id}/download")
+
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"download-bytes"
+
+
 def test_custom_voice_and_bgm_uploads_are_listed():
     voice_upload = client.post(
         "/api/voices/upload",
