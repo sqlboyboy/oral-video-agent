@@ -61,6 +61,11 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/version", tags=["system"])
+def version():
+    return {"name": "oral-video-agent-api", "version": app.version}
+
+
 @app.get("/api/providers", tags=["system"])
 def provider_status():
     return {

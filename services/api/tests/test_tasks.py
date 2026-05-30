@@ -15,6 +15,13 @@ def test_health_check():
     assert res.json() == {"status": "ok"}
 
 
+def test_version_endpoint():
+    res = client.get("/api/version")
+
+    assert res.status_code == 200
+    assert res.json() == {"name": "oral-video-agent-api", "version": "0.1.0"}
+
+
 def test_bootstrap_catalog_returns_client_startup_data():
     res = client.get("/api/bootstrap")
 
