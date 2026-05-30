@@ -77,6 +77,12 @@ Android：
 flutter run -d android --dart-define=API_BASE=http://10.0.2.2:8000
 ```
 
+## 上传限制
+
+- 源视频：`.mp4`, `.mov`, `.mkv`, `.webm`，最大 500MB
+- 声音参考：`.wav`, `.mp3`, `.m4a`, `.aac`, `.flac`，最大 50MB
+- BGM：`.wav`, `.mp3`, `.m4a`, `.aac`, `.flac`，最大 100MB
+
 ## MVP API
 
 - `GET /api/health` 健康检查
