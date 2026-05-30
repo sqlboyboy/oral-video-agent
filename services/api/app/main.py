@@ -172,7 +172,16 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     generate_srt(script, options.subtitle_style, subtitle_path)
 
     output_path = storage_dir("outputs") / f"{task_id}.mp4.txt"
-    renderer.render(task_id, script, options, output_path)
+    source_video = Path(task.source_video.path) if task.source_video else None
+    renderer.render(
+        task_id,
+        script,
+        options,
+        output_path,
+        source_video=source_video,
+        voice_audio=audio_path,
+        subtitle_file=subtitle_path,
+    )
 
     task.subtitle_path = str(subtitle_path)
     task.output_video_path = str(output_path)
