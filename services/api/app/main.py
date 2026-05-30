@@ -1,5 +1,4 @@
 from pathlib import Path
-from shutil import copyfileobj
 from typing import Dict
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -7,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, save_upload
-from .models import Asset, BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, TaskStatus, VoiceProfile, storage_dir
+from .models import BgmTrack, CreateTaskRequest, OralVideoTask, RenderOptions, RewriteRequest, TaskStatus, VoiceProfile, storage_dir
 from .pipeline.renderer import Renderer
 from .pipeline.subtitles import generate_srt
 from .providers.asr import AsrProvider
@@ -131,16 +130,14 @@ def create_task(req: CreateTaskRequest) -> OralVideoTask:
 
 @app.post("/api/tasks/upload")
 def upload_video(file: UploadFile = File(...)) -> OralVideoTask:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="文件名不能为空")
-    suffix = Path(file.filename).suffix or ".mp4"
-    task = OralVideoTask(title=Path(file.filename).stem)
-    upload_path = storage_dir("uploads") / f"{task.task_id}{suffix}"
-    with upload_path.open("wb") as out:
-        copyfileobj(file.file, out)
-    task.source_video = Asset(kind="source_video", filename=file.filename, path=str(upload_path))
+    try:
+        source_video = save_upload(file, "uploads", "source_video")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    task = OralVideoTask(title=Path(source_video.filename).stem)
+    task.source_video = source_video
     task.status = TaskStatus.transcribed
-    task.original_script = asr_provider.transcribe(None, file.filename)
+    task.original_script = asr_provider.transcribe(None, source_video.filename)
     return repo.put(task)
 
 

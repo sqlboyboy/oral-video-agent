@@ -23,6 +23,21 @@ def test_builtin_catalogs_are_available():
     assert len(bgm.json()["items"]) >= 1
 
 
+def test_video_upload_creates_source_asset_task():
+    uploaded = client.post(
+        "/api/tasks/upload",
+        files={"file": ("source.mp4", b"video-bytes", "video/mp4")},
+    )
+
+    assert uploaded.status_code == 200
+    task = uploaded.json()
+    assert task["status"] == "transcribed"
+    assert task["source_video"]["kind"] == "source_video"
+    assert task["source_video"]["filename"] == "source.mp4"
+    assert task["source_video"]["asset_id"]
+    assert task["original_script"]
+
+
 def test_link_task_rewrite_and_render_flow():
     created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
     assert created.status_code == 200
