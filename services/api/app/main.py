@@ -76,6 +76,10 @@ def provider_status():
 
 @app.get("/api/voices", tags=["assets"])
 def list_voices():
+    return build_voice_catalog()
+
+
+def build_voice_catalog():
     custom_voices = [
         VoiceProfile(
             voice_id=f"custom:{asset.asset_id}",
@@ -109,6 +113,10 @@ def upload_voice_reference(file: UploadFile = File(...)):
 
 @app.get("/api/bgm", tags=["assets"])
 def list_bgm():
+    return build_bgm_catalog()
+
+
+def build_bgm_catalog():
     custom_bgm = [
         BgmTrack(
             bgm_id=f"custom:{asset.asset_id}",
@@ -143,6 +151,16 @@ def upload_bgm(file: UploadFile = File(...)):
 @app.get("/api/rewrite/styles", tags=["tasks"])
 def list_rewrite_styles():
     return {"items": REWRITE_STYLE_PRESETS}
+
+
+@app.get("/api/bootstrap", tags=["system"])
+def bootstrap_catalog():
+    return {
+        "providers": provider_status(),
+        "voices": build_voice_catalog()["items"],
+        "bgm": build_bgm_catalog()["items"],
+        "rewrite_styles": REWRITE_STYLE_PRESETS,
+    }
 
 
 @app.post("/api/subtitles/preview", tags=["subtitles"])

@@ -15,6 +15,17 @@ def test_health_check():
     assert res.json() == {"status": "ok"}
 
 
+def test_bootstrap_catalog_returns_client_startup_data():
+    res = client.get("/api/bootstrap")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["providers"]["rewrite_provider"] == "placeholder"
+    assert any(item["voice_id"] == "default-female" for item in body["voices"])
+    assert any(item["bgm_id"] == "default-light" for item in body["bgm"])
+    assert any(item["name"] == "同款口播" for item in body["rewrite_styles"])
+
+
 def test_rewrite_style_presets_are_available():
     res = client.get("/api/rewrite/styles")
 
