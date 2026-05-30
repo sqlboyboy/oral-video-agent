@@ -41,6 +41,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic>? task;
   Map<String, dynamic>? providers;
   Map<String, dynamic>? output;
+  List<Map<String, dynamic>> taskSummaries = const [];
   bool loading = false;
   String message = '';
   String selectedStyle = '同款口播';
@@ -53,6 +54,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   void initState() {
     super.initState();
     loadProviders();
+    loadTaskSummaries();
   }
 
   Future<void> loadProviders() async {
@@ -62,6 +64,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         throw Exception('${res.statusCode}: ${res.body}');
       }
       setState(() => providers = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
+
+  Future<void> loadTaskSummaries() async {
+    try {
+      final res = await http.get(Uri.parse('$apiBase/api/tasks'));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${res.statusCode}: ${res.body}');
+      }
+      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      setState(() => taskSummaries = (body['items'] as List).cast<Map<String, dynamic>>());
     } catch (e) {
       setState(() => message = e.toString());
     }
@@ -78,6 +93,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         throw Exception('${res.statusCode}: ${res.body}');
       }
       setState(() => task = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+      await loadTaskSummaries();
       scriptController.text = (task?['rewritten_script'] as String?)?.isNotEmpty == true
           ? task!['rewritten_script'] as String
           : task?['original_script'] as String? ?? '';
@@ -173,6 +189,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 ),
               ),
               const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      const Expanded(child: Text('历史任务')),
+                      TextButton(onPressed: loadTaskSummaries, child: const Text('刷新')),
+                    ]),
+                    if (taskSummaries.isEmpty) const Text('暂无历史任务'),
+                    ...taskSummaries.take(5).map((item) => ListTile(
+                          dense: true,
+                          title: Text(item['title'] ?? item['task_id']),
+                          subtitle: Text('状态：${item['status']} · 成品：${item['output_ready'] == true ? '已生成' : '未生成'}'),
+                          onTap: () async {
+                            final res = await http.get(Uri.parse('$apiBase/api/tasks/${item['task_id']}'));
+                            if (res.statusCode >= 200 && res.statusCode < 300) {
+                              setState(() => task = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+                              scriptController.text = (task?['rewritten_script'] as String?)?.isNotEmpty == true
+                                  ? task!['rewritten_script'] as String
+                                  : task?['original_script'] as String? ?? '';
+                              await loadOutput();
+                            }
+                          },
+                        )),
+                  ]),
+                ),
+              ),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(16),
