@@ -161,6 +161,29 @@ def test_render_rejects_missing_custom_bgm():
     assert rendered.json()["detail"] == "自定义素材不存在"
 
 
+def test_output_endpoint_reports_readiness_before_and_after_render():
+    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
+    assert created.status_code == 200
+    task_id = created.json()["task_id"]
+
+    before = client.get(f"/api/tasks/{task_id}/output")
+    assert before.status_code == 200
+    assert before.json() == {"ready": False, "path": None, "size_bytes": 0}
+
+    rendered = client.post(
+        f"/api/tasks/{task_id}/render",
+        json={"script": "生成成品文件", "voice_id": "default-female", "bgm_id": "default-light"},
+    )
+    assert rendered.status_code == 200
+
+    after = client.get(f"/api/tasks/{task_id}/output")
+    assert after.status_code == 200
+    body = after.json()
+    assert body["ready"] is True
+    assert body["path"]
+    assert body["size_bytes"] > 0
+
+
 def test_render_requires_script():
     created = client.post("/api/tasks", json={})
     assert created.status_code == 200

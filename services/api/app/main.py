@@ -237,6 +237,22 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     return repo.put(task)
 
 
+@app.get("/api/tasks/{task_id}/output")
+def task_output(task_id: str):
+    try:
+        task = repo.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not task.output_video_path:
+        return {"ready": False, "path": None, "size_bytes": 0}
+    output_path = Path(task.output_video_path)
+    return {
+        "ready": output_path.exists(),
+        "path": task.output_video_path,
+        "size_bytes": output_path.stat().st_size if output_path.exists() else 0,
+    }
+
+
 @app.get("/api/tasks/{task_id}/download")
 def download_task(task_id: str):
     try:
