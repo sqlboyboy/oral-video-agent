@@ -39,6 +39,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final scriptController = TextEditingController();
 
   Map<String, dynamic>? task;
+  Map<String, dynamic>? providers;
   bool loading = false;
   String message = '';
   String selectedStyle = '同款口播';
@@ -46,6 +47,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String selectedBgm = 'default-light';
   double bgmVolume = 0.18;
   double subtitleSize = 42;
+
+  @override
+  void initState() {
+    super.initState();
+    loadProviders();
+  }
+
+  Future<void> loadProviders() async {
+    try {
+      final res = await http.get(Uri.parse('$apiBase/api/providers'));
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw Exception('${res.statusCode}: ${res.body}');
+      }
+      setState(() => providers = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
 
   Future<void> callApi(Future<http.Response> Function() action) async {
     setState(() {
@@ -115,6 +134,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   @override
   Widget build(BuildContext context) {
     final status = task?['status'] ?? '未创建';
+    final rewriteProvider = providers?['rewrite_provider'] ?? '未知';
+    final anthropicModel = providers?['anthropic_model'];
     return Scaffold(
       appBar: AppBar(title: const Text('智能口播智能体')),
       body: Center(
@@ -124,6 +145,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             padding: const EdgeInsets.all(20),
             children: [
               Text('复制抖音链接，一键解析、仿写、配音、BGM、字幕并生成视频', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Card(
+                child: ListTile(
+                  title: const Text('当前 AI Provider'),
+                  subtitle: Text('文案仿写：$rewriteProvider${anthropicModel == null ? '' : ' · $anthropicModel'}'),
+                  trailing: IconButton(onPressed: loadProviders, icon: const Icon(Icons.refresh)),
+                ),
+              ),
               const SizedBox(height: 16),
               Card(
                 child: Padding(
