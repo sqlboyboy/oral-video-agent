@@ -15,6 +15,7 @@ from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.rewrite import create_rewrite_provider
 from .providers.rewrite_styles import REWRITE_STYLE_PRESETS
 from .providers.tts import create_voice_provider
+from .providers.video_importer import VideoImportError, VideoImporter
 from .repository import repo
 from .settings import get_settings
 
@@ -40,6 +41,7 @@ settings = get_settings()
 asr_provider = create_asr_provider(settings)
 rewrite_provider = create_rewrite_provider(settings)
 voice_provider = create_voice_provider(settings)
+video_importer = VideoImporter()
 renderer = Renderer()
 
 
@@ -216,10 +218,19 @@ def list_tasks():
 def create_task(req: CreateTaskRequest) -> OralVideoTask:
     task = OralVideoTask(title=req.title, douyin_url=req.douyin_url)
     if req.douyin_url:
+        start_progress(task, "import")
+        try:
+            source_video = video_importer.import_from_share_text(req.douyin_url)
+        except VideoImportError as exc:
+            task.status = TaskStatus.failed
+            task.error_message = str(exc)
+            repo.put(task)
+            raise HTTPException(status_code=400, detail=str(exc))
+        task.source_video = source_video
         complete_progress(task, "import")
         start_progress(task, "transcribe")
         task.status = TaskStatus.transcribed
-        task.original_script = asr_provider.transcribe(None, req.douyin_url)
+        task.original_script = asr_provider.transcribe(Path(source_video.path), source_video.filename)
         complete_progress(task, "transcribe")
     return repo.put(task)
 

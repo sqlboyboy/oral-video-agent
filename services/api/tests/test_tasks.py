@@ -1,11 +1,25 @@
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.providers.video_importer import VideoImportError
 
 
 client = TestClient(app)
+
+# Helper: create a task via local video upload (avoids real network calls)
+def _create_task_via_upload(filename: str = "source.mp4", title: str = None) -> dict:
+    files = {"file": (filename, b"video-bytes", "video/mp4")}
+    res = client.post("/api/tasks/upload", files=files)
+    assert res.status_code == 200
+    task = res.json()
+    if title:
+        patched = client.patch(f"/api/tasks/{task['task_id']}", json={"title": title})
+        assert patched.status_code == 200
+        return patched.json()
+    return task
 
 
 def test_health_check():
@@ -102,9 +116,8 @@ def test_video_upload_creates_source_asset_task():
 
 
 def test_update_task_title():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/title-video"})
-    assert created.status_code == 200
-    task_id = created.json()["task_id"]
+    task = _create_task_via_upload()
+    task_id = task["task_id"]
 
     updated = client.patch(f"/api/tasks/{task_id}", json={"title": "新标题"})
     assert updated.status_code == 200
@@ -145,9 +158,8 @@ def test_delete_task_removes_generated_files():
 
 
 def test_delete_task_removes_it_from_repository():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/delete-video"})
-    assert created.status_code == 200
-    task_id = created.json()["task_id"]
+    task = _create_task_via_upload()
+    task_id = task["task_id"]
 
     deleted = client.delete(f"/api/tasks/{task_id}")
     assert deleted.status_code == 200
@@ -158,27 +170,41 @@ def test_delete_task_removes_it_from_repository():
 
 
 def test_task_list_returns_summaries():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/list-video", "title": "列表测试"})
-    assert created.status_code == 200
-    task_id = created.json()["task_id"]
+    task = _create_task_via_upload(title="列表测试")
+    task_id = task["task_id"]
 
     listed = client.get("/api/tasks")
     assert listed.status_code == 200
     items = listed.json()["items"]
     summary = next(item for item in items if item["task_id"] == task_id)
-    assert summary == {
-        "task_id": task_id,
-        "title": "列表测试",
-        "status": "transcribed",
-        "douyin_url": "https://example.test/list-video",
-        "output_ready": False,
-    }
+    assert summary["task_id"] == task_id
+    assert summary["title"] == "列表测试"
+    assert summary["status"] == "transcribed"
+    assert summary["output_ready"] is False
 
 
-def test_link_task_rewrite_and_render_flow():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
-    assert created.status_code == 200
-    task = created.json()
+def test_link_task_returns_400_when_download_fails():
+    """Pasting a Douyin share link that cannot be downloaded returns HTTP 400."""
+    with patch("app.main.video_importer.import_from_share_text",
+               side_effect=VideoImportError("视频链接导入失败，请改用本地上传。原因：网络错误")):
+        res = client.post("/api/tasks", json={"douyin_url": "https://v.douyin.com/fake"})
+
+    assert res.status_code == 400
+    assert "请改用本地上传" in res.json()["detail"]
+
+
+def test_link_task_no_url_returns_400():
+    """Share text with no recognisable URL returns HTTP 400."""
+    with patch("app.main.video_importer.import_from_share_text",
+               side_effect=VideoImportError("没有识别到有效视频链接")):
+        res = client.post("/api/tasks", json={"douyin_url": "这是一段没有链接的文字"})
+
+    assert res.status_code == 400
+    assert "没有识别到有效视频链接" in res.json()["detail"]
+
+
+def test_upload_rewrite_and_render_flow():
+    task = _create_task_via_upload()
     assert task["status"] == "transcribed"
     assert task["original_script"]
     assert task["progress_steps"][0] == {"key": "import", "label": "导入视频", "status": "completed"}
@@ -283,9 +309,7 @@ def test_custom_voice_and_bgm_uploads_are_listed():
 
 
 def test_render_accepts_uploaded_custom_bgm():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
-    assert created.status_code == 200
-    task = created.json()
+    task = _create_task_via_upload()
 
     bgm_upload = client.post(
         "/api/bgm/upload",
@@ -306,12 +330,10 @@ def test_render_accepts_uploaded_custom_bgm():
 
 
 def test_render_rejects_missing_custom_bgm():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
-    assert created.status_code == 200
-    task_id = created.json()["task_id"]
+    task = _create_task_via_upload()
 
     rendered = client.post(
-        f"/api/tasks/{task_id}/render",
+        f"/api/tasks/{task['task_id']}/render",
         json={"script": "测试", "voice_id": "default-female", "bgm_id": "custom:missing"},
     )
 
@@ -320,9 +342,8 @@ def test_render_rejects_missing_custom_bgm():
 
 
 def test_output_endpoint_reports_readiness_before_and_after_render():
-    created = client.post("/api/tasks", json={"douyin_url": "https://example.test/video"})
-    assert created.status_code == 200
-    task_id = created.json()["task_id"]
+    task = _create_task_via_upload()
+    task_id = task["task_id"]
 
     before = client.get(f"/api/tasks/{task_id}/output")
     assert before.status_code == 200
