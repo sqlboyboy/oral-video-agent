@@ -41,7 +41,7 @@ settings = get_settings()
 asr_provider = create_asr_provider(settings)
 rewrite_provider = create_rewrite_provider(settings)
 voice_provider = create_voice_provider(settings)
-video_importer = VideoImporter(cookies_file=settings.douyin_cookies_file)
+video_importer = VideoImporter()
 renderer = Renderer()
 
 
