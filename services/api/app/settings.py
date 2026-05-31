@@ -11,6 +11,7 @@ class Settings:
     whisper_model: str = os.getenv("WHISPER_MODEL", "small")
     voice_provider: str = os.getenv("VOICE_PROVIDER", "placeholder")
     tts_api_key: str | None = os.getenv("TTS_API_KEY")
+    douyin_cookies_file: str | None = os.getenv("DOUYIN_COOKIES_FILE")
 
 
 def get_settings() -> Settings:
