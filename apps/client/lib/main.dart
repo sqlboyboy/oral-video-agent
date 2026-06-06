@@ -88,6 +88,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   double mouthApertureRelease = 1.0;
   int outputRefresh = 0;
   Timer? renderPollTimer;
+  Player? _voicePlayer;
+  bool _isPlayingVoice = false;
 
   @override
   void initState() {
@@ -98,6 +100,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   @override
   void dispose() {
     renderPollTimer?.cancel();
+    _voicePlayer?.dispose();
     urlController.dispose();
     productController.dispose();
     audienceController.dispose();
@@ -319,6 +322,40 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() => task = body);
     });
+  }
+
+  Future<void> playVoice() async {
+    final taskId = _taskId;
+    if (taskId == null) {
+      setState(() => message = '请先选择任务');
+      return;
+    }
+    final voiceUrl = '$apiBase/api/tasks/$taskId/voice';
+    try {
+      if (_voicePlayer != null) {
+        await _voicePlayer?.stop();
+        _voicePlayer?.dispose();
+        _voicePlayer = null;
+      }
+      if (_isPlayingVoice) {
+        setState(() => _isPlayingVoice = false);
+        return;
+      }
+      _voicePlayer = Player();
+      setState(() => _isPlayingVoice = true);
+      await _voicePlayer!.open(Media(voiceUrl));
+      await _voicePlayer!.play();
+      _voicePlayer!.stream.completed.listen((_) {
+        if (mounted) setState(() => _isPlayingVoice = false);
+      });
+    } catch (e) {
+      setState(() {
+        message = '播放失败: ${e.toString()}';
+        _isPlayingVoice = false;
+      });
+      _voicePlayer?.dispose();
+      _voicePlayer = null;
+    }
   }
 
   Future<void> uploadDigitalHuman() async {
@@ -621,11 +658,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Expanded(
             child: Row(
               children: [
-                SizedBox(width: 360, child: _leftPanel(status, steps)),
+                Expanded(
+                  flex: 3,
+                  child: _leftPanel(status, steps),
+                ),
                 const VerticalDivider(width: 1, color: Color(0xFF31364A)),
-                Expanded(child: _centerPanel()),
+                Expanded(
+                  flex: 4,
+                  child: _centerPanel(),
+                ),
                 const VerticalDivider(width: 1, color: Color(0xFF31364A)),
-                SizedBox(width: 320, child: _rightPanel()),
+                Expanded(
+                  flex: 3,
+                  child: _rightPanel(),
+                ),
               ],
             ),
           ),
@@ -794,6 +840,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   ),
                   _ghostButton('上传声音', uploadVoice),
                   _stepButton('克隆声音', cloneVoice, compact: true),
+                  _stepButton(
+                    _isPlayingVoice ? '停止播放' : '播放声音',
+                    playVoice,
+                    compact: true,
+                  ),
                 ]),
               ],
             ),
