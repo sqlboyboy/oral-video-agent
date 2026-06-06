@@ -1,5 +1,12 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
+
+# On this Windows build host, MSBuild's C++ file tracker can leave CL.exe
+# running forever during CMake compiler detection. Disable it for generated
+# Visual Studio projects so Flutter Windows builds can complete reliably.
+set(CMAKE_VS_GLOBALS "TrackFileAccess=false")
+set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES CMAKE_VS_GLOBALS)
+
 project(oral_video_agent_client LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change

@@ -1,7 +1,15 @@
 import pytest
+import wave
 
 from app.providers.tts import ExternalVoiceProvider, PlaceholderVoiceProvider, create_voice_provider
 from app.settings import Settings
+
+
+def assert_valid_placeholder_wav(path):
+    with wave.open(str(path), "rb") as wav:
+        assert wav.getnchannels() == 1
+        assert wav.getframerate() == 16000
+        assert wav.getnframes() > 0
 
 
 def test_create_voice_provider_defaults_to_placeholder(tmp_path):
@@ -11,7 +19,7 @@ def test_create_voice_provider_defaults_to_placeholder(tmp_path):
     provider.synthesize("测试文案", "default-female", output)
 
     assert isinstance(provider, PlaceholderVoiceProvider)
-    assert output.read_bytes() == b"PLACEHOLDER_AUDIO_WAV"
+    assert_valid_placeholder_wav(output)
 
 
 def test_external_voice_provider_requires_api_key():
@@ -26,4 +34,4 @@ def test_external_voice_provider_writes_provider_placeholder(tmp_path):
     provider.synthesize("测试文案", "custom:voice", output)
 
     assert isinstance(provider, ExternalVoiceProvider)
-    assert output.read_bytes() == b"PLACEHOLDER_COSYVOICE_AUDIO"
+    assert_valid_placeholder_wav(output)

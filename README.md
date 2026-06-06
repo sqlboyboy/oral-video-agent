@@ -51,9 +51,51 @@ WHISPER_MODEL=small
 # 配音合成：placeholder 或后续接入的 TTS provider 名称，例如 cosyvoice
 VOICE_PROVIDER=placeholder
 TTS_API_KEY=
+
+# 数字人：Wav2Lip ONNX + 局部嘴部融合
+DIGITAL_HUMAN_PROVIDER=wav2lip-onnx
+WAV2LIP_ONNX_MODEL=storage/models/wav2lip/wav2lip.onnx
+WAV2LIP_BLEND_ENABLED=true
+WAV2LIP_BLEND_PRESET=balanced
+WAV2LIP_APERTURE_ATLAS_SOURCE=
+WAV2LIP_APERTURE_ATLAS_STRENGTH=0.5
+WAV2LIP_APERTURE_ENERGY_THRESHOLD=0.24
+WAV2LIP_APERTURE_MIN_RATIO=0.07
+WAV2LIP_APERTURE_MAX_RATIO=0.36
+WAV2LIP_APERTURE_ATTACK=1.0
+WAV2LIP_APERTURE_RELEASE=1.0
+WAV2LIP_QUALITY_DIAGNOSTICS_ENABLED=true
+WAV2LIP_QUALITY_DIAGNOSTICS_SAMPLE_STRIDE=2
+WAV2LIP_QUALITY_DIAGNOSTICS_MAX_FRAMES=240
 ```
 
 不设置时默认使用本地 placeholder，便于离线开发和测试。
+
+### 数字人口型自然度
+
+`wav2lip-onnx` 会先生成原始对口型视频，再通过 `tools/blend_wav2lip_result.py` 做局部嘴部融合：只把 Wav2Lip 的嘴型区域融合回原视频，尽量保留脸颊、眼睛、头发和背景不变，接近“只改嘴巴”的商业软件观感。
+
+`WAV2LIP_BLEND_PRESET` 可选：
+
+- `balanced`：默认，优先保留开口幅度，适合当前最佳实验分支。
+- `natural`：额外柔化嘴部边缘，适合更重视边界自然的素材。
+- `detail`：增加局部纹理恢复，适合高清素材调参验证。
+- `soft-cavity` / `upper-cavity`：实验性减少口腔黑洞感，当前不建议默认使用。
+
+默认会自动复用当前选择的数字人参考视频建立同身份闭口/微开口基准，稳定口型开合；如需固定一条内部基准视频，可设置 `WAV2LIP_APERTURE_ATLAS_SOURCE`。当前默认强度 `0.5`、闭口阈值 `0.24`、开合范围 `0.07/0.36` 是已验证的自动补偿起点。`ATTACK/RELEASE` 控制张口响应和闭口回落速度；默认 `1.0/1.0` 不额外平滑，若长视频出现抖动再降低。
+
+渲染后默认会写内部 QA 侧车文件：`*.mouth_state.json` 记录音频口型状态，`*.mouth_diagnosis.json` 对齐视频、音频和状态判断闭口漂移、元音开合与抖动。诊断失败不会阻断成片输出，也不会变成让用户补素材的提示。
+
+任务完成后会把这些内部质量信号汇总到 `mouth_quality` 字段，包括诊断路径、总体 verdict、状态对齐 verdict、低能量可见开缝、强能量开口和元音释放指标。这个字段用于工程批量 QA 和后续自动调参，不作为用户侧素材要求。
+
+批量巡检入口：
+
+- API：`GET /api/tasks/mouth-quality?include_missing=false`
+- CLI：`uv run python tools/summarize_mouth_quality.py --quality-only --output ../../storage/experiments/lip_sync_0601/mouth_quality_task_report.json`
+
+评分是内部排序信号，主要惩罚低能量可见开缝、强能量开口 muted、元音释放 muted 和诊断 verdict 异常，用于比较算法分支和样例回归。
+
+报告里的 `issues` / `hint_counts` 是内部自动诊断标签，例如 `closed_state_visible_gap -> strengthen_closed_state_control`、`expected_vowel_muted -> increase_vowel_release_floor`。这些标签用于后续自动调参和回归定位，不会转成用户侧“补素材”提示。
 
 打开接口文档：
 

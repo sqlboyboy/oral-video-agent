@@ -21,7 +21,8 @@ def test_build_ffmpeg_command_maps_video_voice_bgm_and_subtitles(tmp_path):
         bgm,
     )
 
-    assert command[:4] == ["ffmpeg", "-y", "-i", str(source)]
+    assert Path(command[0]).name.startswith("ffmpeg")
+    assert command[1:4] == ["-y", "-i", str(source)]
     assert str(voice) in command
     assert str(bgm) in command
     assert "-filter_complex" in command

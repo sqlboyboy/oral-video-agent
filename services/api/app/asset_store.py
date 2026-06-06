@@ -1,18 +1,23 @@
 import json
+import wave
 from pathlib import Path
 from typing import Dict, List, Optional
+
+import numpy as np
 
 from .models import Asset, storage_dir
 
 
 ALLOWED_SUFFIXES = {
     "source_video": {".mp4", ".mov", ".mkv", ".webm"},
-    "voice_reference": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
+    "voice_reference": {".wav", ".mp3", ".m4a", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm"},
+    "digital_human_reference": {".mp4", ".mov", ".mkv", ".webm"},
     "bgm": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
 }
 MAX_UPLOAD_BYTES = {
     "source_video": 500 * 1024 * 1024,
-    "voice_reference": 50 * 1024 * 1024,
+    "voice_reference": 500 * 1024 * 1024,
+    "digital_human_reference": 500 * 1024 * 1024,
     "bgm": 100 * 1024 * 1024,
 }
 
@@ -84,6 +89,53 @@ def save_upload(file, directory: str, kind: str) -> Asset:
         target_path.unlink(missing_ok=True)
         raise size_error
     asset.path = str(target_path)
+    return asset_store.put(asset)
+
+
+def _write_wav(path: Path, samples: np.ndarray, sample_rate: int) -> None:
+    samples = np.clip(samples, -1.0, 1.0)
+    pcm = (samples * 32767.0).astype(np.int16)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm.tobytes())
+
+
+def ensure_voice_reference_wav(asset: Asset) -> Asset:
+    if asset.kind != "voice_reference":
+        return asset
+    source = Path(asset.path)
+    if source.suffix.lower() == ".wav":
+        return asset
+    if not source.exists():
+        return asset
+
+    import av
+
+    target = source.with_suffix(".wav")
+    container = av.open(str(source))
+    audio_stream = next((stream for stream in container.streams if stream.type == "audio"), None)
+    if audio_stream is None:
+        container.close()
+        raise ValueError("参考音色文件没有可读取的音频轨道")
+
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+    chunks: list[np.ndarray] = []
+    for frame in container.decode(audio_stream):
+        resampled = resampler.resample(frame)
+        frames = resampled if isinstance(resampled, list) else [resampled]
+        for audio_frame in frames:
+            array = audio_frame.to_ndarray()
+            chunks.append(array.reshape(-1).astype(np.float32) / 32768.0)
+    container.close()
+    if not chunks:
+        raise ValueError("参考音色解码后没有音频数据")
+
+    _write_wav(target, np.concatenate(chunks), 16000)
+    source.unlink(missing_ok=True)
+    asset.path = str(target)
     return asset_store.put(asset)
 
 

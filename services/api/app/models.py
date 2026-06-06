@@ -1,6 +1,6 @@
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -33,6 +33,17 @@ class RenderOptions(BaseModel):
     script: Optional[str] = None
     voice_id: str = "default-female"
     voice_reference_asset_id: Optional[str] = None
+    digital_human_id: Optional[str] = None
+    digital_human_engine: Optional[str] = None
+    mouth_aperture_enabled: Optional[bool] = None
+    mouth_aperture_strength: Optional[float] = Field(default=None, ge=0, le=1)
+    mouth_aperture_energy_threshold: Optional[float] = Field(default=None, ge=0, le=0.85)
+    mouth_aperture_min_ratio: Optional[float] = Field(default=None, ge=0, le=0.8)
+    mouth_aperture_max_ratio: Optional[float] = Field(default=None, ge=0, le=0.8)
+    mouth_aperture_attack: Optional[float] = Field(default=None, ge=0, le=1)
+    mouth_aperture_release: Optional[float] = Field(default=None, ge=0, le=1)
+    motion_mode: str = "auto"
+    expression_mode: str = "auto"
     bgm_id: Optional[str] = "default-light"
     bgm_volume: float = Field(default=0.18, ge=0, le=1)
     subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
@@ -49,9 +60,14 @@ class UpdateTaskRequest(BaseModel):
 
 class RewriteRequest(BaseModel):
     style: str = "同款口播"
+    source_script: Optional[str] = None
     product_info: str = ""
     target_audience: str = ""
     duration_seconds: Optional[int] = Field(default=None, ge=5, le=600)
+
+
+class PublishRequest(BaseModel):
+    platforms: List[str] = Field(default_factory=list)
 
 
 class Asset(BaseModel):
@@ -68,12 +84,15 @@ class ProgressStep(BaseModel):
 
 
 DEFAULT_PROGRESS_STEPS = [
-    ProgressStep(key="import", label="导入视频"),
-    ProgressStep(key="transcribe", label="解析口播"),
-    ProgressStep(key="rewrite", label="仿写文案"),
-    ProgressStep(key="voice", label="合成配音"),
-    ProgressStep(key="subtitle", label="生成字幕"),
-    ProgressStep(key="render", label="合成视频"),
+    ProgressStep(key="extract", label="1. 对标文案提取"),
+    ProgressStep(key="rewrite", label="2. 文案仿写"),
+    ProgressStep(key="voice", label="3. 声音克隆/合成"),
+    ProgressStep(key="digital_human", label="4. 数字人口播"),
+    ProgressStep(key="subtitle", label="5. 添加字幕"),
+    ProgressStep(key="bgm", label="6. 添加背景音乐"),
+    ProgressStep(key="title", label="7. 生成标题"),
+    ProgressStep(key="cover", label="8. 生成封面"),
+    ProgressStep(key="publish", label="9. 多平台发布"),
 ]
 
 
@@ -89,6 +108,18 @@ class TaskSummary(BaseModel):
     output_ready: bool = False
 
 
+class MouthQualitySignals(BaseModel):
+    mouth_state_path: Optional[str] = None
+    mouth_diagnosis_path: Optional[str] = None
+    verdict: Optional[str] = None
+    mouth_state_alignment_verdict: Optional[str] = None
+    low_energy_visible_gap_ratio: Optional[float] = None
+    high_energy_muted_open_ratio: Optional[float] = None
+    high_energy_mean_ratio: Optional[float] = None
+    vowel_muted_ratio: Optional[float] = None
+    vowel_mean_ratio: Optional[float] = None
+
+
 class OralVideoTask(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     title: Optional[str] = None
@@ -101,12 +132,24 @@ class OralVideoTask(BaseModel):
     rewritten_script: str = ""
     render_options: Optional[RenderOptions] = None
     subtitle_path: Optional[str] = None
+    video_title: Optional[str] = None
+    cover_path: Optional[str] = None
+    publish_results: Dict[str, str] = Field(default_factory=dict)
     output_video_path: Optional[str] = None
+    mouth_quality: Optional[MouthQualitySignals] = None
     error_message: Optional[str] = None
 
 
 class VoiceProfile(BaseModel):
     voice_id: str
+    name: str
+    description: str
+    built_in: bool = True
+    asset_id: Optional[str] = None
+
+
+class DigitalHumanProfile(BaseModel):
+    digital_human_id: str
     name: str
     description: str
     built_in: bool = True

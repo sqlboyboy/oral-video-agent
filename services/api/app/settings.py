@@ -1,5 +1,11 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the api service root (two levels up from this file)
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 @dataclass(frozen=True)
@@ -7,10 +13,52 @@ class Settings:
     rewrite_provider: str = os.getenv("REWRITE_PROVIDER", "placeholder")
     anthropic_api_key: str | None = os.getenv("ANTHROPIC_API_KEY")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-6")
+    qwen_model_path: str = os.getenv("QWEN_MODEL_PATH", "Qwen/Qwen2.5-0.5B-Instruct")
+    qwen_device: str = os.getenv("QWEN_DEVICE", "auto")
+    qwen_max_new_tokens: int = int(os.getenv("QWEN_MAX_NEW_TOKENS", "900"))
     asr_provider: str = os.getenv("ASR_PROVIDER", "placeholder")
     whisper_model: str = os.getenv("WHISPER_MODEL", "small")
     voice_provider: str = os.getenv("VOICE_PROVIDER", "placeholder")
+    voice_clone_command: str | None = os.getenv("VOICE_CLONE_COMMAND")
     tts_api_key: str | None = os.getenv("TTS_API_KEY")
+    digital_human_provider: str = os.getenv("DIGITAL_HUMAN_PROVIDER", "placeholder")
+    digital_human_command: str | None = os.getenv("DIGITAL_HUMAN_COMMAND")
+    liveportrait_repo: str = os.getenv("LIVEPORTRAIT_REPO", r"<workspace>\engines\LivePortrait")
+    liveportrait_python: str = os.getenv("LIVEPORTRAIT_PYTHON", "python")
+    liveportrait_detector: str = os.getenv("LIVEPORTRAIT_DETECTOR", "mediapipe").lower()
+    liveportrait_detector_model: str | None = os.getenv("LIVEPORTRAIT_DETECTOR_MODEL")
+    liveportrait_command: str | None = os.getenv("LIVEPORTRAIT_COMMAND")
+    wav2lip_onnx_model: str = os.getenv(
+        "WAV2LIP_ONNX_MODEL",
+        str(Path(__file__).parent.parent.parent.parent / "storage" / "models" / "wav2lip" / "wav2lip.onnx"),
+    )
+    wav2lip_onnx_command: str | None = os.getenv("WAV2LIP_ONNX_COMMAND")
+    wav2lip_blend_enabled: bool = os.getenv("WAV2LIP_BLEND_ENABLED", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    wav2lip_blend_preset: str = os.getenv("WAV2LIP_BLEND_PRESET", "balanced")
+    wav2lip_aperture_atlas_source: str | None = os.getenv("WAV2LIP_APERTURE_ATLAS_SOURCE")
+    wav2lip_aperture_atlas_strength: float = float(os.getenv("WAV2LIP_APERTURE_ATLAS_STRENGTH", "0.5"))
+    wav2lip_aperture_energy_threshold: float = float(os.getenv("WAV2LIP_APERTURE_ENERGY_THRESHOLD", "0.24"))
+    wav2lip_aperture_min_ratio: float = float(os.getenv("WAV2LIP_APERTURE_MIN_RATIO", "0.07"))
+    wav2lip_aperture_max_ratio: float = float(os.getenv("WAV2LIP_APERTURE_MAX_RATIO", "0.36"))
+    wav2lip_aperture_attack: float = float(os.getenv("WAV2LIP_APERTURE_ATTACK", "1.0"))
+    wav2lip_aperture_release: float = float(os.getenv("WAV2LIP_APERTURE_RELEASE", "1.0"))
+    wav2lip_quality_diagnostics_enabled: bool = os.getenv("WAV2LIP_QUALITY_DIAGNOSTICS_ENABLED", "true").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    wav2lip_quality_diagnostics_sample_stride: int = int(os.getenv("WAV2LIP_QUALITY_DIAGNOSTICS_SAMPLE_STRIDE", "2"))
+    wav2lip_quality_diagnostics_max_frames: int = int(os.getenv("WAV2LIP_QUALITY_DIAGNOSTICS_MAX_FRAMES", "240"))
+    heygem_base_url: str = os.getenv("HEYGEM_BASE_URL", "http://127.0.0.1:8383/easy")
+    heygem_data_dir: str = os.getenv("HEYGEM_DATA_DIR", r"D:\heygem_data\face2face\temp")
+    heygem_timeout_seconds: int = int(os.getenv("HEYGEM_TIMEOUT_SECONDS", "3600"))
+    digital_human_templates_dir: str | None = os.getenv("DIGITAL_HUMAN_TEMPLATES_DIR")
     douyin_cookies_file: str | None = os.getenv("DOUYIN_COOKIES_FILE")
 
 

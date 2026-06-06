@@ -5,11 +5,21 @@ __pycache__/
 .uv-cache/
 .DS_Store
 
+# IDE
+.idea/
+
 # Flutter
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 build/
+
+# Model weights & binaries
+gfpgan/
+*.onnx
+*.pth
+*.obj
+codex_cl_test.obj
 
 # Local generated media
 storage/uploads/*
@@ -20,6 +30,15 @@ storage/subtitles/*
 storage/outputs/*
 storage/tasks/*
 storage/assets/*
+storage/covers/*
+storage/digital_humans/*
+storage/models/*
+storage/experiments/*
+storage/logs/*
+storage/releases/*
+storage/temp/*
+storage/tests/*
+storage/douyin_cookies.txt
 
 !storage/uploads/.gitkeep
 !storage/extracted_audio/.gitkeep
