@@ -327,7 +327,7 @@ class Wav2LipOnnxProvider:
             "--dynamic-preserve",
             "--open-closed-priority",
             "--open-shape-trigger",
-            "0.420",
+            "0.250",
             "--open-shape-openness",
             "0.780",
             "--open-generated-priority",
@@ -594,7 +594,7 @@ def create_digital_human_provider(settings: Settings) -> DigitalHumanProvider:
         )
     if provider in {"wav2lip-onnx", "wav2lip"}:
         return wav2lip_provider
-    if provider in {"simple-mouth-sync", "simple-mouth", "lightweight-mouth", "liveportrait-commercial"}:
+    if provider in {"placeholder", "simple-mouth-sync", "simple-mouth", "lightweight-mouth", "liveportrait-commercial"}:
         return SimpleMouthSyncProvider()
     return HighQualityDigitalHumanProvider(
         repo_dir=settings.liveportrait_repo,
@@ -603,3 +603,4 @@ def create_digital_human_provider(settings: Settings) -> DigitalHumanProvider:
         detector_model=settings.liveportrait_detector_model,
         command_template=settings.liveportrait_command,
     )
+

@@ -43,3 +43,4 @@ oral-video-api = "app.main:app"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+addopts = "--basetemp=../../storage/temp/pytest/basetemp"

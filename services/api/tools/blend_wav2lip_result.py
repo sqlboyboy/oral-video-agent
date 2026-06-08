@@ -61,7 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--aperture-attack", type=float, default=1.0)
     parser.add_argument("--aperture-release", type=float, default=1.0)
     parser.add_argument("--open-closed-priority", action="store_true", help="Prioritize visible open/closed mouth shapes before detailed audio sync.")
-    parser.add_argument("--open-shape-trigger", type=float, default=0.42)
+    parser.add_argument("--open-shape-trigger", type=float, default=0.25)
     parser.add_argument("--open-shape-openness", type=float, default=0.76)
     parser.add_argument("--open-geometry-warp", action="store_true", help="Experimentally expand visual mouth aperture on open frames.")
     parser.add_argument("--open-geometry-strength", type=float, default=0.72)
@@ -438,6 +438,15 @@ def aperture_control_from_mouth_state(
         return raw_openness, raw_openness <= energy_threshold, raw_openness <= energy_threshold
     if mouth_state.state in {"silence", "consonant_closed"}:
         return 0.0, True, True
+    if mouth_state.state == "vowel":
+        if float(mouth_state.energy) <= energy_threshold:
+            return 0.0, True, True
+        audio_driver = max(
+            raw_openness,
+            float(np.clip(mouth_state.energy, 0.0, 1.0)),
+            float(np.clip(mouth_state.openness, 0.0, 1.0)),
+        )
+        return audio_driver, False, False
     if raw_openness <= energy_threshold:
         return 0.0, True, True
     if mouth_state.state == "consonant":
@@ -489,9 +498,62 @@ def open_closed_priority_shape(
     expected_open = max(float(mouth_state.energy), float(mouth_state.openness), openness)
     if expected_open < float(np.clip(trigger, 0.0, 1.0)):
         return openness, False
+    adaptive_open = natural_open_shape_openness(
+        openness,
+        expected_open,
+        trigger=trigger,
+        open_openness=open_openness,
+    )
+    return adaptive_open, True
+
+
+def natural_open_shape_openness(
+    openness: float,
+    expected_open: float,
+    *,
+    trigger: float,
+    open_openness: float,
+) -> float:
+    openness = float(np.clip(openness, 0.0, 1.0))
+    expected_open = max(openness, float(np.clip(expected_open, 0.0, 1.0)))
+    trigger = float(np.clip(trigger, 0.0, 1.0))
+    if expected_open < trigger:
+        return openness
+
+    max_open = float(np.clip(open_openness, 0.0, 0.92))
+    medium_open = min(max_open, max(0.44, max_open * 0.58))
+    transition = smoothstep((expected_open - trigger) / 0.44)
     strong_open = smoothstep((expected_open - 0.84) / 0.12)
-    adaptive_open = float(np.clip(open_openness, 0.0, 1.0)) + strong_open * 0.08
-    return max(openness, float(np.clip(adaptive_open, 0.0, 0.92))), True
+    adaptive_open = medium_open + (max_open - medium_open) * transition + strong_open * 0.08
+    return max(openness, float(np.clip(adaptive_open, 0.0, 0.92)))
+
+
+def expected_open_motion(
+    aperture_mode: str,
+    openness: float,
+    mouth_state: MouthStateFrame | None,
+    *,
+    trigger: float,
+) -> bool:
+    if aperture_mode == "closed":
+        return False
+    if aperture_mode == "open":
+        return True
+    openness = float(np.clip(openness, 0.0, 1.0))
+    if openness >= 0.42:
+        return True
+    if mouth_state is None or mouth_state.state != "vowel":
+        return False
+    expected_open = max(float(mouth_state.energy), float(mouth_state.openness), openness)
+    return expected_open >= float(np.clip(trigger, 0.0, 1.0))
+
+
+def should_release_medium_vowel_geometry(generated_ratio: float, expected_open_value: float) -> bool:
+    return float(generated_ratio) < 0.24 and 0.25 <= float(expected_open_value) <= 0.36
+
+
+def should_release_strong_vowel_geometry(generated_ratio: float, expected_open_value: float) -> bool:
+    return float(generated_ratio) < 0.30 and float(expected_open_value) >= 0.62
 
 
 def choose_aperture_target(
@@ -617,6 +679,56 @@ def rgb_mouth_repair(
     return np.clip(gen, 0, 255)
 
 
+def suppress_inner_mouth_shadow(
+    image: np.ndarray,
+    source: np.ndarray,
+    mouth_points: np.ndarray,
+    inner_mask: np.ndarray,
+    openness: float,
+) -> np.ndarray:
+    openness = float(np.clip(openness, 0.0, 1.0))
+    if openness < 0.42:
+        return image
+    inner = mouth_points[12:20].astype(np.float32)
+    outer = mouth_points[:12].astype(np.float32)
+    if inner.shape[0] < 6 or outer.shape[0] < 8:
+        return image
+
+    result = image.astype(np.float32)
+    source_f = source.astype(np.float32)
+    result_luma = result.mean(axis=2)
+    source_luma = source_f.mean(axis=2)
+    inner_region = inner_mask > 0.14
+    if not np.any(inner_region):
+        return image
+
+    x0, y0 = outer.min(axis=0)
+    x1, y1 = outer.max(axis=0)
+    width = max(float(x1 - x0), 1.0)
+    height = max(float(y1 - y0), width * 0.18)
+    h, w = image.shape[:2]
+    xa = max(0, int(x0 - width * 0.45))
+    xb = min(w, int(x1 + width * 0.45))
+    ya = max(0, int(y0 - height * 1.25))
+    yb = min(h, int(y1 + height * 1.35))
+    local_source = source_f[ya:yb, xa:xb]
+    local_mask = inner_mask[ya:yb, xa:xb]
+    skin_pixels = local_source[local_mask < 0.08]
+    if skin_pixels.size:
+        skin_color = skin_pixels.reshape(-1, 3).mean(axis=0)
+    else:
+        skin_color = np.array([156.0, 116.0, 102.0], dtype=np.float32)
+
+    warm_inner = np.clip(skin_color * np.array([0.78, 0.66, 0.64], dtype=np.float32), 82.0, 210.0)
+    source_floor = np.maximum(source_luma * 0.74, 92.0)
+    too_dark = inner_region & (result_luma < source_floor)
+    if not np.any(too_dark):
+        return image
+
+    lift_alpha = np.clip(inner_mask * (0.34 + openness * 0.18), 0.0, 0.48)[:, :, None]
+    lifted = result * (1.0 - lift_alpha) + warm_inner * lift_alpha
+    return np.where(too_dark[:, :, None], lifted, result).clip(0, 255).astype(np.uint8)
+
 def add_inner_mouth_detail(image: np.ndarray, mouth_points: np.ndarray, inner_mask: np.ndarray, openness: float) -> np.ndarray:
     openness = float(np.clip(openness, 0.0, 1.0))
     if openness < 0.36:
@@ -725,6 +837,7 @@ def generated_open_priority_blend(
     generated: np.ndarray,
     mouth_points: np.ndarray,
     openness: float,
+    expected_open_value: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     height, width = source.shape[:2]
     outer = mouth_points[:12].astype(np.float32)
@@ -736,7 +849,15 @@ def generated_open_priority_blend(
 
     generated_ratio = mouth_open_ratio(mouth_points)
     geometry_open = smoothstep((generated_ratio - 0.29) / 0.08)
-    openness = max(float(np.clip(openness, 0.0, 1.0)), float(np.clip(0.78 + geometry_open * 0.10, 0.0, 0.90)))
+    expected_open_value = max(float(np.clip(expected_open_value, 0.0, 1.0)), float(np.clip(openness, 0.0, 1.0)))
+    audio_open = natural_open_shape_openness(
+        openness,
+        expected_open_value,
+        trigger=0.25,
+        open_openness=0.78,
+    )
+    geometry_bonus = geometry_open * smoothstep((expected_open_value - 0.58) / 0.22) * 0.08
+    openness = max(float(np.clip(openness, 0.0, 1.0)), float(np.clip(audio_open + geometry_bonus, 0.0, 0.90)))
 
     center = outer.mean(axis=0)
     expanded = outer.copy()
@@ -776,8 +897,8 @@ def generated_open_priority_blend(
 
     dark_patch = (inner_mask > 0.20) & (gen_luma < np.maximum(src_luma - 95.0, 38.0))
     if np.any(dark_patch):
-        warm_floor = np.array([68.0, 42.0, 40.0], dtype=np.float32)
-        lifted = generated_f * 0.82 + warm_floor * 0.18
+        warm_floor = np.maximum(source_f * 0.72, np.array([92.0, 74.0, 68.0], dtype=np.float32))
+        lifted = generated_f * 0.78 + warm_floor * 0.22
         generated_f = np.where(dark_patch[:, :, None], lifted, generated_f)
 
     alpha = np.maximum(outer_mask * (0.72 + openness * 0.14), inner_mask * (0.92 + openness * 0.06))
@@ -786,6 +907,26 @@ def generated_open_priority_blend(
     blur = cv2.GaussianBlur(generated_f.astype(np.uint8), (0, 0), 0.65).astype(np.float32)
     generated_f = generated_f * (1.0 - edge[:, :, None] * 0.14) + blur * edge[:, :, None] * 0.14
     blended = np.clip(source_f * (1.0 - alpha[:, :, None]) + generated_f * alpha[:, :, None], 0, 255).astype(np.uint8)
+    if should_release_medium_vowel_geometry(generated_ratio, expected_open_value):
+        blended = warp_open_mouth_geometry(
+            blended,
+            mouth_points,
+            openness,
+            enabled=True,
+            strength=0.26,
+            max_ratio=0.29,
+        )
+    elif should_release_strong_vowel_geometry(generated_ratio, expected_open_value):
+        released_openness = max(openness, min(0.92, expected_open_value * 0.92))
+        blended = warp_open_mouth_geometry(
+            blended,
+            mouth_points,
+            released_openness,
+            enabled=True,
+            strength=0.58,
+            max_ratio=0.42,
+        )
+        blended = suppress_inner_mouth_shadow(blended, source, mouth_points, inner_mask, released_openness)
     return blended, alpha.astype(np.float32), inner_mask.astype(np.float32)
 
 
@@ -1120,11 +1261,18 @@ def blend_mouth_only(
     open_geometry_strength: float,
     open_geometry_max_ratio: float,
     open_generated_priority: bool,
+    expected_open_value: float,
     aperture_atlas_strength: float,
     closed_lock: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if force_open_shape and open_generated_priority:
-        blended, mask, inner_mask = generated_open_priority_blend(source, generated, mouth_points, openness)
+        blended, mask, inner_mask = generated_open_priority_blend(
+            source,
+            generated,
+            mouth_points,
+            openness,
+            expected_open_value,
+        )
         if detail_restore:
             blended = restore_local_detail(blended, source, mask, inner_mask, openness)
         return blended, mask, inner_mask
@@ -1340,6 +1488,7 @@ def blend_generated_mouth(
             openness = float(np.clip(0.72 if forced_openness is None else forced_openness, 0.0, 1.0))
         elif aperture_mode == "closed":
             openness = float(np.clip(0.02 if forced_openness is None else forced_openness, 0.0, 1.0))
+        mouth_state = mouth_states[min(index, len(mouth_states) - 1)] if mouth_states else None
 
         # Closed-mouth tuning should keep the original lip contour. Open/auto
         # modes use Wav2Lip geometry first, then fall back to the source.
@@ -1355,7 +1504,12 @@ def blend_generated_mouth(
             # Expected-open frames need to keep the generated mouth geometry;
             # the default heavy smoothing can pull vowels back toward the
             # previous closed contour.
-            open_motion = aperture_mode != "closed" and openness >= 0.42
+            open_motion = expected_open_motion(
+                aperture_mode,
+                openness,
+                mouth_state,
+                trigger=open_shape_trigger,
+            )
             if open_motion:
                 mouth_points = previous_mouth * 0.25 + mouth_points * 0.75
             else:
@@ -1372,7 +1526,6 @@ def blend_generated_mouth(
 
         if mouth_points is not None:
             texture = choose_mouth_texture(texture_atlas, mouth_points, openness)
-            mouth_state = mouth_states[min(index, len(mouth_states) - 1)] if mouth_states else None
             aperture_driver, target_lock, closed_lock = aperture_control_from_mouth_state(
                 openness,
                 mouth_state,
@@ -1398,6 +1551,9 @@ def blend_generated_mouth(
             if aperture_mode == "open":
                 force_open_shape = True
                 render_openness = openness
+            expected_open_value = openness
+            if mouth_state is not None:
+                expected_open_value = max(float(mouth_state.energy), float(mouth_state.openness), openness)
             if dynamic_preserve:
                 # Weak/closed frames keep the original lip texture; strong
                 # visual-open frames let the generated mouth shape drive.
@@ -1453,6 +1609,7 @@ def blend_generated_mouth(
                 open_geometry_strength,
                 open_geometry_max_ratio,
                 open_generated_priority,
+                expected_open_value,
                 aperture_atlas_strength,
                 closed_lock,
             )
@@ -1460,7 +1617,7 @@ def blend_generated_mouth(
         else:
             blended = original
         previous_output = blended.copy()
-        previous_openness = openness
+        previous_openness = render_openness if mouth_points is not None else openness
         blended_frames.append(blended)
 
     write_video(blended_frames, output, fps)
@@ -1507,3 +1664,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

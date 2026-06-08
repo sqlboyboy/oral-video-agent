@@ -68,7 +68,7 @@ def test_wav2lip_provider_runs_mouth_only_blend(tmp_path, monkeypatch):
     assert "blend_wav2lip_result.py" in commands[1][1]
     assert "--dynamic-preserve" in commands[1]
     assert "--open-closed-priority" in commands[1]
-    assert commands[1][commands[1].index("--open-shape-trigger") + 1] == "0.420"
+    assert commands[1][commands[1].index("--open-shape-trigger") + 1] == "0.250"
     assert commands[1][commands[1].index("--open-shape-openness") + 1] == "0.780"
     assert "--open-generated-priority" in commands[1]
     assert commands[1][commands[1].index("--source") + 1] == str(reference)

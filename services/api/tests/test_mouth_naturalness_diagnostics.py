@@ -149,6 +149,8 @@ def test_mouth_state_alignment_reports_ok_phoneme_shape_match():
     assert summary["consonant_over_open_ratio"] == 0.0
     assert summary["vowel_muted_ratio"] == 0.0
     assert summary["vowel_mean_ratio"] == 0.28
+    assert summary["medium_vowel_frames"] == 2
+    assert summary["medium_vowel_muted_ratio"] == 0.0
 
 
 def test_mouth_state_alignment_flags_consonant_over_open_and_muted_vowel():
@@ -176,6 +178,26 @@ def test_mouth_state_alignment_flags_consonant_over_open_and_muted_vowel():
     assert summary["vowel_muted_ratio"] == 1.0
     assert any("Consonant" in warning for warning in summary["warnings"])
     assert any("Vowel" in warning for warning in summary["warnings"])
+
+
+def test_mouth_state_alignment_flags_muted_medium_vowels():
+    metrics = [
+        MouthFrameMetric(index=0, ratio=0.19, dark_share=0.0, audio_energy=0.30, shadow_share=0.0),
+        MouthFrameMetric(index=1, ratio=0.20, dark_share=0.0, audio_energy=0.32, shadow_share=0.0),
+        MouthFrameMetric(index=2, ratio=0.21, dark_share=0.0, audio_energy=0.34, shadow_share=0.0),
+    ]
+    states = [
+        {"index": 0, "state": "vowel", "openness": 0.30, "energy": 0.30},
+        {"index": 1, "state": "vowel", "openness": 0.32, "energy": 0.32},
+        {"index": 2, "state": "vowel", "openness": 0.34, "energy": 0.34},
+    ]
+
+    summary = summarize_mouth_state_alignment(metrics, states)
+
+    assert summary["verdict"] == "needs_review"
+    assert summary["medium_vowel_frames"] == 3
+    assert summary["medium_vowel_muted_ratio"] == 1.0
+    assert any("Medium vowel" in warning for warning in summary["warnings"])
 
 
 def test_mouth_state_alignment_flags_visible_gap_on_closed_states():

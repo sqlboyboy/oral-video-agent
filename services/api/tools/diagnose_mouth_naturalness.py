@@ -274,6 +274,13 @@ def summarize_mouth_state_alignment(
         and _state_expected_open(frame, vowel_open_threshold)
     ]
     vowel_ratios = np.array([row.ratio for row in vowel_rows], dtype=np.float32)
+    medium_vowel_rows = [
+        row
+        for row, frame in matched
+        if str(frame.get("state") or "") == "vowel"
+        and _state_open_value(frame) >= 0.25
+    ]
+    medium_vowel_ratios = np.array([row.ratio for row in medium_vowel_rows], dtype=np.float32)
     closed_ratios = ratios_for("silence", "consonant_closed")
 
     consonant_over_open_ratio = 0.0
@@ -287,6 +294,11 @@ def summarize_mouth_state_alignment(
     if vowel_ratios.size:
         vowel_muted_ratio = float(np.mean(vowel_ratios < vowel_open_threshold))
         vowel_mean_ratio = float(np.mean(vowel_ratios))
+    medium_vowel_muted_ratio = 0.0
+    medium_vowel_mean_ratio = None
+    if medium_vowel_ratios.size:
+        medium_vowel_muted_ratio = float(np.mean(medium_vowel_ratios < vowel_open_threshold))
+        medium_vowel_mean_ratio = float(np.mean(medium_vowel_ratios))
 
     warnings: list[str] = []
     closed_visible_gap_ratio = visible_gap_for("silence", "consonant_closed")
@@ -296,6 +308,8 @@ def summarize_mouth_state_alignment(
         warnings.append("Consonant mouth-state frames are opening too widely.")
     if vowel_ratios.size >= 3 and vowel_muted_ratio > 0.35:
         warnings.append("Vowel mouth-state frames are muted.")
+    if medium_vowel_ratios.size >= 3 and medium_vowel_muted_ratio > 0.35:
+        warnings.append("Medium vowel mouth-state frames are muted.")
 
     return {
         "matched_frames": len(matched),
@@ -307,6 +321,9 @@ def summarize_mouth_state_alignment(
         "vowel_expected_open_frames": int(vowel_ratios.size),
         "vowel_muted_ratio": round(vowel_muted_ratio, 4),
         "vowel_mean_ratio": None if vowel_mean_ratio is None else round(vowel_mean_ratio, 4),
+        "medium_vowel_frames": int(medium_vowel_ratios.size),
+        "medium_vowel_muted_ratio": round(medium_vowel_muted_ratio, 4),
+        "medium_vowel_mean_ratio": None if medium_vowel_mean_ratio is None else round(medium_vowel_mean_ratio, 4),
         "closed_state_mean_ratio": None if closed_ratios.size == 0 else round(float(np.mean(closed_ratios)), 4),
         "verdict": "needs_review" if warnings else "ok",
         "warnings": warnings,
@@ -326,6 +343,22 @@ def _state_expected_open(frame: dict, vowel_open_threshold: float) -> bool:
         return float(frame.get("openness", 0.0)) >= 0.45
     except (TypeError, ValueError):
         return False
+
+
+def _state_open_value(frame: dict) -> float:
+    values: list[float] = []
+    for key in ("openness", "energy"):
+        try:
+            values.append(float(frame.get(key, 0.0)))
+        except (TypeError, ValueError):
+            pass
+    control = frame.get("control")
+    if isinstance(control, dict):
+        try:
+            values.append(float(control.get("target_ratio", 0.0)))
+        except (TypeError, ValueError):
+            pass
+    return max(values) if values else 0.0
 
 
 def load_mouth_state_frames(path: Path) -> list[dict]:

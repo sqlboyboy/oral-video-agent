@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,13 @@ def newest_mp4(path: Path) -> Path | None:
     return max(candidates, key=lambda item: item.stat().st_mtime)
 
 
+def default_temp_root() -> Path:
+    project_root = Path(__file__).resolve().parents[3]
+    path = Path(os.getenv("LIVEPORTRAIT_TEMP_DIR", project_root / "storage" / "temp" / "liveportrait"))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def run_commercial_entrypoint(
     *,
     python_executable: str,
@@ -74,7 +82,7 @@ def run_commercial_entrypoint(
     detector: str,
     detector_model: str | None,
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="liveportrait-commercial-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="liveportrait-commercial-", dir=str(default_temp_root())) as temp_dir:
         result_dir = Path(temp_dir) / "result"
         result_dir.mkdir(parents=True, exist_ok=True)
         command = [

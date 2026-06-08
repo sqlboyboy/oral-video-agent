@@ -9,10 +9,14 @@ from tools.blend_wav2lip_result import (
     audio_mouth_state_controller,
     choose_aperture_target,
     generated_open_priority_blend,
+    expected_open_motion,
     mouth_state_openness_levels,
     mouth_open_ratio,
+    natural_open_shape_openness,
     open_geometry_target_points,
     open_closed_priority_shape,
+    should_release_medium_vowel_geometry,
+    should_release_strong_vowel_geometry,
     summarize_mouth_states,
     target_open_geometry_ratio,
     warp_open_mouth_geometry,
@@ -250,6 +254,27 @@ def test_aperture_control_allows_vowel_release_to_follow_raw_energy():
     assert closed_lock is False
 
 
+def test_aperture_control_releases_vowel_even_when_raw_shape_is_closed():
+    state = MouthStateFrame(
+        energy=0.55,
+        centroid=0.1,
+        zero_crossing=0.03,
+        high_band_share=0.02,
+        state="vowel",
+        openness=0.50,
+    )
+
+    aperture_driver, target_lock, closed_lock = aperture_control_from_mouth_state(
+        0.16,
+        state,
+        energy_threshold=0.24,
+    )
+
+    assert aperture_driver == pytest.approx(0.55)
+    assert target_lock is False
+    assert closed_lock is False
+
+
 def test_aperture_control_keeps_low_energy_vowel_frame_closed():
     state = MouthStateFrame(
         energy=0.22,
@@ -358,7 +383,7 @@ def test_vowel_release_floor_does_not_lift_locked_or_weak_frames():
     ) == pytest.approx(0.12)
 
 
-def test_open_closed_priority_forces_expected_open_vowel_shape():
+def test_open_closed_priority_eases_expected_open_vowel_shape():
     state = MouthStateFrame(
         energy=0.55,
         centroid=0.1,
@@ -378,8 +403,33 @@ def test_open_closed_priority_forces_expected_open_vowel_shape():
         closed_lock=False,
     )
 
-    assert openness == pytest.approx(0.76)
+    assert 0.40 < openness < 0.76
     assert force_open is True
+
+
+def test_natural_open_shape_curve_scales_from_medium_to_strong_vowel():
+    medium = natural_open_shape_openness(
+        0.20,
+        0.26,
+        trigger=0.25,
+        open_openness=0.78,
+    )
+    clear = natural_open_shape_openness(
+        0.28,
+        0.55,
+        trigger=0.25,
+        open_openness=0.78,
+    )
+    strong = natural_open_shape_openness(
+        0.44,
+        0.88,
+        trigger=0.25,
+        open_openness=0.78,
+    )
+
+    assert 0.43 < medium < 0.50
+    assert medium < clear < strong
+    assert strong > 0.79
 
 
 def test_open_closed_priority_releases_strong_vowel_shape_more():
@@ -405,6 +455,79 @@ def test_open_closed_priority_releases_strong_vowel_shape_more():
     assert openness > 0.79
     assert openness <= 0.92
     assert force_open is True
+
+
+def test_open_closed_priority_releases_medium_vowel_shape():
+    state = MouthStateFrame(
+        energy=0.26,
+        centroid=0.1,
+        zero_crossing=0.03,
+        high_band_share=0.01,
+        state="vowel",
+        openness=0.26,
+    )
+
+    openness, force_open = open_closed_priority_shape(
+        0.20,
+        state,
+        enabled=True,
+        trigger=0.25,
+        open_openness=0.78,
+        target_lock=False,
+        closed_lock=False,
+    )
+
+    assert 0.43 < openness < 0.50
+    assert force_open is True
+
+
+def test_expected_open_motion_uses_medium_vowel_state():
+    state = MouthStateFrame(
+        energy=0.27,
+        centroid=0.1,
+        zero_crossing=0.03,
+        high_band_share=0.01,
+        state="vowel",
+        openness=0.27,
+    )
+
+    assert expected_open_motion("auto", 0.20, state, trigger=0.25) is True
+
+
+def test_expected_open_motion_does_not_release_silence_or_consonant():
+    silence = MouthStateFrame(
+        energy=0.28,
+        centroid=0.1,
+        zero_crossing=0.03,
+        high_band_share=0.01,
+        state="silence",
+        openness=0.0,
+    )
+    consonant = MouthStateFrame(
+        energy=0.28,
+        centroid=0.8,
+        zero_crossing=0.4,
+        high_band_share=0.4,
+        state="consonant",
+        openness=0.12,
+    )
+
+    assert expected_open_motion("auto", 0.20, silence, trigger=0.25) is False
+    assert expected_open_motion("auto", 0.20, consonant, trigger=0.25) is False
+    assert expected_open_motion("closed", 0.70, None, trigger=0.25) is False
+
+
+def test_medium_vowel_geometry_release_only_targets_weak_mid_open_frames():
+    assert should_release_medium_vowel_geometry(0.21, 0.32) is True
+    assert should_release_medium_vowel_geometry(0.25, 0.32) is False
+    assert should_release_medium_vowel_geometry(0.21, 0.20) is False
+    assert should_release_medium_vowel_geometry(0.21, 0.62) is False
+
+
+def test_strong_vowel_geometry_release_targets_muted_peak_vowels():
+    assert should_release_strong_vowel_geometry(0.24, 0.82) is True
+    assert should_release_strong_vowel_geometry(0.31, 0.82) is False
+    assert should_release_strong_vowel_geometry(0.24, 0.58) is False
 
 
 def test_open_closed_priority_does_not_override_closed_or_non_vowel_frames():
