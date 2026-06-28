@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -19,7 +21,7 @@ class OralVideoAgentApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '旗博士AI智能体 咕噜猫永久版',
+      title: '杰速口播智能体',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -56,6 +58,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final audienceController = TextEditingController();
   final originalScriptController = TextEditingController();
   final rewrittenScriptController = TextEditingController();
+  final publisherNicknameController = TextEditingController();
+  final publishTitleController = TextEditingController();
+  final publishBodyController = TextEditingController();
+  final publishTopicsController = TextEditingController();
 
   Map<String, dynamic>? task;
   Map<String, dynamic>? providers;
@@ -64,16 +70,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   List<Map<String, dynamic>> rewriteStyles = const [];
   List<Map<String, dynamic>> voices = const [];
   List<Map<String, dynamic>> digitalHumans = const [];
+  List<Map<String, dynamic>> bgmTracks = const [];
+  List<Map<String, dynamic>> publisherAccounts = const [];
+  List<Map<String, dynamic>> publishJobs = const [];
   bool loading = false;
   bool renderingVideo = false;
   bool diagnosingMouthAtlas = false;
+  bool publishing = false;
+  bool generatingPublishContent = false;
   String message = '';
+  bool messageIsError = false;
+  String publishContentGeneratedKey = '';
   String selectedStyle = '同款口播';
   String selectedWordCount = '300字';
   String selectedVoice = 'classic-female';
   String selectedBgm = 'default-light';
   String selectedDigitalHuman = '';
-  String selectedDigitalHumanEngine = 'liveportrait-commercial';
+  String selectedDigitalHumanEngine = 'heygem-local';
+  String selectedPublishPlatform = 'douyin';
+  String selectedPublisherAccount = '';
+  String selectedPublishMode = 'direct';
+  String selectedMediaSubTab = 'subtitles';
   bool toothHd = true;
   bool randomMotion = false;
   bool mouthApertureEnabled = true;
@@ -95,6 +112,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   void initState() {
     super.initState();
     loadBootstrap();
+    loadPublisherAccounts();
   }
 
   @override
@@ -106,6 +124,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     audienceController.dispose();
     originalScriptController.dispose();
     rewrittenScriptController.dispose();
+    publisherNicknameController.dispose();
+    publishTitleController.dispose();
+    publishBodyController.dispose();
+    publishTopicsController.dispose();
     super.dispose();
   }
 
@@ -113,12 +135,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     try {
       final res = await http.get(Uri.parse('$apiBase/api/bootstrap'));
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final loadedVoices =
           (body['voices'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       final loadedHumans =
           (body['digital_humans'] as List?)?.cast<Map<String, dynamic>>() ??
               const [];
+      final loadedBgm =
+          (body['bgm'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       setState(() {
         final loadedProviders = body['providers'] as Map<String, dynamic>?;
         providers = loadedProviders;
@@ -127,6 +152,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 const [];
         voices = loadedVoices;
         digitalHumans = loadedHumans;
+        bgmTracks = loadedBgm;
         mouthApertureEnabled =
             loadedProviders?['wav2lip_aperture_atlas_enabled'] == true;
         mouthApertureStrength = _providerDoubleFrom(
@@ -165,19 +191,276 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           selectedVoice = loadedVoices.first['voice_id'] as String;
         }
         if (selectedDigitalHuman.isEmpty && loadedHumans.isNotEmpty) {
-          selectedDigitalHuman = loadedHumans.first['digital_human_id'] as String;
+          selectedDigitalHuman =
+              loadedHumans.first['digital_human_id'] as String;
+        }
+        final bgmIds = loadedBgm.map((v) => v['bgm_id']).toSet();
+        if (!bgmIds.contains(selectedBgm) && loadedBgm.isNotEmpty) {
+          selectedBgm = loadedBgm.first['bgm_id'] as String;
         }
         if (rewriteStyles.isNotEmpty &&
             !rewriteStyles.any((s) => s['name'] == selectedStyle)) {
           selectedStyle = rewriteStyles.first['name'] as String;
         }
       });
-      if (selectedDigitalHuman.isNotEmpty) {
-        await loadMouthAtlasDiagnosis(selectedDigitalHuman);
-      }
     } catch (e) {
       setState(() => message = e.toString());
     }
+  }
+
+  Future<void> loadPublisherAccounts() async {
+    try {
+      final accountsRes =
+          await http.get(Uri.parse('$apiBase/api/publisher/accounts'));
+      _check(accountsRes);
+      final accountsBody = jsonDecode(utf8.decode(accountsRes.bodyBytes))
+          as Map<String, dynamic>;
+      final jobsRes = await http.get(Uri.parse('$apiBase/api/publish-jobs'));
+      _check(jobsRes);
+      final jobsBody =
+          jsonDecode(utf8.decode(jobsRes.bodyBytes)) as Map<String, dynamic>;
+      final accounts =
+          (accountsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
+              const [];
+      final visibleAccounts = _dedupePublisherAccounts(accounts);
+      final jobs = (jobsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
+          const [];
+      setState(() {
+        publisherAccounts = visibleAccounts;
+        publishJobs = jobs.reversed.take(6).toList();
+        final selectedStillValid = visibleAccounts.any((account) {
+          return account['account_id'] == selectedPublisherAccount &&
+              account['platform'] == selectedPublishPlatform;
+        });
+        if (!selectedStillValid) {
+          selectedPublisherAccount = _firstPublisherAccountForPlatform(
+              visibleAccounts, selectedPublishPlatform);
+        }
+        _syncPublisherNicknameField(visibleAccounts);
+      });
+    } catch (e) {
+      setState(() => message = e.toString());
+    }
+  }
+
+  void _syncPublisherNicknameField(List<Map<String, dynamic>> accounts) {
+    Map<String, dynamic>? selected;
+    for (final account in accounts) {
+      if (account['account_id'] == selectedPublisherAccount) {
+        selected = account;
+        break;
+      }
+    }
+    final nickname = (selected?['nickname'] as String? ?? '').trim();
+    if (nickname.isNotEmpty) {
+      publisherNicknameController.text = nickname;
+    } else {
+      publisherNicknameController.text = '登录后自动识别';
+    }
+  }
+
+  List<Map<String, dynamic>> _dedupePublisherAccounts(
+    List<Map<String, dynamic>> accounts,
+  ) {
+    final kept = <Map<String, dynamic>>[];
+    final pendingPlatforms = <String>{};
+    for (final account in accounts.reversed) {
+      final nickname = (account['nickname'] as String? ?? '').trim();
+      final status = account['status'] as String? ?? '';
+      final platform = account['platform'] as String? ?? '';
+      final isPendingPlaceholder = nickname.isEmpty && status != 'logged_in';
+      if (isPendingPlaceholder && !pendingPlatforms.add(platform)) {
+        continue;
+      }
+      kept.add(account);
+    }
+    return kept.reversed.toList(growable: false);
+  }
+
+  String _firstPublisherAccountForPlatform(
+    List<Map<String, dynamic>> accounts,
+    String platform,
+  ) {
+    for (final account in accounts) {
+      if (account['platform'] == platform) {
+        return account['account_id'] as String;
+      }
+    }
+    return '';
+  }
+
+  void _selectPublisherPlatform(String platform) {
+    selectedPublishPlatform = platform;
+    selectedPublisherAccount =
+        _firstPublisherAccountForPlatform(publisherAccounts, platform);
+    _syncPublisherNicknameField(publisherAccounts);
+  }
+
+  void showInfo(String text) {
+    setState(() {
+      message = text;
+      messageIsError = false;
+    });
+  }
+
+  void showError(String text) {
+    setState(() {
+      message = text;
+      messageIsError = true;
+    });
+  }
+
+  Future<void> createPublisherAccount() async {
+    final nickname = publisherNicknameController.text.trim();
+    if (nickname.isNotEmpty && nickname != '登录后自动识别') {
+      final existing = publisherAccounts.where((account) {
+        return account['platform'] == selectedPublishPlatform &&
+            ((account['nickname'] as String? ?? '').trim() == nickname);
+      }).toList();
+      if (existing.isNotEmpty) {
+        setState(() =>
+            selectedPublisherAccount = existing.first['account_id'] as String);
+        showInfo('该账号已存在，已为你选中。');
+        return;
+      }
+    }
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/publisher/accounts'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'platform': selectedPublishPlatform,
+          'nickname': nickname == '登录后自动识别' ? '' : nickname,
+        }),
+      );
+      _check(res);
+      final account =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      await loadPublisherAccounts();
+      setState(() {
+        selectedPublisherAccount = account['account_id'] as String;
+        message = '账号已添加，请点击“登录”打开平台登录窗口，登录成功后会自动识别账号名称。';
+        messageIsError = false;
+      });
+    });
+  }
+
+  Future<void> loginPublisherAccount() async {
+    if (selectedPublisherAccount.isEmpty) {
+      showError('请先添加或选择发布账号。');
+      return;
+    }
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse(
+            '$apiBase/api/publisher/accounts/$selectedPublisherAccount/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'timeout_seconds': 900}),
+      );
+      _check(res);
+      await loadPublisherAccounts();
+      showInfo('已请求打开登录窗口，请按平台提示完成扫码或验证。');
+    });
+  }
+
+  Future<void> checkPublisherSession() async {
+    if (selectedPublisherAccount.isEmpty) return;
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse(
+            '$apiBase/api/publisher/accounts/$selectedPublisherAccount/check-session'),
+      );
+      _check(res);
+      await loadPublisherAccounts();
+    });
+  }
+
+  Future<void> createPublishJobs() async {
+    final taskId = _taskId;
+    if (taskId == null) {
+      showError('请先创建视频任务。');
+      return;
+    }
+    if (selectedPublisherAccount.isEmpty) {
+      showError('请先选择发布账号。');
+      return;
+    }
+    if (publishTitleController.text.trim().isEmpty ||
+        publishBodyController.text.trim().isEmpty ||
+        publishTopicsController.text.trim().isEmpty) {
+      await generatePublishContent(silent: true);
+    }
+    final publishTitle = _limitPublishTitle(publishTitleController.text);
+    if (publishTitle != publishTitleController.text.trim()) {
+      publishTitleController.text = publishTitle;
+    }
+    final topics = publishTopicsController.text
+        .split(RegExp(r'[\s,#，]+'))
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    setState(() => publishing = true);
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/tasks/$taskId/publish-jobs'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'account_ids': [selectedPublisherAccount],
+          'title': publishTitle,
+          'body': publishBodyController.text.trim(),
+          'topics': topics,
+          'publish_mode': selectedPublishMode,
+        }),
+      );
+      _check(res);
+      await loadPublisherAccounts();
+      await _loadTask(taskId);
+      showInfo('发布任务已创建，请在下方查看任务状态。');
+    });
+    setState(() => publishing = false);
+  }
+
+  Future<void> generatePublishContent({bool silent = false}) async {
+    final taskId = _taskId;
+    if (taskId == null || generatingPublishContent) return;
+    setState(() {
+      generatingPublishContent = true;
+      if (!silent) {
+        message = '正在生成发布标题、正文和话题';
+        messageIsError = false;
+      }
+    });
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/tasks/$taskId/publish-content'),
+      );
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final topics =
+          (body['topics'] as List?)?.map((item) => item.toString()).toList() ??
+              const <String>[];
+      setState(() {
+        publishTitleController.text =
+            _limitPublishTitle(body['title'] as String? ?? '');
+        publishBodyController.text = body['body'] as String? ?? '';
+        publishTopicsController.text = topics
+            .map((topic) => '#${topic.replaceFirst(RegExp(r'^#+'), '')}')
+            .join(' ');
+        if (!silent) {
+          message = '发布内容已生成';
+          messageIsError = false;
+        }
+      });
+    } catch (e) {
+      if (!silent) showError(e.toString());
+    } finally {
+      if (mounted) setState(() => generatingPublishContent = false);
+    }
+  }
+
+  String _limitPublishTitle(String value) {
+    return String.fromCharCodes(value.trim().runes.take(20));
   }
 
   void _check(http.Response res) {
@@ -199,6 +482,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         currentTask['original_script'] as String? ?? '';
     rewrittenScriptController.text =
         currentTask['rewritten_script'] as String? ?? '';
+    final taskId = currentTask['task_id'] as String? ?? '';
+    final publishSource = ((currentTask['rewritten_script'] as String?) ??
+            (currentTask['original_script'] as String?) ??
+            '')
+        .trim();
+    final generationKey = '$taskId:${publishSource.hashCode}';
+    if (taskId.isNotEmpty &&
+        publishSource.isNotEmpty &&
+        publishContentGeneratedKey != generationKey) {
+      publishContentGeneratedKey = generationKey;
+      Future.microtask(() => generatePublishContent(silent: true));
+    }
   }
 
   Future<void> createTask() async {
@@ -209,11 +504,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         body: jsonEncode({'douyin_url': urlController.text.trim()}),
       );
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() {
         task = body;
         output = null;
         outputRefresh++;
+        publishContentGeneratedKey = '';
+        publishTitleController.clear();
+        publishBodyController.clear();
+        publishTopicsController.clear();
       });
       _syncEditors(body);
       final taskId = body['task_id'] as String;
@@ -235,11 +535,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final streamed = await request.send();
       final res = await http.Response.fromStream(streamed);
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() {
         task = body;
         output = null;
         outputRefresh++;
+        publishContentGeneratedKey = '';
+        publishTitleController.clear();
+        publishBodyController.clear();
+        publishTopicsController.clear();
       });
       _syncEditors(body);
     });
@@ -251,7 +556,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await Future.delayed(const Duration(seconds: 3));
       final res = await http.get(Uri.parse('$apiBase/api/tasks/$taskId'));
       if (res.statusCode < 200 || res.statusCode >= 300) return;
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() => task = body);
       _syncEditors(body);
       final status = body['status'] as String? ?? '';
@@ -287,7 +593,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         }),
       );
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() => task = body);
       _syncEditors(body);
     });
@@ -297,9 +604,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     await _runBusy(() async {
-      final res = await http.post(Uri.parse('$apiBase/api/tasks/$taskId/title'));
+      final res =
+          await http.post(Uri.parse('$apiBase/api/tasks/$taskId/title'));
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() => task = body);
     });
   }
@@ -319,7 +628,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         body: jsonEncode(_renderPayload(script)),
       );
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() => task = body);
     });
   }
@@ -374,12 +684,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final streamed = await request.send();
       final res = await http.Response.fromStream(streamed);
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final item = body['digital_human'] as Map<String, dynamic>;
       await loadBootstrap();
       final digitalHumanId = item['digital_human_id'] as String;
       setState(() => selectedDigitalHuman = digitalHumanId);
-      await loadMouthAtlasDiagnosis(digitalHumanId);
     });
   }
 
@@ -394,7 +704,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           .replace(queryParameters: {'digital_human_id': digitalHumanId});
       final res = await http.get(uri);
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       if (!mounted || selectedDigitalHuman != digitalHumanId) return;
       setState(() => mouthAtlasDiagnosis = body);
     } catch (e) {
@@ -417,9 +728,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       selectedDigitalHuman = value;
       mouthAtlasDiagnosis = null;
     });
-    if (value.isNotEmpty) {
-      loadMouthAtlasDiagnosis(value);
-    }
   }
 
   Future<void> uploadVoice() async {
@@ -438,10 +746,35 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final streamed = await request.send();
       final res = await http.Response.fromStream(streamed);
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final item = body['voice'] as Map<String, dynamic>;
       await loadBootstrap();
       setState(() => selectedVoice = item['voice_id'] as String);
+    });
+  }
+
+  Future<void> uploadBgm() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'flac'],
+    );
+    final path = picked?.files.single.path;
+    if (path == null) return;
+    await _runBusy(() async {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$apiBase/api/bgm/upload'),
+      );
+      request.files.add(await http.MultipartFile.fromPath('file', path));
+      final streamed = await request.send();
+      final res = await http.Response.fromStream(streamed);
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final item = body['bgm'] as Map<String, dynamic>;
+      await loadBootstrap();
+      setState(() => selectedBgm = item['bgm_id'] as String);
     });
   }
 
@@ -466,7 +799,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         body: jsonEncode(_renderPayload(script)),
       );
       _check(res);
-      final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() => task = body);
       _syncEditors(body);
       final errorMessage = body['error_message'] as String?;
@@ -533,8 +867,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     try {
-      final res =
-          await http.post(Uri.parse('$apiBase/api/tasks/$taskId/cancel-render'));
+      final res = await http
+          .post(Uri.parse('$apiBase/api/tasks/$taskId/cancel-render'));
       _check(res);
       await _loadTask(taskId);
       setState(() {
@@ -578,15 +912,43 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  Future<void> openOutputVideo() async {
+    final taskId = _taskId;
+    if (taskId == null) {
+      setState(() => message = '请先创建视频任务');
+      return;
+    }
+    if (_outputVideoPath == null) {
+      await loadOutput();
+    }
+    final path = _outputVideoPath;
+    if (path == null || path.isEmpty) {
+      setState(() => message = '还没有可打开的成品视频');
+      return;
+    }
+    try {
+      if (Platform.isWindows) {
+        await Process.start('explorer.exe', ['/select,', path]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', ['-R', path]);
+      } else {
+        await Process.start('xdg-open', [File(path).parent.path]);
+      }
+    } catch (e) {
+      setState(() => message = '打开视频失败：$e');
+    }
+  }
+
   Future<void> _runBusy(Future<void> Function() action) async {
     setState(() {
       loading = true;
       message = '';
+      messageIsError = false;
     });
     try {
       await action();
     } catch (e) {
-      setState(() => message = e.toString());
+      showError(e.toString());
     } finally {
       if (mounted && !renderingVideo) {
         setState(() => loading = false);
@@ -609,13 +971,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               selectedDigitalHuman.startsWith('template:')
           ? selectedDigitalHuman
           : null,
-      'mouth_aperture_enabled': mouthApertureEnabled,
-      'mouth_aperture_strength': mouthApertureStrength,
-      'mouth_aperture_energy_threshold': mouthApertureEnergyThreshold,
-      'mouth_aperture_min_ratio': mouthApertureMinRatio,
-      'mouth_aperture_max_ratio': mouthApertureMaxRatio,
-      'mouth_aperture_attack': mouthApertureAttack,
-      'mouth_aperture_release': mouthApertureRelease,
       'motion_mode': randomMotion ? 'random' : 'loop',
       'expression_mode': toothHd ? 'sync' : 'basic',
       'bgm_id': selectedBgm,
@@ -640,8 +995,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   String? get _outputVideoUrl {
     final taskId = _taskId;
-    if (taskId == null || output?['ready'] != true) return null;
+    if (taskId == null) return null;
+    final hasOutputPath = (output?['ready'] == true) ||
+        ((task?['output_video_path'] as String? ?? '').isNotEmpty);
+    if (!hasOutputPath) return null;
     return '$apiBase/api/tasks/$taskId/download?v=$outputRefresh';
+  }
+
+  String? get _outputVideoPath {
+    final outputPath = output?['path'] as String?;
+    if (outputPath != null && outputPath.isNotEmpty) return outputPath;
+    final taskPath = task?['output_video_path'] as String?;
+    if (taskPath != null && taskPath.isNotEmpty) return taskPath;
+    return null;
   }
 
   @override
@@ -697,7 +1063,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const Icon(Icons.auto_awesome, color: Color(0xFFA86CFF), size: 28),
           const SizedBox(width: 8),
           const Text(
-            '旗博士AI智能体 咕噜猫永久版',
+            '杰速口播智能体',
             style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900),
           ),
           const Spacer(),
@@ -753,7 +1119,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(height: 8),
           _textBox(originalScriptController, '提取的原文案', 8),
           const SizedBox(height: 12),
-          _sectionTitle('2. 改写文案'),
+          _sectionTitle('2. 一键仿写'),
           Row(
             children: [
               Expanded(child: _styleDropdown()),
@@ -763,13 +1129,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 child: _dropdown(
                   selectedWordCount,
                   const ['300字', '500字', '800字'],
-                  (v) => setState(() => selectedWordCount = v ?? selectedWordCount),
+                  (v) => setState(
+                      () => selectedWordCount = v ?? selectedWordCount),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          _stepButton('2. 文案改写', rewrite),
+          _stepButton('2. 一键仿写', rewrite),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -781,8 +1148,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(height: 8),
           _textBox(rewrittenScriptController, '改写后的文案', 8),
           const SizedBox(height: 8),
-          _stepButton('3. 标题和话题', generateTitle),
-          const SizedBox(height: 10),
           _statusStrip(status, steps),
         ],
       ),
@@ -792,7 +1157,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _centerPanel() {
     final voiceOptions =
         voices.map((v) => v['voice_id'] as String).toList(growable: true);
-    if (!voiceOptions.contains(selectedVoice)) voiceOptions.insert(0, selectedVoice);
+    if (!voiceOptions.contains(selectedVoice))
+      voiceOptions.insert(0, selectedVoice);
     final voiceLabels = {
       for (final v in voices) v['voice_id'] as String: v['name'] as String,
     };
@@ -921,45 +1287,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 const SizedBox(height: 10),
                 _subTabs(),
                 const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(child: _readonlyBox('字幕文件将自动生成')),
-                    const SizedBox(width: 8),
-                    _stepButton('生成字幕', render, compact: true),
-                    const SizedBox(width: 8),
-                    _ghostButton('编辑字幕及画中画', () {}),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Checkbox(
-                      value: true,
-                      onChanged: (_) {},
-                    ),
-                    const Text('字幕 启用'),
-                    const SizedBox(width: 12),
-                    Expanded(child: _readonlyBox('免费 特粗')),
-                    const SizedBox(width: 8),
-                    _ghostButton('刷新', () {}),
-                    const SizedBox(width: 8),
-                    const Text('字幕颜色'),
-                    const SizedBox(width: 8),
-                    _colorSquare(Colors.black),
-                    const SizedBox(width: 8),
-                    const Text('描边颜色'),
-                    const SizedBox(width: 8),
-                    _colorSquare(Colors.white),
-                  ],
-                ),
-                _labeledSlider(
-                  '字号',
-                  subtitleSize,
-                  12,
-                  56,
-                  (v) => setState(() => subtitleSize = v),
-                  subtitleSize.round().toString(),
-                ),
+                _mediaSubTabPanel(),
                 const SizedBox(height: 8),
                 _stepButton(
                   '5. 字幕/BGM/封面合成',
@@ -1001,6 +1329,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       : _previewPlaceholder(),
             ),
           ),
+          const SizedBox(height: 8),
+          _outputFileBar(),
           const SizedBox(height: 12),
           _sectionTitle('6. 视频封面与预览'),
           const SizedBox(height: 8),
@@ -1023,60 +1353,322 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: const [
-              _PlatformChip(label: '抖音', active: true),
-              _PlatformChip(label: '视频号', active: false),
-              _PlatformChip(label: '快手', active: false),
-              _PlatformChip(label: '小红书', active: false),
+            children: [
+              for (final platform in const [
+                'douyin',
+                'shipinhao',
+                'kuaishou',
+                'xiaohongshu',
+              ])
+                _PlatformChip(
+                  label: _platformLabel(platform),
+                  active: selectedPublishPlatform == platform,
+                  onTap: () =>
+                      setState(() => _selectPublisherPlatform(platform)),
+                ),
             ],
           ),
+          const SizedBox(height: 12),
+          _publisherPanel(),
         ],
       ),
     );
   }
 
+  Widget _outputFileBar() {
+    final path = _outputVideoPath;
+    final fileName = path == null || path.isEmpty
+        ? '成品视频生成后自动关联'
+        : path.split(RegExp(r'[\\/]')).last;
+    return Row(
+      children: [
+        Expanded(child: _readonlyBox(fileName)),
+        const SizedBox(width: 8),
+        _ghostButton('打开', openOutputVideo),
+        const SizedBox(width: 8),
+        _ghostButton('预览', previewOutputVideo),
+      ],
+    );
+  }
+
+  Widget _publisherPanel() {
+    const platformOptions = ['douyin', 'kuaishou', 'xiaohongshu', 'shipinhao'];
+    final visibleAccounts = publisherAccounts
+        .where((account) => account['platform'] == selectedPublishPlatform)
+        .toList(growable: false);
+    final accountOptions = visibleAccounts
+        .map((account) => account['account_id'] as String)
+        .toList(growable: true);
+    if (accountOptions.isEmpty) accountOptions.add('');
+    final accountLabels = {
+      '': '请选择发布账号',
+      for (final account in visibleAccounts)
+        account['account_id'] as String:
+            '${_accountDisplayName(account)} / ${_accountStatusLabel(account['status'] as String? ?? '')}',
+    };
+    final selectedAccount = accountOptions.contains(selectedPublisherAccount)
+        ? selectedPublisherAccount
+        : accountOptions.first;
+    final videoPath = _outputVideoPath ?? '成品视频生成后自动关联';
+
+    return _panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '7. 视频发布',
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                ),
+              ),
+              IconButton(
+                tooltip: '刷新账号和发布任务',
+                onPressed: loadPublisherAccounts,
+                icon: const Icon(Icons.refresh),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text('视频地址', style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(child: _readonlyBox(videoPath)),
+              const SizedBox(width: 8),
+              _ghostButton('打开', openOutputVideo),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Text('账号管理', style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: _dropdown(
+                  selectedPublishPlatform,
+                  platformOptions,
+                  (v) => setState(() {
+                    _selectPublisherPlatform(v ?? selectedPublishPlatform);
+                  }),
+                  labels: {
+                    for (final platform in platformOptions)
+                      platform: _platformLabel(platform),
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: _readonlyBox(publisherNicknameController.text.isEmpty
+                      ? '登录后自动识别'
+                      : publisherNicknameController.text)),
+              const SizedBox(width: 8),
+              _ghostButton('添加账号', createPublisherAccount),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text('发布账号', style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: _dropdown(
+                  selectedAccount,
+                  accountOptions,
+                  (v) => setState(() {
+                    selectedPublisherAccount = v ?? '';
+                    _syncPublisherNicknameField(publisherAccounts);
+                  }),
+                  labels: accountLabels,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _ghostButton('登录', loginPublisherAccount),
+              const SizedBox(width: 8),
+              _ghostButton('检测', checkPublisherSession),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text('发布方式', style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          _publishModeSelector(),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '发布内容',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              _ghostButton(
+                generatingPublishContent ? '生成中' : 'AI生成',
+                generatingPublishContent
+                    ? () {}
+                    : () => generatePublishContent(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _input(publishTitleController, '视频标题（20字以内）', maxLength: 20),
+          const SizedBox(height: 8),
+          _textBox(publishBodyController, '发布文案', 4),
+          const SizedBox(height: 8),
+          _input(publishTopicsController, '话题，用空格、逗号或 # 分隔'),
+          const SizedBox(height: 8),
+          _stepButton(
+            publishing ? '发布任务创建中...' : '创建发布任务',
+            createPublishJobs,
+            allowWhileLoading: publishing,
+          ),
+          if (publishJobs.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text('最近发布任务', style: TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            for (final job in publishJobs)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      _jobIcon(job['status'] as String? ?? ''),
+                      size: 16,
+                      color: _jobColor(job['status'] as String? ?? ''),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '${_platformLabel(job['platform'] as String? ?? '')}：${_jobStatusLabel(job['status'] as String? ?? '')}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _publishModeSelector() {
+    return Row(
+      children: [
+        Expanded(
+          child:
+              _publishModeChip('direct', '直接发布', Icons.cloud_upload_outlined),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _publishModeChip('draft', '草稿', Icons.edit_note_outlined),
+        ),
+      ],
+    );
+  }
+
+  Widget _publishModeChip(String value, String label, IconData icon) {
+    final active = selectedPublishMode == value;
+    return InkWell(
+      onTap: () => setState(() => selectedPublishMode = value),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        height: 42,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF25315A) : panelBg2,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active ? cyan : purpleLine.withValues(alpha: 0.45),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 17, color: active ? cyan : Colors.white54),
+            const SizedBox(width: 6),
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _platformLabel(String platform) {
+    return switch (platform) {
+      'douyin' => '抖音',
+      'kuaishou' => '快手',
+      'xiaohongshu' => '小红书',
+      'shipinhao' => '视频号',
+      _ => platform,
+    };
+  }
+
+  String _accountStatusLabel(String status) {
+    return switch (status) {
+      'created' => '已创建',
+      'login_opened' => '登录中',
+      'logged_in' => '已登录',
+      'needs_login' => '待登录',
+      'needs_user_action' => '需人工处理',
+      'expired' => '已过期',
+      'failed' => '失败',
+      _ => status,
+    };
+  }
+
+  String _accountDisplayName(Map<String, dynamic> account) {
+    final nickname = (account['nickname'] as String? ?? '').trim();
+    if (nickname.isNotEmpty) return nickname;
+    return '登录后自动识别';
+  }
+
+  String _jobStatusLabel(String status) {
+    return switch (status) {
+      'queued' => '排队中',
+      'running' => '执行中',
+      'published' => '已发布',
+      'drafted' => '已存草稿',
+      'needs_user_action' => '需人工处理',
+      'failed' => '失败',
+      _ => status,
+    };
+  }
+
+  IconData _jobIcon(String status) {
+    return switch (status) {
+      'published' => Icons.check_circle,
+      'drafted' => Icons.task_alt,
+      'running' => Icons.sync,
+      'queued' => Icons.schedule,
+      'needs_user_action' => Icons.person_pin_circle_outlined,
+      'failed' => Icons.error_outline,
+      _ => Icons.info_outline,
+    };
+  }
+
+  Color _jobColor(String status) {
+    return switch (status) {
+      'published' => const Color(0xFF55E6A5),
+      'drafted' => const Color(0xFF55E6A5),
+      'running' => cyan,
+      'queued' => Colors.white60,
+      'needs_user_action' => const Color(0xFFFFC857),
+      'failed' => const Color(0xFFFF7A9B),
+      _ => Colors.white60,
+    };
+  }
+
   String _engineStatusText() {
-    final mode = providers?['digital_human_mode'] as String?;
-    final wav2lipReady = providers?['wav2lip_onnx_configured'] == true;
     final heygemOnline = providers?['heygem_online'] == true;
-    if (heygemOnline) return '当前：HeyGem 本地高保真';
-    if (mode == 'wav2lip-onnx' || wav2lipReady) return '当前：Wav2Lip 自然口型';
-    return '当前：轻量兜底 / 未配置模型';
+    if (heygemOnline) return '云服务：已开启';
+    return '云服务：未开启';
   }
 
   Widget _mouthApertureStatusCard() {
-    final blendEnabled = providers?['wav2lip_blend_enabled'] == true;
-    final wav2lipReady = providers?['wav2lip_onnx_configured'] == true;
-    final sourceMode =
-        providers?['wav2lip_aperture_atlas_source_mode'] as String? ?? 'reference-video';
-    final canEnable = wav2lipReady && blendEnabled;
-    final enabled = mouthApertureEnabled && canEnable;
-    final title = enabled
-        ? '张口/闭口稳定：自动补偿中'
-        : wav2lipReady
-            ? '张口/闭口稳定：系统准备中'
-            : '张口/闭口稳定：轻量模式';
-    final atlasVerdict = mouthAtlasDiagnosis?['verdict'] as String?;
-    final atlasOk = atlasVerdict == 'ok';
-    final atlasText = diagnosingMouthAtlas
-        ? '正在分析口型基准...'
-        : mouthAtlasDiagnosis == null
-            ? '系统会自动建立闭口/微开口基准'
-            : atlasOk
-                ? '已建立同身份口型基准'
-                : '自动闭口补偿已启用，系统正在稳定口型';
-    final detail = enabled
-        ? (sourceMode == 'explicit'
-            ? '使用内部同身份口型基准，减少闭口漂移和黑洞感'
-            : '系统自动提取闭口/微开口状态并稳定口型')
-        : blendEnabled
-            ? '系统正在准备口型稳定参数'
-            : '系统将使用轻量口型融合流程';
-    final color = enabled
-        ? const Color(0xFF55E6A5)
-        : wav2lipReady
-            ? const Color(0xFFFFC857)
-            : Colors.white54;
+    final online = providers?['heygem_online'] == true;
+    final color = online ? const Color(0xFF55E6A5) : const Color(0xFFFFC857);
 
     return Container(
       width: double.infinity,
@@ -1092,97 +1684,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Row(
             children: [
               Icon(
-                enabled ? Icons.graphic_eq : Icons.tune,
+                online ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
                 color: color,
                 size: 18,
               ),
               const SizedBox(width: 7),
               Expanded(
                 child: Text(
-                  title,
+                  online ? '云服务：已开启' : '云服务：未开启',
                   style: const TextStyle(fontWeight: FontWeight.w900),
                 ),
               ),
-              Text(
-                '强度 ${mouthApertureStrength.toStringAsFixed(2)}',
-                style: TextStyle(color: color, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(width: 8),
-              Switch(
-                value: enabled,
-                onChanged: canEnable
-                    ? (value) => setState(() => mouthApertureEnabled = value)
-                    : null,
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(detail, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            decoration: BoxDecoration(
-              color: (atlasOk ? const Color(0xFF123B2A) : const Color(0xFF3B2B12))
-                  .withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: atlasOk
-                    ? const Color(0xFF55E6A5).withValues(alpha: 0.45)
-                    : const Color(0xFFFFC857).withValues(alpha: 0.45),
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  atlasOk ? Icons.verified_outlined : Icons.warning_amber_rounded,
-                  size: 17,
-                  color: atlasOk ? const Color(0xFF55E6A5) : const Color(0xFFFFC857),
-                ),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    atlasText,
-                    style: const TextStyle(fontSize: 12, color: Colors.white70),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (enabled) ...[
-            const SizedBox(height: 8),
-            _labeledSlider(
-              '稳定强度',
-              mouthApertureStrength,
-              0.30,
-              0.70,
-              (value) => setState(() => mouthApertureStrength = value),
-              mouthApertureStrength.toStringAsFixed(2),
-            ),
-            _labeledSlider(
-              '闭口阈值',
-              mouthApertureEnergyThreshold,
-              0.16,
-              0.36,
-              (value) => setState(() => mouthApertureEnergyThreshold = value),
-              mouthApertureEnergyThreshold.toStringAsFixed(2),
-            ),
-          ],
-          const SizedBox(height: 9),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              _miniMetricChip('阈值', mouthApertureEnergyThreshold.toStringAsFixed(2)),
-              _miniMetricChip(
-                '开合',
-                '${mouthApertureMinRatio.toStringAsFixed(2)}-${mouthApertureMaxRatio.toStringAsFixed(2)}',
-              ),
-              _miniMetricChip(
-                '响应',
-                '${mouthApertureAttack.toStringAsFixed(1)}/${mouthApertureRelease.toStringAsFixed(1)}',
-              ),
-              _miniMetricChip('融合', blendEnabled ? '开启' : '关闭'),
             ],
           ),
         ],
@@ -1208,27 +1720,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return parsed;
   }
 
-  Widget _miniMetricChip(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
-      ),
-      child: Text(
-        '$label $value',
-        style: const TextStyle(fontSize: 11, color: Colors.white70),
-      ),
-    );
-  }
-
   Widget _messageBar() {
+    final bgColor =
+        messageIsError ? const Color(0xFF3A1420) : const Color(0xFF123B2A);
+    final textColor =
+        messageIsError ? const Color(0xFFFFB0C2) : const Color(0xFFB9F8D0);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      color: const Color(0xFF3A1420),
-      child: Text(message, style: const TextStyle(color: Color(0xFFFFB0C2))),
+      color: bgColor,
+      child: Text(message, style: TextStyle(color: textColor)),
     );
   }
 
@@ -1251,8 +1752,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
         const Spacer(),
         Text(label,
-            style:
-                const TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+            style: const TextStyle(
+                color: Colors.white70, fontWeight: FontWeight.w800)),
         Text(value,
             style: const TextStyle(
                 color: Color(0xFF55E6A5), fontWeight: FontWeight.w900)),
@@ -1274,8 +1775,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         SizedBox(
           width: 88,
           child: Text(label,
-              style:
-                  const TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
+              style: const TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.w800)),
         ),
         for (var i = 0; i < children.length; i++) ...[
           children[i],
@@ -1286,9 +1787,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _styleDropdown() {
-    final options = rewriteStyles
-        .map((s) => s['name'] as String)
-        .toList(growable: true);
+    final options =
+        rewriteStyles.map((s) => s['name'] as String).toList(growable: true);
     if (options.isEmpty) options.addAll(const ['同款口播', '带货', '种草']);
     if (!options.contains(selectedStyle)) options.insert(0, selectedStyle);
     return _dropdown(
@@ -1326,8 +1826,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _input(TextEditingController controller, String hint) {
-    return TextField(controller: controller, decoration: _inputDecoration(hint));
+  Widget _input(
+    TextEditingController controller,
+    String hint, {
+    int? maxLength,
+  }) {
+    return TextField(
+      controller: controller,
+      inputFormatters: maxLength == null
+          ? null
+          : [LengthLimitingTextInputFormatter(maxLength)],
+      decoration: _inputDecoration(hint),
+    );
   }
 
   Widget _textBox(TextEditingController controller, String hint, int lines) {
@@ -1413,7 +1923,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       decoration: BoxDecoration(
         color: active ? const Color(0xFF25315A) : panelBg2,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: active ? cyan : purpleLine.withValues(alpha: 0.55)),
+        border: Border.all(
+            color: active ? cyan : purpleLine.withValues(alpha: 0.55)),
       ),
       child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
     );
@@ -1443,7 +1954,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 17, color: active ? const Color(0xFFD4A4FF) : Colors.white54),
+          Icon(icon,
+              size: 17,
+              color: active ? const Color(0xFFD4A4FF) : Colors.white54),
           const SizedBox(width: 8),
           Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
         ],
@@ -1465,30 +1978,166 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  Widget _mediaSubTabPanel() {
+    return switch (selectedMediaSubTab) {
+      'bgm' => _bgmPanel(),
+      'video' => _videoSubPanel(),
+      _ => _subtitlePanel(),
+    };
+  }
+
+  Widget _videoSubPanel() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+                child: _readonlyBox(selectedDigitalHuman.isEmpty
+                    ? '请上传或选择数字人素材'
+                    : selectedDigitalHuman)),
+            const SizedBox(width: 8),
+            _ghostButton('选择视频', uploadSourceVideo),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _bgmPanel() {
+    final options = [
+      'none',
+      ...(bgmTracks.isEmpty
+          ? const ['default-light', 'default-tech', 'default-warm']
+          : bgmTracks.map((item) => item['bgm_id'].toString())),
+    ];
+    final names = {
+      'none': '无背景音乐',
+      for (final item in bgmTracks)
+        item['bgm_id'].toString():
+            item['name']?.toString() ?? item['bgm_id'].toString()
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _dropdown(
+                selectedBgm,
+                options,
+                (value) {
+                  if (value == null) return;
+                  setState(() => selectedBgm = value);
+                },
+                labels: names,
+              ),
+            ),
+            const SizedBox(width: 8),
+            _ghostButton('上传BGM', uploadBgm),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _labeledSlider(
+          'BGM音量',
+          bgmVolume,
+          0,
+          0.6,
+          (v) => setState(() => bgmVolume = v),
+          '${(bgmVolume * 100).round()}%',
+        ),
+        const SizedBox(height: 4),
+        Text(
+          selectedBgm == 'none'
+              ? '最终视频不会混入背景音乐。'
+              : selectedBgm.startsWith('custom:')
+                  ? '将使用你上传的背景音乐，并按音量混入最终视频。'
+                  : '将使用内置循环背景音乐，并按音量混入最终视频。',
+          style: const TextStyle(color: Colors.white60, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
+  Widget _subtitlePanel() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _readonlyBox('字幕文件将自动生成')),
+            const SizedBox(width: 8),
+            _stepButton('生成字幕', render, compact: true),
+            const SizedBox(width: 8),
+            _ghostButton('编辑字幕及画中画', () {}),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Checkbox(
+              value: true,
+              onChanged: (_) {},
+            ),
+            const Text('字幕 启用'),
+            const SizedBox(width: 12),
+            Expanded(child: _readonlyBox('免费 特粗')),
+            const SizedBox(width: 8),
+            _ghostButton('刷新', () {}),
+            const SizedBox(width: 8),
+            const Text('字幕颜色'),
+            const SizedBox(width: 8),
+            _colorSquare(Colors.black),
+            const SizedBox(width: 8),
+            const Text('描边颜色'),
+            const SizedBox(width: 8),
+            _colorSquare(Colors.white),
+          ],
+        ),
+        _labeledSlider(
+          '字号',
+          subtitleSize,
+          12,
+          56,
+          (v) => setState(() => subtitleSize = v),
+          subtitleSize.round().toString(),
+        ),
+      ],
+    );
+  }
+
   Widget _subTabs() {
     const items = [
-      (Icons.movie_outlined, '视频'),
-      (Icons.music_note, '背景音乐'),
-      (Icons.closed_caption_outlined, '字幕及画中画'),
+      ('video', Icons.movie_outlined, '视频'),
+      ('bgm', Icons.music_note, '背景音乐'),
+      ('subtitles', Icons.closed_caption_outlined, '字幕及画中画'),
     ];
     return Row(
       children: items
           .map(
             (item) => Expanded(
-              child: Container(
-                height: 42,
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  border: Border(bottom: BorderSide(color: Color(0xFF414866))),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(item.$1, size: 17, color: Color(0xFFBFA8FF)),
-                    const SizedBox(width: 6),
-                    Text(item.$2,
-                        style: const TextStyle(fontWeight: FontWeight.w800)),
-                  ],
+              child: InkWell(
+                onTap: () => setState(() => selectedMediaSubTab = item.$1),
+                child: Container(
+                  height: 42,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: selectedMediaSubTab == item.$1
+                            ? const Color(0xFFD4A4FF)
+                            : const Color(0xFF414866),
+                        width: selectedMediaSubTab == item.$1 ? 2 : 1,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(item.$2, size: 17, color: const Color(0xFFBFA8FF)),
+                      const SizedBox(width: 6),
+                      Text(item.$3,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1498,9 +2147,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Map<String, dynamic>? _activeProgressStep(Map<String, dynamic>? currentTask) {
-    final steps =
-        (currentTask?['progress_steps'] as List?)?.cast<Map<String, dynamic>>() ??
-            const [];
+    final steps = (currentTask?['progress_steps'] as List?)
+            ?.cast<Map<String, dynamic>>() ??
+        const [];
     for (final step in steps) {
       if (step['status'] == 'running') return step;
     }
@@ -1509,7 +2158,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   double _progressPercent(List<Map<String, dynamic>> steps) {
     if (steps.isEmpty) return 0;
-    final completed = steps.where((step) => step['status'] == 'completed').length;
+    final completed =
+        steps.where((step) => step['status'] == 'completed').length;
     final running = steps.any((step) => step['status'] == 'running') ? 0.35 : 0;
     return ((completed + running) / steps.length).clamp(0, 1).toDouble();
   }
@@ -1552,8 +2202,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         children: [
           Row(
             children: [
+              const Icon(Icons.auto_mode, size: 18, color: Color(0xFFD4A4FF)),
+              const SizedBox(width: 7),
               Expanded(
-                child: Text('当前状态：${_statusText(status)}',
+                child: Text('智能体制作进度：${_statusText(status)}',
                     style: const TextStyle(fontWeight: FontWeight.w900)),
               ),
               Text('${(percent * 100).round()}%',
@@ -1647,7 +2299,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             ),
           ),
         ),
-        const Center(child: Icon(Icons.person, size: 88, color: Colors.white70)),
+        const Center(
+            child: Icon(Icons.person, size: 88, color: Colors.white70)),
         const Align(
           alignment: Alignment.bottomCenter,
           child: Padding(
@@ -1666,31 +2319,42 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 class _PlatformChip extends StatelessWidget {
   final String label;
   final bool active;
+  final VoidCallback? onTap;
 
-  const _PlatformChip({required this.label, required this.active});
+  const _PlatformChip({
+    required this.label,
+    required this.active,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: active ? const Color(0xFF2D2A52) : const Color(0xFF202334),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: active ? _WorkbenchPageState.pink : Colors.white24,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            active ? Icons.check_circle : Icons.radio_button_unchecked,
-            size: 16,
-            color: active ? _WorkbenchPageState.pink : Colors.white38,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF2D2A52) : const Color(0xFF202334),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: active ? _WorkbenchPageState.pink : Colors.white24,
+            ),
           ),
-          const SizedBox(width: 5),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                active ? Icons.check_circle : Icons.radio_button_unchecked,
+                size: 16,
+                color: active ? _WorkbenchPageState.pink : Colors.white38,
+              ),
+              const SizedBox(width: 5),
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+            ],
+          ),
+        ),
       ),
     );
   }

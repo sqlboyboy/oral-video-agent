@@ -105,8 +105,8 @@ def test_provider_status_reports_default_placeholder_config():
     assert res.status_code == 200
     body = res.json()
     assert body["rewrite_provider"] == "placeholder"
-    assert body["anthropic_model"] is None
-    assert body["anthropic_configured"] is False
+    assert body["deepseek_model"] is None
+    assert body["deepseek_configured"] is False
     assert body["asr_provider"] in ("placeholder", "faster-whisper")
     assert body["voice_provider"] == "placeholder"
     assert body["voice_configured"] is True

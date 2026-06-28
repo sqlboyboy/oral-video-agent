@@ -1,4 +1,5 @@
 import struct
+import subprocess
 import zlib
 from pathlib import Path
 from textwrap import wrap
@@ -66,4 +67,28 @@ def generate_cover_png(title: str, script: str, output_path: Path) -> Path:
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(png)
+    return output_path
+
+
+def extract_first_frame_cover_png(video_path: Path, output_path: Path) -> Path:
+    from .renderer import _ffmpeg_executable
+
+    ffmpeg = _ffmpeg_executable()
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required to extract video cover")
+    if not video_path.exists():
+        raise FileNotFoundError(video_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        "-update",
+        "1",
+        str(output_path),
+    ]
+    subprocess.run(command, check=True, capture_output=True)
     return output_path

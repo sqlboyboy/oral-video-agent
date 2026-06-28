@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Protocol
 
@@ -465,34 +466,101 @@ class HeyGemProvider:
         self,
         *,
         base_url: str,
-        data_dir: str,
         timeout_seconds: int,
-        fallback: DigitalHumanProvider | None = None,
+        short_video_mode: str = "repeat",
+        ssh_host: str | None = None,
+        ssh_port: int = 22,
+        ssh_user: str = "root",
+        ssh_key_path: str | None = None,
+        remote_upload_dir: str = "/root/autodl-tmp/oral-video-agent-inputs",
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.data_dir = Path(data_dir)
         self.timeout_seconds = max(30, timeout_seconds)
-        self.fallback = fallback
+        self.short_video_mode = short_video_mode if short_video_mode in {"repeat", "pingpong"} else "repeat"
+        self.ssh_host = ssh_host
+        self.ssh_port = ssh_port
+        self.ssh_user = ssh_user
+        self.ssh_key_path = Path(ssh_key_path).expanduser() if ssh_key_path else None
+        self.remote_upload_dir = remote_upload_dir.rstrip("/")
 
-    def _copy_inputs(self, reference_video: Path, driving_audio: Path, output_path: Path) -> tuple[Path, Path, Path]:
-        task_dir = self.data_dir / output_path.stem
-        task_dir.mkdir(parents=True, exist_ok=True)
-        video_path = task_dir / f"input{reference_video.suffix.lower() or '.mp4'}"
-        audio_path = task_dir / f"audio{driving_audio.suffix.lower() or '.wav'}"
-        result_path = task_dir / "result.mp4"
-        shutil.copy2(reference_video, video_path)
-        shutil.copy2(driving_audio, audio_path)
-        return video_path, audio_path, result_path
+    def _ssh_enabled(self) -> bool:
+        return bool(
+            self.ssh_host
+            and self.ssh_key_path
+            and self.ssh_key_path.exists()
+        )
 
-    def _submit_payload(self, video_path: Path, audio_path: Path, result_path: Path) -> dict:
-        return {
-            "audio_url": str(audio_path),
-            "video_url": str(video_path),
-            "code": result_path.stem,
-            "chaofen": 0,
-            "watermark_switch": 0,
-            "pn": 1,
-        }
+    def _run_transfer_command(self, command: list[str]) -> None:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"HeyGem SSH 文件传输失败：{details or result.returncode}")
+
+    def _submit_via_ssh(
+        self,
+        driving_audio: Path,
+        reference_video: Path,
+    ):
+        transfer_id = str(uuid.uuid4())
+        remote_dir = f"{self.remote_upload_dir}/{transfer_id}"
+        remote_audio = f"{remote_dir}/audio{driving_audio.suffix.lower() or '.wav'}"
+        remote_video = f"{remote_dir}/video{reference_video.suffix.lower() or '.mp4'}"
+        destination = f"{self.ssh_user}@{self.ssh_host}"
+        common = [
+            "-i",
+            str(self.ssh_key_path),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=20",
+        ]
+        self._run_transfer_command(
+            [
+                "ssh",
+                *common,
+                "-p",
+                str(self.ssh_port),
+                destination,
+                f"mkdir -p -- {shlex.quote(remote_dir)}",
+            ]
+        )
+        self._run_transfer_command(
+            [
+                "scp",
+                *common,
+                "-P",
+                str(self.ssh_port),
+                str(driving_audio),
+                f"{destination}:{remote_audio}",
+            ]
+        )
+        self._run_transfer_command(
+            [
+                "scp",
+                *common,
+                "-P",
+                str(self.ssh_port),
+                str(reference_video),
+                f"{destination}:{remote_video}",
+            ]
+        )
+        return requests.post(
+            f"{self.base_url}/api/jobs/local",
+            data={
+                "audio_path": remote_audio,
+                "video_path": remote_video,
+                "short_video_mode": self.short_video_mode,
+            },
+            timeout=(10, 30),
+        )
 
     def render(
         self,
@@ -508,29 +576,33 @@ class HeyGemProvider:
             raise RuntimeError("HeyGem 模式需要先选择一条真人参考视频。")
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        video_path, audio_path, result_path = self._copy_inputs(reference_video, driving_audio, output_path)
-
         try:
-            response = requests.post(
-                f"{self.base_url}/submit",
-                json=self._submit_payload(video_path, audio_path, result_path),
-                timeout=15,
-            )
+            if self._ssh_enabled():
+                response = self._submit_via_ssh(driving_audio, reference_video)
+            else:
+                with driving_audio.open("rb") as audio_file, reference_video.open("rb") as video_file:
+                    response = requests.post(
+                        f"{self.base_url}/api/jobs",
+                        files={
+                            "audio_file": (driving_audio.name, audio_file, "audio/wav"),
+                            "video_file": (reference_video.name, video_file, "video/mp4"),
+                        },
+                        data={"short_video_mode": self.short_video_mode},
+                        timeout=(30, self.timeout_seconds),
+                    )
             response.raise_for_status()
             data = response.json()
+        except requests.Timeout as exc:
+            raise RuntimeError(
+                f"HeyGem 任务提交超时（已等待 {self.timeout_seconds} 秒），"
+                "请检查 AutoDL 磁盘、网络和 SSH 隧道"
+            ) from exc
         except Exception as exc:
-            if self.fallback is not None:
-                return self.fallback.render(
-                    reference_video=reference_video,
-                    driving_audio=driving_audio,
-                    script=script,
-                    options=options,
-                    output_path=output_path,
-                    cancel_event=cancel_event,
-                )
-            raise RuntimeError(f"HeyGem 服务不可用，请先启动本地 HeyGem 服务：{exc}") from exc
+            raise RuntimeError(f"HeyGem 远程服务不可用，请检查 SSH 隧道和 AutoDL 服务：{exc}") from exc
 
-        code = str(data.get("code") or data.get("data", {}).get("code") or result_path.stem)
+        job_id = str(data.get("job_id") or "")
+        if not job_id:
+            raise RuntimeError(f"HeyGem 提交任务后未返回 job_id：{data}")
         deadline = time.time() + self.timeout_seconds
         last_response = data
         while time.time() < deadline:
@@ -538,31 +610,32 @@ class HeyGemProvider:
                 raise RuntimeError("用户已停止生成")
             time.sleep(2)
             try:
-                query = requests.get(f"{self.base_url}/query", params={"code": code}, timeout=10)
+                query = requests.get(f"{self.base_url}/api/jobs/{job_id}", timeout=20)
                 query.raise_for_status()
                 last_response = query.json()
             except Exception:
                 continue
 
-            text = str(last_response).lower()
-            if "fail" in text or "error" in text:
-                raise RuntimeError(f"HeyGem 生成失败：{last_response}")
-
-            candidates = [
-                last_response.get("data", {}).get("result"),
-                last_response.get("data", {}).get("result_url"),
-                last_response.get("data", {}).get("video_url"),
-                last_response.get("result"),
-                last_response.get("result_url"),
-                str(result_path),
-            ]
-            for candidate in candidates:
-                if not candidate:
-                    continue
-                candidate_path = Path(str(candidate))
-                if candidate_path.exists() and candidate_path.suffix.lower() == ".mp4":
-                    shutil.copy2(candidate_path, output_path)
-                    return output_path
+            status = str(last_response.get("status") or "").lower()
+            if status == "failed":
+                raise RuntimeError(f"HeyGem 生成失败：{last_response.get('error') or last_response}")
+            if status == "succeeded":
+                result_url = str(last_response.get("result_url") or "")
+                if not result_url:
+                    raise RuntimeError(f"HeyGem 任务成功但没有返回 result_url：{last_response}")
+                try:
+                    result = requests.get(f"{self.base_url}{result_url}", timeout=180)
+                    result.raise_for_status()
+                    output_path.write_bytes(result.content)
+                except Exception as exc:
+                    raise RuntimeError(f"HeyGem 结果下载失败：{exc}") from exc
+                if not output_path.exists() or output_path.stat().st_size == 0:
+                    raise RuntimeError("HeyGem 下载的结果视频为空")
+                try:
+                    requests.delete(f"{self.base_url}/api/jobs/{job_id}", timeout=20)
+                except Exception:
+                    pass
+                return output_path
 
         raise RuntimeError(f"HeyGem 生成超时：{last_response}")
 
@@ -588,9 +661,12 @@ def create_digital_human_provider(settings: Settings) -> DigitalHumanProvider:
     if provider in {"heygem", "heygem-local", "duix-heygem"}:
         return HeyGemProvider(
             base_url=settings.heygem_base_url,
-            data_dir=settings.heygem_data_dir,
             timeout_seconds=settings.heygem_timeout_seconds,
-            fallback=wav2lip_provider,
+            ssh_host=settings.heygem_ssh_host,
+            ssh_port=settings.heygem_ssh_port,
+            ssh_user=settings.heygem_ssh_user,
+            ssh_key_path=settings.heygem_ssh_key_path,
+            remote_upload_dir=settings.heygem_remote_upload_dir,
         )
     if provider in {"wav2lip-onnx", "wav2lip"}:
         return wav2lip_provider

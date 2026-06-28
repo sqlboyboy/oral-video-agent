@@ -1,9 +1,102 @@
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 from app.models import RenderOptions
-from app.providers.digital_human import Wav2LipOnnxProvider
+from app.providers.digital_human import HeyGemProvider, Wav2LipOnnxProvider, create_digital_human_provider
 from app.settings import Settings
+
+
+def test_heygem_is_created_without_wav2lip_fallback():
+    provider = create_digital_human_provider(
+        Settings(
+            digital_human_provider="heygem-local",
+            heygem_base_url="http://127.0.0.1:8383/easy",
+            heygem_data_dir="heygem-data",
+        )
+    )
+
+    assert isinstance(provider, HeyGemProvider)
+
+
+def test_heygem_remote_provider_uploads_polls_and_downloads(tmp_path, monkeypatch):
+    reference = tmp_path / "reference.mp4"
+    reference.write_bytes(b"video")
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    output = tmp_path / "output.mp4"
+    post_response = Mock()
+    post_response.raise_for_status.return_value = None
+    post_response.json.return_value = {"job_id": "job-1", "status": "queued"}
+    status_response = Mock()
+    status_response.raise_for_status.return_value = None
+    status_response.json.return_value = {
+        "job_id": "job-1",
+        "status": "succeeded",
+        "result_url": "/api/jobs/job-1/result",
+    }
+    result_response = Mock()
+    result_response.raise_for_status.return_value = None
+    result_response.content = b"result-video"
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return result_response if url.endswith("/result") else status_response
+
+    post_calls = []
+
+    def fake_post(*args, **kwargs):
+        post_calls.append((args, kwargs))
+        return post_response
+
+    monkeypatch.setattr("app.providers.digital_human.requests.post", fake_post)
+    monkeypatch.setattr("app.providers.digital_human.requests.get", fake_get)
+    monkeypatch.setattr("app.providers.digital_human.requests.delete", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr("app.providers.digital_human.time.sleep", lambda _: None)
+
+    provider = HeyGemProvider(base_url="http://127.0.0.1:16008", timeout_seconds=60)
+    assert provider.render(
+        reference_video=reference,
+        driving_audio=audio,
+        script="测试",
+        options=RenderOptions(),
+        output_path=output,
+    ) == output
+
+    assert output.read_bytes() == b"result-video"
+    assert post_calls[0][1]["timeout"] == (30, 60)
+    assert calls == [
+        "http://127.0.0.1:16008/api/jobs/job-1",
+        "http://127.0.0.1:16008/api/jobs/job-1/result",
+    ]
+
+
+def test_heygem_uses_ssh_transfer_and_local_queue_endpoint(tmp_path, monkeypatch):
+    reference = tmp_path / "reference.mp4"
+    reference.write_bytes(b"video")
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    key = tmp_path / "id_rsa"
+    key.write_text("key", encoding="utf-8")
+    provider = HeyGemProvider(
+        base_url="http://127.0.0.1:16008",
+        timeout_seconds=60,
+        ssh_host="example.test",
+        ssh_port=12345,
+        ssh_key_path=str(key),
+    )
+    commands = []
+    monkeypatch.setattr(provider, "_run_transfer_command", lambda command: commands.append(command))
+    response = Mock()
+    monkeypatch.setattr("app.providers.digital_human.requests.post", lambda *args, **kwargs: response)
+
+    result = provider._submit_via_ssh(audio, reference)
+
+    assert result is response
+    assert commands[0][0] == "ssh"
+    assert commands[1][0] == "scp"
+    assert commands[2][0] == "scp"
 
 
 def assert_mouth_state_sidecar(blend_command, output):

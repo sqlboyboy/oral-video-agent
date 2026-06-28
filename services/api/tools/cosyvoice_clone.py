@@ -1,4 +1,4 @@
-"""Local CosyVoice zero-shot voice clone wrapper.
+r"""Local CosyVoice zero-shot voice clone wrapper.
 
 Expected engine layout:
   <workspace>\engines\CosyVoice          # cloned CosyVoice repository
@@ -22,6 +22,7 @@ import numpy as np
 
 DIRECT_WAV_SUFFIXES = {".wav"}
 TRANSCODE_SUFFIXES = {".mp3", ".m4a", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm"}
+TTS_PUNCTUATION = "，。！？；："
 
 
 def _read_script(path: Path) -> str:
@@ -29,6 +30,28 @@ def _read_script(path: Path) -> str:
     if not text:
         raise SystemExit("script is empty")
     return text
+
+
+def _prepare_tts_text(text: str) -> str:
+    lines = ["".join(line.split()) for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        raise SystemExit("script is empty")
+    # The user-facing script contains no punctuation. Add only pause markers
+    # between lines for TTS prosody without changing any spoken characters.
+    return "，".join(lines)
+
+
+def _collect_speech(outputs) -> np.ndarray:
+    chunks: list[np.ndarray] = []
+    for output in outputs:
+        speech = output.get("tts_speech")
+        if speech is None:
+            continue
+        chunks.append(speech.detach().cpu().numpy().reshape(-1).astype(np.float32))
+    if not chunks:
+        raise SystemExit("CosyVoice produced no audio")
+    return np.concatenate(chunks)
 
 
 def _write_wav(path: Path, samples: np.ndarray, sample_rate: int) -> None:
@@ -106,20 +129,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    text = _read_script(args.script)
+    text = _prepare_tts_text(_read_script(args.script))
     work_dir = args.output.parent / "_cosyvoice_refs"
     reference_wav = _extract_reference_wav(args.reference, work_dir)
 
     CosyVoice = _import_cosyvoice(args.repo)
     cosyvoice = _load_cosyvoice(CosyVoice, args.model)
-    output = next(
+    speech = _collect_speech(
         cosyvoice.inference_cross_lingual(
-            f"<|zh|>{text}",
-            str(reference_wav),
-            stream=False,
+            f"<|zh|>{text}", str(reference_wav), stream=False
         )
     )
-    speech = output["tts_speech"].detach().cpu().numpy().reshape(-1)
     sample_rate = int(getattr(cosyvoice, "sample_rate", 22050))
     _write_wav(args.output, speech, sample_rate)
     return 0

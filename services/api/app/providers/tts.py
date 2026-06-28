@@ -5,6 +5,8 @@ import wave
 from pathlib import Path
 from typing import Protocol
 
+import requests
+
 from ..settings import Settings
 
 
@@ -125,9 +127,64 @@ class LocalCommandVoiceCloneProvider:
         return output_path
 
 
+class RemoteCosyVoiceProvider:
+    def __init__(self, base_url: str, timeout_seconds: int = 1800) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+
+    def synthesize(
+        self,
+        script: str,
+        voice_id: str,
+        output_path: Path,
+        reference_audio: Path | None = None,
+    ) -> Path:
+        if reference_audio is None:
+            raise RuntimeError("声音克隆需要先上传并选择参考音色视频或音频")
+        if not reference_audio.exists():
+            raise RuntimeError(f"参考音色文件不存在: {reference_audio}")
+
+        try:
+            with reference_audio.open("rb") as reference_file:
+                response = requests.post(
+                    f"{self.base_url}/api/voice",
+                    data={"text": script},
+                    files={
+                        "reference_file": (
+                            reference_audio.name,
+                            reference_file,
+                            "audio/wav",
+                        )
+                    },
+                    timeout=self.timeout_seconds,
+                )
+        except requests.RequestException as exc:
+            raise RuntimeError(f"云端声音克隆服务连接失败: {exc}") from exc
+
+        if not response.ok:
+            details = response.text.strip()
+            if len(details) > 1200:
+                details = details[-1200:]
+            raise RuntimeError(
+                f"云端声音克隆失败 ({response.status_code}): {details or 'unknown error'}"
+            )
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(response.content)
+        if not LocalCommandVoiceCloneProvider("")._is_valid_wav(output_path):
+            output_path.unlink(missing_ok=True)
+            raise RuntimeError("云端声音克隆服务未返回有效 WAV 音频")
+        return output_path
+
+
 def create_voice_provider(settings: Settings) -> SpeechSynthesisProvider:
     if settings.voice_provider == "placeholder":
         return PlaceholderVoiceProvider()
+    if settings.voice_provider in {"remote-cosyvoice", "cosyvoice-remote"}:
+        return RemoteCosyVoiceProvider(
+            settings.voice_base_url,
+            settings.voice_timeout_seconds,
+        )
     if settings.voice_provider in {"local-command", "voice-clone"}:
         if not settings.voice_clone_command:
             raise RuntimeError("VOICE_CLONE_COMMAND is required when VOICE_PROVIDER=local-command")

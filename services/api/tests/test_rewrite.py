@@ -2,8 +2,9 @@ import pytest
 
 from app.models import RewriteRequest
 from app.providers.rewrite import (
-    AnthropicRewriteProvider,
+    DeepSeekRewriteProvider,
     RewriteProvider,
+    _format_spoken_lines,
     _script_similarity,
     build_rewrite_prompt,
     create_rewrite_provider,
@@ -25,6 +26,7 @@ def test_build_rewrite_prompt_contains_constraints_and_inputs():
     assert "不要逐字复制原文" in prompt
     assert "相似度控制在 85% 左右" in prompt
     assert "不要只是给原文补标点" in prompt
+    assert "不要包含任何中英文标点符号" in prompt
     assert "仿写风格：种草" in prompt
     assert "产品/服务：智能口播软件" in prompt
     assert "目标人群：短视频创作者" in prompt
@@ -38,17 +40,23 @@ def test_create_rewrite_provider_defaults_to_placeholder():
     assert isinstance(provider, RewriteProvider)
 
 
-def test_create_rewrite_provider_requires_anthropic_key():
-    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
-        create_rewrite_provider(Settings(rewrite_provider="anthropic", anthropic_api_key=None))
+def test_deepseek_provider_reports_missing_key_when_used():
+    provider = create_rewrite_provider(Settings(rewrite_provider="deepseek", deepseek_api_key=None))
+
+    with pytest.raises(RuntimeError, match="services/api/.env"):
+        provider.rewrite("原始文案", RewriteRequest())
 
 
-def test_create_rewrite_provider_uses_anthropic_when_configured():
+def test_create_rewrite_provider_uses_deepseek_when_configured():
     provider = create_rewrite_provider(
-        Settings(rewrite_provider="anthropic", anthropic_api_key="test-key", anthropic_model="claude-opus-4-6")
+        Settings(
+            rewrite_provider="deepseek",
+            deepseek_api_key="test-key",
+            deepseek_model="deepseek-v4-flash",
+        )
     )
 
-    assert isinstance(provider, AnthropicRewriteProvider)
+    assert isinstance(provider, DeepSeekRewriteProvider)
 
 
 def test_placeholder_rewrite_keeps_topic_without_prompt_preview():
@@ -74,3 +82,10 @@ def test_placeholder_rewrite_reduces_first_video_similarity():
     assert result != original
     similarity = _script_similarity(original, result)
     assert 0.80 <= similarity <= 0.90
+
+
+def test_rewrite_output_removes_punctuation_but_keeps_lines():
+    result = _format_spoken_lines("大家好，今天聊方法！\n先讲第一点；再讲第二点。")
+
+    assert result == "大家好今天聊方法\n先讲第一点\n再讲第二点"
+    assert not any(char in result for char in "，。！？；：,.!?;:")

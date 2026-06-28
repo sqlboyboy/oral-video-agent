@@ -2,8 +2,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Protocol
 
-import anthropic
-from anthropic import Anthropic
+import httpx
 
 from ..models import RewriteRequest
 from ..settings import Settings
@@ -15,6 +14,7 @@ class ScriptRewriteProvider(Protocol):
 
 
 _PUNCTUATION_PATTERN = re.compile(r"[\s，,。！？!?；;：:、\"“”'‘’（）()【】《》<>….\-]+")
+_OUTPUT_PUNCTUATION_PATTERN = re.compile(r"[，,。！？!?；;：:、\"“”'‘’（）()【】《》<>….\-—_~～]+")
 
 
 def _normalize_for_similarity(text: str) -> str:
@@ -68,7 +68,13 @@ def _format_spoken_lines(text: str, max_line_chars: int = 28) -> str:
         if chunk.strip():
             lines.append(chunk.strip())
 
-    return "\n".join(line for line in lines if line)
+    clean_lines = []
+    for line in lines:
+        clean = _OUTPUT_PUNCTUATION_PATTERN.sub("", line)
+        clean = re.sub(r"\s+", "", clean).strip()
+        if clean:
+            clean_lines.append(clean)
+    return "\n".join(clean_lines)
 
 
 def _pick_highlights(original_script: str, limit: int = 3) -> list[str]:
@@ -147,7 +153,8 @@ def build_rewrite_prompt(original_script: str, req: RewriteRequest) -> str:
         "3. 不要新增原文没有的信息，不要把短文案扩成带货长文案。\n"
         "4. 不要只是给原文补标点，至少改写关键动词、称呼、连接词和句式。\n"
         "5. 按自然口播断句输出，明显是一句话的放在同一行，每行一句或半句，不要把一句话拆得太碎。\n"
-        "6. 只输出可直接口播的中文文案，不要额外解释。\n\n"
+        "6. 最终文案不要包含任何中英文标点符号，只使用换行表示停顿。\n"
+        "7. 只输出可直接口播的中文文案，不要额外解释。\n\n"
         f"原口播文本：\n{original_script}"
     )
 
@@ -157,163 +164,56 @@ class PlaceholderRewriteProvider:
         return _ensure_rewritten_distance(original_script, _light_paraphrase(original_script))
 
 
-class AnthropicRewriteProvider:
-    def __init__(self, api_key: str, model: str) -> None:
-        self.client = Anthropic(api_key=api_key)
+class DeepSeekRewriteProvider:
+    def __init__(self, api_key: str | None, model: str, base_url: str, timeout_seconds: int = 120) -> None:
+        self.api_key = api_key
         self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = max(10, timeout_seconds)
 
     def rewrite(self, original_script: str, req: RewriteRequest) -> str:
+        if not self.api_key:
+            raise RuntimeError("请先在 services/api/.env 中填写 DEEPSEEK_API_KEY")
         prompt = build_rewrite_prompt(original_script, req)
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=16000,
-                thinking={"type": "adaptive"},
-                output_config={"effort": "medium"},
-                system="你是专业的中文短视频口播文案策划，只输出可直接口播的原创中文文案。",
-                messages=[{"role": "user", "content": prompt}],
+            response = httpx.post(
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "你是专业的中文短视频口播文案策划，只输出可直接口播的原创中文文案。",
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 2000,
+                    "stream": False,
+                },
+                timeout=self.timeout_seconds,
             )
-        except anthropic.APIError as exc:
-            raise RuntimeError(f"Claude rewrite failed: {exc.message}") from exc
-
-        texts = [block.text for block in response.content if block.type == "text"]
-        return _ensure_rewritten_distance(original_script, "\n".join(texts).strip())
-
-
-class QwenLocalRewriteProvider:
-    def __init__(self, model_path: str, device: str = "auto", max_new_tokens: int = 900) -> None:
-        self.model_path = model_path
-        self.device = device
-        self.max_new_tokens = max_new_tokens
-        self._tokenizer = None
-        self._model = None
-
-    def _load(self):
-        if self._tokenizer is not None and self._model is not None:
-            return self._tokenizer, self._model
-        try:
-            import torch
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-        except ImportError as exc:
-            raise RuntimeError(
-                "本地 Qwen 改写需要安装 torch 和 transformers："
-                "cd services/api && uv add torch transformers accelerate"
-            ) from exc
-
-        model_kwargs = {}
-        if self.device == "auto":
-            model_kwargs["device_map"] = "auto"
-            model_kwargs["torch_dtype"] = "auto"
-        else:
-            model_kwargs["torch_dtype"] = torch.float16 if self.device.startswith("cuda") else torch.float32
-
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(
-                self.model_path,
-                trust_remote_code=True,
-                **model_kwargs,
-            )
-            if self.device != "auto":
-                model = model.to(self.device)
-        except Exception as exc:
-            raise RuntimeError(
-                f"本地 Qwen 模型加载失败：{self.model_path}。请确认模型已下载到本机，"
-                "或设置 QWEN_MODEL_PATH 指向本地目录。"
-            ) from exc
-
-        self._tokenizer = tokenizer
-        self._model = model
-        return tokenizer, model
-
-    def _has_context_keyword(self, text: str, source: str) -> bool:
-        if not source.strip():
-            return True
-        words = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,}", source)
-        pairs: set[str] = set()
-        for word in words:
-            if len(word) <= 4:
-                pairs.add(word)
-            else:
-                pairs.update(word[i:i + 2] for i in range(0, len(word) - 1, 2))
-        return not pairs or any(pair in text for pair in pairs)
-
-    def _looks_unusable(self, text: str, original_script: str, req: RewriteRequest) -> bool:
-        stripped = text.strip()
-        if len(stripped) < 30:
-            return True
-        question_ratio = stripped.count("?") / max(len(stripped), 1)
-        prompt_markers = (
-            "Prompt",
-            "提示词",
-            "原文：",
-            "要求：",
-            "请基于",
-            "不要逐字复制",
-            "产品名称",
-            "核心卖点",
-            "目标人群",
-            "痛点",
-            "解决方案",
-            "【",
-        )
-        if question_ratio > 0.08 or any(marker in stripped for marker in prompt_markers):
-            return True
-        original_len = max(len(original_script.strip()), 1)
-        if len(stripped) > max(80, int(original_len * 1.6)):
-            return True
-        if req.product_info and not self._has_context_keyword(stripped, req.product_info):
-            return True
-        highlights = " ".join(_pick_highlights(original_script, limit=2))
-        return not self._has_context_keyword(stripped, highlights)
-
-    def rewrite(self, original_script: str, req: RewriteRequest) -> str:
-        tokenizer, model = self._load()
-        prompt = build_rewrite_prompt(original_script, req)
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是中文短视频口播轻度仿写助手。只输出一段和原文主题、顺序、语气、长度接近的中文口播。"
-                    "相似度控制在 85% 左右，必须重组句式并替换关键表达，不要只加标点。"
-                    "不要扩写，不要加入产品卖点，不解释，不输出提示词，不输出问号占位符。"
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        inputs = tokenizer([text], return_tensors="pt")
-        inputs = {key: value.to(model.device) for key, value in inputs.items()}
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=min(self.max_new_tokens, max(80, int(len(original_script) * 2.0))),
-            do_sample=True,
-            temperature=0.45,
-            top_p=0.82,
-            repetition_penalty=1.05,
-            eos_token_id=tokenizer.eos_token_id,
-        )
-        generated = outputs[0][inputs["input_ids"].shape[-1]:]
-        result = tokenizer.decode(generated, skip_special_tokens=True).strip()
-        if self._looks_unusable(result, original_script, req):
-            return PlaceholderRewriteProvider().rewrite(original_script, req)
+            response.raise_for_status()
+            data = response.json()
+            result = data["choices"][0]["message"]["content"].strip()
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise RuntimeError(f"DeepSeek 文案改写失败：{exc}") from exc
+        if not result:
+            raise RuntimeError("DeepSeek 文案改写失败：API 返回了空内容")
         return _ensure_rewritten_distance(original_script, result)
 
 
 def create_rewrite_provider(settings: Settings) -> ScriptRewriteProvider:
-    if settings.rewrite_provider == "anthropic":
-        if not settings.anthropic_api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is required when REWRITE_PROVIDER=anthropic")
-        return AnthropicRewriteProvider(settings.anthropic_api_key, settings.anthropic_model)
-    if settings.rewrite_provider in {"qwen", "qwen-local", "qwen2.5"}:
-        return QwenLocalRewriteProvider(
-            settings.qwen_model_path,
-            settings.qwen_device,
-            settings.qwen_max_new_tokens,
+    if settings.rewrite_provider.strip().lower() in {"deepseek", "deepseek-api"}:
+        return DeepSeekRewriteProvider(
+            api_key=settings.deepseek_api_key,
+            model=settings.deepseek_model,
+            base_url=settings.deepseek_base_url,
+            timeout_seconds=settings.deepseek_timeout_seconds,
         )
     return PlaceholderRewriteProvider()
 

@@ -70,6 +70,12 @@ class PublishRequest(BaseModel):
     platforms: List[str] = Field(default_factory=list)
 
 
+class PublishContentSuggestion(BaseModel):
+    title: str
+    body: str
+    topics: List[str] = Field(default_factory=list)
+
+
 class Asset(BaseModel):
     asset_id: str = Field(default_factory=lambda: str(uuid4()))
     kind: str

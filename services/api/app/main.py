@@ -1,4 +1,9 @@
+import json
+import math
+import re
+import struct
 import threading
+import wave
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -8,9 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, ensure_voice_reference_wav, save_upload
-from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, storage_dir
+from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, storage_dir
 from .mouth_quality import build_mouth_quality_report, collect_mouth_quality_signals
-from .pipeline.cover import generate_cover_png
+from .pipeline.cover import extract_first_frame_cover_png, generate_cover_png
 from .pipeline.renderer import (
     Renderer,
     _ffmpeg_executable,
@@ -27,6 +32,7 @@ from .providers.rewrite import create_rewrite_provider
 from .providers.rewrite_styles import REWRITE_STYLE_PRESETS
 from .providers.tts import create_voice_provider
 from .providers.video_importer import VideoImportError, VideoImporter
+from .publisher import router as publisher_router
 from .repository import repo
 from .settings import get_settings
 from tools.diagnose_mouth_naturalness import analyze_atlas_video
@@ -56,6 +62,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(publisher_router)
 
 settings = get_settings()
 asr_provider = create_asr_provider(settings)
@@ -69,14 +76,130 @@ DIGITAL_HUMAN_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 render_cancel_events: Dict[str, threading.Event] = {}
 
 
+def limit_title(value: str, max_chars: int = 20) -> str:
+    return "".join(list(value.strip())[:max_chars])
+
+
 def generate_title(script: str) -> str:
     cleaned = script.replace("\n", "，").strip(" ，。")
     if not cleaned:
         return "爆款口播视频"
     first = cleaned.split("，")[0].strip()
     if len(first) >= 8:
-        return first[:24]
-    return f"{first}，一起见证成长"[:24]
+        return limit_title(first)
+    return limit_title(f"{first}，一起见证成长")
+
+
+def _fallback_publish_content(script: str) -> PublishContentSuggestion:
+    cleaned = re.sub(r"\s+", "", script).strip()
+    body = script.strip()
+    return PublishContentSuggestion(
+        title=generate_title(cleaned),
+        body=body[:220],
+        topics=_fallback_topics(cleaned),
+    )
+
+
+def _fallback_topics(script: str) -> list[str]:
+    candidates = ["口播", "短视频", "情绪价值"]
+    if any(word in script for word in ["成长", "努力", "坚持"]):
+        candidates.append("成长")
+    if any(word in script for word in ["别人", "自己", "人生", "人家"]):
+        candidates.append("人生感悟")
+    if any(word in script for word in ["产品", "服务", "客户", "转化"]):
+        candidates.append("创业")
+    result: list[str] = []
+    for topic in candidates:
+        if topic not in result:
+            result.append(topic)
+    return result[:5]
+
+
+def _extract_json_object(text: str) -> dict:
+    cleaned = text.strip()
+    if not cleaned:
+        raise ValueError("LLM response content is empty")
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    match = re.search(r"\{.*\}", cleaned, flags=re.S)
+    if match:
+        cleaned = match.group(0)
+    data = json.loads(cleaned)
+    if not isinstance(data, dict):
+        raise ValueError("LLM response is not a JSON object")
+    return data
+
+
+def generate_publish_content(script: str) -> PublishContentSuggestion:
+    if settings.rewrite_provider.strip().lower() not in {"deepseek", "deepseek-api"}:
+        return _fallback_publish_content(script)
+    if not settings.deepseek_api_key:
+        return _fallback_publish_content(script)
+
+    prompt = (
+        "你是中文短视频发布运营助手。请基于口播文案生成适合抖音、快手、小红书的视频发布信息。\n"
+        "必须只输出 JSON，不要输出解释、Markdown 或代码块。\n"
+        "JSON 格式：{\"title\":\"...\",\"body\":\"...\",\"topics\":[\"...\"]}\n\n"
+        "要求：\n"
+        "1. title 是视频标题，12-20 个中文字符，绝对不能超过20个字，不要使用夸张违规词，不要带 #。\n"
+        "2. body 是发布正文，保留原文核心观点，口语化，80-160 个中文字符，可适当换行。\n"
+        "3. topics 生成 4-6 个中文话题词，不带 #，不要重复，不要过长。\n"
+        "4. 不要编造产品、人物、承诺、疗效、收益或平台数据。\n\n"
+        f"口播文案：\n{script.strip()}"
+    )
+    response = requests.post(
+        f"{settings.deepseek_base_url.rstrip('/')}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {settings.deepseek_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": settings.deepseek_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你只输出严格 JSON，用于短视频平台发布表单。",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.7,
+            "max_tokens": 800,
+            "stream": False,
+        },
+        timeout=settings.deepseek_timeout_seconds,
+    )
+    response.raise_for_status()
+    response_data = response.json()
+    message = response_data["choices"][0]["message"]
+    content = message.get("content") or ""
+    if not content.strip():
+        content = json.dumps(message, ensure_ascii=False)
+    data = _extract_json_object(content)
+    title = str(data.get("title") or "").strip().strip("#")
+    body = str(data.get("body") or "").strip()
+    raw_topics = data.get("topics") or []
+    if isinstance(raw_topics, str):
+        raw_topics = re.split(r"[\s,#，、]+", raw_topics)
+    topics = [
+        str(topic).strip().lstrip("#")
+        for topic in raw_topics
+        if str(topic).strip().lstrip("#")
+    ]
+    deduped_topics: list[str] = []
+    for topic in topics:
+        if topic not in deduped_topics:
+            deduped_topics.append(topic)
+    for topic in _fallback_topics(script):
+        if len(deduped_topics) >= 4:
+            break
+        if topic not in deduped_topics:
+            deduped_topics.append(topic)
+    return PublishContentSuggestion(
+        title=limit_title(title) or generate_title(script),
+        body=body[:260] or script.strip()[:220],
+        topics=deduped_topics[:6] or _fallback_topics(script),
+    )
 
 
 def custom_asset_path(value: Optional[str], expected_kind: str) -> Optional[Path]:
@@ -123,7 +246,10 @@ def ensure_not_cancelled(task: OralVideoTask, cancel_event: threading.Event) -> 
 
 
 def selected_digital_human_provider(engine: Optional[str]):
-    return "wav2lip-onnx", digital_human_provider
+    configured = settings.digital_human_provider.strip().lower()
+    if configured in {"heygem", "heygem-local", "duix-heygem"}:
+        return "heygem-local", digital_human_provider
+    return configured or "heygem-local", digital_human_provider
 
 
 def digital_human_templates_dir() -> Path:
@@ -158,7 +284,7 @@ def version():
 
 @app.get("/api/providers", tags=["system"])
 def provider_status():
-    digital_human_configured = bool(_ffmpeg_executable())
+    ffmpeg_configured = bool(_ffmpeg_executable())
     wav2lip_model = Path(settings.wav2lip_onnx_model)
     wav2lip_available = wav2lip_model.exists() and wav2lip_model.is_file()
     aperture_atlas_source = (settings.wav2lip_aperture_atlas_source or "").strip()
@@ -170,23 +296,43 @@ def provider_status():
     heygem_online = False
     if settings.digital_human_provider.strip().lower() in {"heygem", "heygem-local", "duix-heygem"}:
         try:
-            requests.get(f"{settings.heygem_base_url.rstrip('/')}/query", params={"code": "__health__"}, timeout=2)
-            heygem_online = True
+            response = requests.get(f"{settings.heygem_base_url.rstrip('/')}/api/health", timeout=2)
+            heygem_online = response.ok and response.json().get("gpu_available") is True
         except Exception:
             heygem_online = False
+    voice_online = False
+    if settings.voice_provider.strip().lower() in {"remote-cosyvoice", "cosyvoice-remote"}:
+        try:
+            response = requests.get(f"{settings.voice_base_url.rstrip('/')}/api/health", timeout=2)
+            voice_online = response.ok and response.json().get("gpu_available") is True
+        except Exception:
+            voice_online = False
     return {
         "rewrite_provider": settings.rewrite_provider,
-        "anthropic_model": settings.anthropic_model if settings.rewrite_provider == "anthropic" else None,
-        "anthropic_configured": bool(settings.anthropic_api_key),
+        "deepseek_model": settings.deepseek_model if settings.rewrite_provider == "deepseek" else None,
+        "deepseek_configured": settings.rewrite_provider == "deepseek" and bool(settings.deepseek_api_key),
+        "deepseek_base_url": settings.deepseek_base_url if settings.rewrite_provider == "deepseek" else None,
         "asr_provider": settings.asr_provider,
         "whisper_model": settings.whisper_model if settings.asr_provider == "faster-whisper" else None,
         "voice_provider": settings.voice_provider,
         "voice_configured": settings.voice_provider == "placeholder"
+        or (
+            settings.voice_provider.strip().lower() in {"remote-cosyvoice", "cosyvoice-remote"}
+            and voice_online
+        )
         or bool(settings.tts_api_key)
         or bool(settings.voice_clone_command),
+        "voice_online": voice_online,
+        "voice_base_url": settings.voice_base_url
+        if settings.voice_provider.strip().lower() in {"remote-cosyvoice", "cosyvoice-remote"}
+        else None,
         "digital_human_provider": settings.digital_human_provider,
-        "digital_human_configured": digital_human_configured,
-        "digital_human_mode": "heygem-local" if heygem_online else ("wav2lip-onnx" if wav2lip_available else "simple-mouth-sync-fallback"),
+        "digital_human_configured": ffmpeg_configured and (
+            heygem_online
+            if settings.digital_human_provider.strip().lower() in {"heygem", "heygem-local", "duix-heygem"}
+            else True
+        ),
+        "digital_human_mode": "heygem-local",
         "liveportrait_configured": False,
         "liveportrait_detector": settings.liveportrait_detector,
         "heygem_online": heygem_online,
@@ -384,6 +530,55 @@ def build_bgm_catalog():
         for asset in asset_store.list("bgm")
     ]
     return {"items": [*BUILT_IN_BGM, *custom_bgm]}
+
+
+def resolve_bgm_audio(bgm_id: Optional[str]) -> Optional[Path]:
+    if not bgm_id:
+        return None
+    if bgm_id in {"none", "off", "disabled"}:
+        return None
+    custom = custom_asset_path(bgm_id, "bgm")
+    if custom is not None:
+        return custom
+    if any(track.bgm_id == bgm_id for track in BUILT_IN_BGM):
+        return ensure_builtin_bgm_wav(bgm_id)
+    return None
+
+
+def ensure_builtin_bgm_wav(bgm_id: str) -> Path:
+    output = storage_dir("bgm") / f"{bgm_id}.wav"
+    if output.exists() and output.stat().st_size > 44:
+        return output
+
+    presets = {
+        "default-light": [(261.63, 0.20), (329.63, 0.16), (392.00, 0.12)],
+        "default-tech": [(130.81, 0.18), (196.00, 0.14), (261.63, 0.10)],
+        "default-warm": [(220.00, 0.18), (277.18, 0.14), (329.63, 0.10)],
+    }
+    tones = presets.get(bgm_id, presets["default-light"])
+    sample_rate = 44100
+    duration_seconds = 16
+    fade_samples = int(sample_rate * 0.08)
+    total_samples = sample_rate * duration_seconds
+
+    with wave.open(str(output), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        for index in range(total_samples):
+            t = index / sample_rate
+            beat = 0.55 + 0.45 * math.sin(2 * math.pi * 2 * t) ** 2
+            value = 0.0
+            for freq, amp in tones:
+                value += amp * math.sin(2 * math.pi * freq * t)
+            value *= beat
+            if index < fade_samples:
+                value *= index / fade_samples
+            elif total_samples - index < fade_samples:
+                value *= (total_samples - index) / fade_samples
+            packed = struct.pack("<h", int(max(-1, min(1, value)) * 32767))
+            wav.writeframesraw(packed + packed)
+    return output
 
 
 @app.post("/api/bgm/upload", tags=["assets"])
@@ -631,6 +826,25 @@ def generate_task_title(task_id: str) -> OralVideoTask:
     return repo.put(task)
 
 
+@app.post("/api/tasks/{task_id}/publish-content", tags=["tasks"])
+def generate_task_publish_content(task_id: str) -> PublishContentSuggestion:
+    try:
+        task = repo.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    script = (task.rewritten_script or task.original_script).strip()
+    if not script:
+        raise HTTPException(status_code=400, detail="没有可生成发布内容的文案")
+    try:
+        suggestion = generate_publish_content(script)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"大模型生成发布内容失败：{exc}") from exc
+    task.video_title = suggestion.title
+    task.title = suggestion.title
+    repo.put(task)
+    return suggestion
+
+
 @app.post("/api/tasks/{task_id}/cover", tags=["tasks"])
 def generate_task_cover(task_id: str) -> OralVideoTask:
     try:
@@ -638,15 +852,21 @@ def generate_task_cover(task_id: str) -> OralVideoTask:
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
     script = task.rewritten_script or task.original_script
-    if not script:
-        raise HTTPException(status_code=400, detail="没有可生成封面的文案")
+    if not script and not task.output_video_path:
+        raise HTTPException(status_code=400, detail="没有可生成封面的文案或视频")
     start_progress(task, "cover")
     if not task.video_title:
         task.video_title = generate_title(script)
         task.title = task.video_title
         complete_progress(task, "title")
     cover_path = storage_dir("covers") / f"{task_id}.png"
-    generate_cover_png(task.video_title, script, cover_path)
+    if task.output_video_path and Path(task.output_video_path).exists():
+        try:
+            extract_first_frame_cover_png(Path(task.output_video_path), cover_path)
+        except Exception:
+            generate_cover_png(task.video_title, script, cover_path)
+    else:
+        generate_cover_png(task.video_title, script, cover_path)
     task.cover_path = str(cover_path)
     complete_progress(task, "cover")
     return repo.put(task)
@@ -683,7 +903,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     voice_ref = custom_asset_path(options.voice_id, "voice_reference")
     if voice_ref is None:
         voice_ref = custom_asset_id_path(options.voice_reference_asset_id, "voice_reference")
-    bgm_audio = custom_asset_path(options.bgm_id, "bgm")
+    bgm_audio = resolve_bgm_audio(options.bgm_id)
     digital_human_video = digital_human_reference_path(options.digital_human_id)
     source_video = digital_human_video or (Path(task.source_video.path) if task.source_video else None)
     cancel_event = threading.Event()
@@ -773,7 +993,10 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         start_progress(task, "cover")
         repo.put(task)
         cover_path = storage_dir("covers") / f"{task_id}.png"
-        generate_cover_png(task.video_title, script, cover_path)
+        try:
+            extract_first_frame_cover_png(rendered_path, cover_path)
+        except Exception:
+            generate_cover_png(task.video_title, script, cover_path)
         task.cover_path = str(cover_path)
         complete_progress(task, "cover")
         repo.put(task)
