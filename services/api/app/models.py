@@ -1,3 +1,5 @@
+import os
+import sys
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -17,11 +19,14 @@ class TaskStatus(str, Enum):
 
 
 class SubtitleStyle(BaseModel):
-    font_size: int = Field(default=42, ge=16, le=96)
-    color: str = "#FFFFFF"
+    font_size: int = Field(default=12, ge=8, le=96)
+    color: str = "#FFE600"
     outline_color: str = "#000000"
+    outline_width: int = Field(default=2, ge=0, le=8)
+    font_family: str = "Microsoft YaHei"
     position: str = "bottom"
-    max_chars_per_line: int = Field(default=18, ge=8, le=40)
+    margin_v: int = Field(default=70, ge=0, le=500)
+    max_chars_per_line: int = Field(default=12, ge=6, le=40)
 
 
 class SubtitlePreviewRequest(BaseModel):
@@ -45,8 +50,21 @@ class RenderOptions(BaseModel):
     motion_mode: str = "auto"
     expression_mode: str = "auto"
     bgm_id: Optional[str] = "default-light"
-    bgm_volume: float = Field(default=0.18, ge=0, le=1)
+    bgm_volume: float = Field(default=0.35, ge=0, le=1)
+    subtitle_enabled: bool = True
     subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
+    pip_enabled: bool = False
+    pip_asset_id: Optional[str] = None
+    pip_position: str = "top_right"
+    pip_scale: float = Field(default=0.28, ge=0.1, le=0.95)
+    pip_x: float = Field(default=0.70, ge=0, le=1)
+    pip_y: float = Field(default=0.03, ge=0, le=1)
+    pip_width: float = Field(default=0.28, ge=0.05, le=1)
+    pip_height: Optional[float] = Field(default=None, ge=0.03, le=1)
+    pip_timing_mode: str = "full"
+    pip_start_seconds: Optional[float] = Field(default=None, ge=0)
+    pip_end_seconds: Optional[float] = Field(default=None, ge=0)
+    pip_trigger_text: Optional[str] = None
 
 
 class CreateTaskRequest(BaseModel):
@@ -56,6 +74,11 @@ class CreateTaskRequest(BaseModel):
 
 class UpdateTaskRequest(BaseModel):
     title: Optional[str] = None
+
+
+class PostprocessVideoRequest(BaseModel):
+    source_video_path: str
+    options: RenderOptions
 
 
 class RewriteRequest(BaseModel):
@@ -93,9 +116,9 @@ DEFAULT_PROGRESS_STEPS = [
     ProgressStep(key="extract", label="1. 对标文案提取"),
     ProgressStep(key="rewrite", label="2. 文案仿写"),
     ProgressStep(key="voice", label="3. 声音克隆/合成"),
-    ProgressStep(key="digital_human", label="4. 数字人口播"),
-    ProgressStep(key="subtitle", label="5. 添加字幕"),
-    ProgressStep(key="bgm", label="6. 添加背景音乐"),
+    ProgressStep(key="subtitle", label="4. 添加字幕/画中画"),
+    ProgressStep(key="bgm", label="5. 添加背景音乐"),
+    ProgressStep(key="digital_human", label="6. 数字人口播与成片合成"),
     ProgressStep(key="title", label="7. 生成标题"),
     ProgressStep(key="cover", label="8. 生成封面"),
     ProgressStep(key="publish", label="9. 多平台发布"),
@@ -152,6 +175,7 @@ class VoiceProfile(BaseModel):
     description: str
     built_in: bool = True
     asset_id: Optional[str] = None
+    last_used_at: Optional[str] = None
 
 
 class DigitalHumanProfile(BaseModel):
@@ -160,6 +184,8 @@ class DigitalHumanProfile(BaseModel):
     description: str
     built_in: bool = True
     asset_id: Optional[str] = None
+    last_used_at: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 
 class BgmTrack(BaseModel):
@@ -171,6 +197,11 @@ class BgmTrack(BaseModel):
 
 
 def project_root() -> Path:
+    configured = os.getenv("ORAL_VIDEO_AGENT_HOME")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[3]
 
 

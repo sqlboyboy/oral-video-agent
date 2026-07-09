@@ -1,0 +1,15 @@
+[Unit]
+Description=Oral Video Agent AutoDL Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/oral-video-agent-cloud-worker
+EnvironmentFile=/root/oral-video-agent-cloud-worker/.env
+ExecStart=/usr/bin/python3 /root/oral-video-agent-cloud-worker/autodl_worker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,14 +46,90 @@ class WorkbenchPage extends StatefulWidget {
   State<WorkbenchPage> createState() => _WorkbenchPageState();
 }
 
+class _BootstrapResult {
+  const _BootstrapResult(this.apiBase, this.body);
+
+  final String apiBase;
+  final Map<String, dynamic> body;
+}
+
+class _CloudUploadFile {
+  const _CloudUploadFile({
+    required this.kind,
+    required this.file,
+    required this.fileName,
+    required this.contentType,
+  });
+
+  final String kind;
+  final File file;
+  final String fileName;
+  final String contentType;
+}
+
 class _WorkbenchPageState extends State<WorkbenchPage> {
-  static const apiBase =
-      String.fromEnvironment('API_BASE', defaultValue: 'http://127.0.0.1:8000');
+  static const _defaultApiBase = 'http://127.0.0.1:8000';
+  static const _configuredApiBase =
+      String.fromEnvironment('API_BASE', defaultValue: _defaultApiBase);
+  static const _fallbackApiBase = 'http://127.0.0.1:8001';
+  static const _configuredCloudApiBase = String.fromEnvironment(
+    'CLOUD_API_BASE',
+    defaultValue: 'https://api.example.com',
+  );
   static const cyan = Color(0xFF2F9BFF);
   static const pink = Color(0xFFE260D4);
   static const panelBg = Color(0xFF1D2030);
   static const panelBg2 = Color(0xFF24283A);
   static const purpleLine = Color(0xFF7E54E8);
+  static const _subtitleFontOptions = [
+    'Microsoft YaHei',
+    'Microsoft YaHei UI',
+    'SimHei',
+    'SimSun',
+    'KaiTi',
+    'Arial',
+  ];
+  static const _subtitleFontLabels = {
+    'Microsoft YaHei': '微软雅黑',
+    'Microsoft YaHei UI': '微软雅黑 UI',
+    'SimHei': '黑体',
+    'SimSun': '宋体',
+    'KaiTi': '楷体',
+    'Arial': 'Arial',
+  };
+  static const _pipPositionOptions = [
+    'top_right',
+    'fullscreen',
+    'custom',
+    'top_left',
+    'bottom_right',
+    'bottom_left',
+    'center',
+  ];
+  static const _pipTimingOptions = [
+    'full',
+    'time',
+    'sentence',
+  ];
+  static const _pipPositionLabels = {
+    'top_right': '右上角',
+    'top_left': '左上角',
+    'bottom_right': '右下角',
+    'bottom_left': '左下角',
+    'center': '居中',
+    'fullscreen': '全屏',
+    'custom': '自定义拖放',
+  };
+  static const _pipTimingLabels = {
+    'full': '全程显示',
+    'time': '按秒数显示',
+    'sentence': '按句子显示',
+  };
+  static const _pipCanvasAspectRatio = 9 / 16;
+  static const _pipMediaAspectRatio = 16 / 9;
+  static const _pipMarginX = 24 / 1080;
+  static const _pipMarginY = 24 / 1920;
+  static const _publisherNicknamePlaceholder = '登录后自动识别';
 
   final urlController = TextEditingController();
   final productController = TextEditingController();
@@ -62,11 +140,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final publishTitleController = TextEditingController();
   final publishBodyController = TextEditingController();
   final publishTopicsController = TextEditingController();
+  final cloudApiController =
+      TextEditingController(text: _configuredCloudApiBase);
+  final cloudEmailController = TextEditingController();
+  final cloudEmailCodeController = TextEditingController();
+  final cloudActivationCodeController = TextEditingController();
+  final cloudDurationController = TextEditingController(text: '600');
+  final pipStartController = TextEditingController(text: '0');
+  final pipEndController = TextEditingController();
+  final pipTriggerController = TextEditingController();
 
   Map<String, dynamic>? task;
   Map<String, dynamic>? providers;
   Map<String, dynamic>? output;
+  Map<String, dynamic>? cloudSession;
+  Map<String, dynamic>? cloudWallet;
+  Map<String, dynamic>? cloudJob;
+  Map<String, dynamic>? cloudEstimate;
   Map<String, dynamic>? mouthAtlasDiagnosis;
+  List<Map<String, dynamic>> cloudLedger = const [];
   List<Map<String, dynamic>> rewriteStyles = const [];
   List<Map<String, dynamic>> voices = const [];
   List<Map<String, dynamic>> digitalHumans = const [];
@@ -78,13 +170,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   bool diagnosingMouthAtlas = false;
   bool publishing = false;
   bool generatingPublishContent = false;
+  bool initialized = false;
+  bool activationDialogOpen = false;
+  String apiBase = _configuredApiBase;
   String message = '';
   bool messageIsError = false;
   String publishContentGeneratedKey = '';
+  String generationMode = 'cloud';
+  String cloudDeviceToken = '';
+  String cloudSourceVideoPath = '';
+  String cloudSourceVideoName = '';
+  String cloudOutputUrl = '';
+  String cloudOutputLocalPath = '';
+  String cloudVoiceAudioPath = '';
+  String cloudVoiceJobId = '';
+  String generatedVoiceKey = '';
+  String coverPath = '';
   String selectedStyle = '同款口播';
-  String selectedWordCount = '300字';
-  String selectedVoice = 'classic-female';
-  String selectedBgm = 'default-light';
+  String selectedVoice = '';
+  String selectedBgm = 'none';
   String selectedDigitalHuman = '';
   String selectedDigitalHumanEngine = 'heygem-local';
   String selectedPublishPlatform = 'douyin';
@@ -95,8 +199,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   bool randomMotion = false;
   bool mouthApertureEnabled = true;
   double speechRate = 1.0;
-  double bgmVolume = 0.18;
-  double subtitleSize = 18;
+  double voicePreviewVolume = 1.0;
+  double bgmVolume = 0.35;
+  double subtitleSize = 12;
+  bool subtitlesEnabled = true;
+  String selectedSubtitleFont = 'Microsoft YaHei';
+  Color subtitleColor = const Color(0xFFFFE600);
+  Color subtitleOutlineColor = const Color(0xFF000000);
+  List<String> subtitlePreviewLines = const [];
+  bool pipEnabled = false;
+  String pipAssetId = '';
+  String pipAssetName = '';
+  String pipAssetPath = '';
+  String pipPosition = 'top_right';
+  String pipTimingMode = 'full';
+  double pipScale = 0.28;
+  double pipX = 0.70;
+  double pipY = 0.03;
   double mouthApertureStrength = 0.50;
   double mouthApertureEnergyThreshold = 0.24;
   double mouthApertureMinRatio = 0.07;
@@ -105,20 +224,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   double mouthApertureRelease = 1.0;
   int outputRefresh = 0;
   Timer? renderPollTimer;
+  Timer? cloudPollTimer;
+  Process? _localApiProcess;
   Player? _voicePlayer;
+  Player? _originalAudioPlayer;
+  Player? _bgmPlayer;
   bool _isPlayingVoice = false;
+  bool _isPlayingOriginalAudio = false;
+  bool _isPlayingBgm = false;
 
   @override
   void initState() {
     super.initState();
-    loadBootstrap();
-    loadPublisherAccounts();
+    _initialize();
   }
 
   @override
   void dispose() {
     renderPollTimer?.cancel();
+    cloudPollTimer?.cancel();
+    _localApiProcess?.kill();
     _voicePlayer?.dispose();
+    _originalAudioPlayer?.dispose();
+    _bgmPlayer?.dispose();
     urlController.dispose();
     productController.dispose();
     audienceController.dispose();
@@ -128,15 +256,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     publishTitleController.dispose();
     publishBodyController.dispose();
     publishTopicsController.dispose();
+    cloudApiController.dispose();
+    cloudEmailController.dispose();
+    cloudEmailCodeController.dispose();
+    cloudActivationCodeController.dispose();
+    cloudDurationController.dispose();
+    pipStartController.dispose();
+    pipEndController.dispose();
+    pipTriggerController.dispose();
     super.dispose();
   }
 
   Future<void> loadBootstrap() async {
     try {
-      final res = await http.get(Uri.parse('$apiBase/api/bootstrap'));
-      _check(res);
-      final body =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final bootstrap = await _loadBootstrapFromAvailableApi();
+      final loadedApiBase = bootstrap.apiBase;
+      final body = bootstrap.body;
       final loadedVoices =
           (body['voices'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       final loadedHumans =
@@ -144,7 +279,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               const [];
       final loadedBgm =
           (body['bgm'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+      if (!mounted) return;
       setState(() {
+        final apiBaseChanged = apiBase != loadedApiBase;
+        apiBase = loadedApiBase;
         final loadedProviders = body['providers'] as Map<String, dynamic>?;
         providers = loadedProviders;
         rewriteStyles =
@@ -186,26 +324,745 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'wav2lip_aperture_release',
           fallback: mouthApertureRelease,
         );
-        final voiceIds = loadedVoices.map((v) => v['voice_id']).toSet();
-        if (!voiceIds.contains(selectedVoice) && loadedVoices.isNotEmpty) {
-          selectedVoice = loadedVoices.first['voice_id'] as String;
+        final voiceIds = _limitedProfileOptions(loadedVoices, 'voice_id',
+            preferredSystemPrefix: 'clone:');
+        if (!voiceIds.contains(selectedVoice) && voiceIds.isNotEmpty) {
+          selectedVoice = voiceIds.first;
         }
-        if (selectedDigitalHuman.isEmpty && loadedHumans.isNotEmpty) {
-          selectedDigitalHuman =
-              loadedHumans.first['digital_human_id'] as String;
+        final humanIds = loadedHumans
+            .where((v) => v['built_in'] != true)
+            .map((v) => v['digital_human_id'] as String)
+            .toList();
+        if (!humanIds.contains(selectedDigitalHuman)) {
+          selectedDigitalHuman = humanIds.isEmpty ? '' : humanIds.first;
         }
-        final bgmIds = loadedBgm.map((v) => v['bgm_id']).toSet();
-        if (!bgmIds.contains(selectedBgm) && loadedBgm.isNotEmpty) {
-          selectedBgm = loadedBgm.first['bgm_id'] as String;
+        final bgmIds = _effectiveBgmOptionsFor(loadedBgm).toSet();
+        if (selectedBgm != 'none' && !bgmIds.contains(selectedBgm)) {
+          selectedBgm = 'none';
         }
         if (rewriteStyles.isNotEmpty &&
             !rewriteStyles.any((s) => s['name'] == selectedStyle)) {
           selectedStyle = rewriteStyles.first['name'] as String;
         }
+        if (apiBaseChanged && message.isEmpty) {
+          message = '已连接本项目后端：$loadedApiBase';
+          messageIsError = false;
+        }
       });
     } catch (e) {
-      setState(() => message = e.toString());
+      if (!mounted) return;
+      setState(() {
+        message = e.toString();
+        messageIsError = true;
+      });
     }
+  }
+
+  Future<void> _initialize() async {
+    await loadBootstrap();
+    await _resetReleaseLocalStateIfNeeded();
+    await _loadCloudAuth();
+    if (_cloudLicensed) {
+      await loadCloudLedger(silent: true);
+    }
+    if (mounted && providers != null) {
+      await loadPublisherAccounts();
+    }
+    if (!mounted) return;
+    setState(() => initialized = true);
+    _promptActivationIfNeeded();
+  }
+
+  Future<File> _releaseResetMarkerFile() async {
+    final dir = await getApplicationSupportDirectory();
+    await dir.create(recursive: true);
+    return File('${dir.path}${Platform.pathSeparator}release_reset_v1.json');
+  }
+
+  Future<void> _resetReleaseLocalStateIfNeeded() async {
+    try {
+      final marker = await _releaseResetMarkerFile();
+      if (await marker.exists()) return;
+
+      await _clearCloudAuth();
+
+      final res = await http
+          .post(Uri.parse('$apiBase/api/publisher/reset-local-state'))
+          .timeout(const Duration(seconds: 8));
+      _check(res);
+
+      if (mounted) {
+        setState(() {
+          publisherAccounts = const [];
+          publishJobs = const [];
+          selectedPublisherAccount = '';
+          publisherNicknameController.clear();
+        });
+      }
+      await marker.writeAsString(
+        jsonEncode({'reset_at': DateTime.now().toIso8601String()}),
+      );
+    } catch (_) {
+      // 老后端没有重置接口时保持静默；升级后会在下次启动继续尝试?    }
+    }
+  }
+
+  String get _cloudApiBase {
+    final value = cloudApiController.text.trim();
+    final base = value.isEmpty ? _configuredCloudApiBase : value;
+    return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+  }
+
+  Map<String, dynamic>? get _cloudUser {
+    final user = cloudSession?['user'];
+    if (user is Map) return user.cast<String, dynamic>();
+    return null;
+  }
+
+  bool get _cloudLoggedIn => cloudDeviceToken.isNotEmpty;
+
+  bool get _cloudLicensed {
+    return _cloudUser?['license_status'] == 'active';
+  }
+
+  bool get _cloudAccountBound {
+    final email = _cloudUser?['email'] as String? ?? '';
+    return email.trim().isNotEmpty;
+  }
+
+  bool _ensureSoftwareActivated() {
+    if (!_cloudLoggedIn || !_cloudLicensed) {
+      showError('请先输入激活码激活软件');
+      return false;
+    }
+    return true;
+  }
+
+  bool _ensureCloudAccountReady() {
+    if (!_ensureSoftwareActivated()) return false;
+    return true;
+  }
+
+  Map<String, String> _cloudHeaders({bool auth = true}) {
+    return {
+      'Content-Type': 'application/json',
+      if (auth && cloudDeviceToken.isNotEmpty)
+        'Authorization': 'Bearer $cloudDeviceToken',
+    };
+  }
+
+  Future<File> _cloudAuthFile() async {
+    final dir = await getApplicationSupportDirectory();
+    await dir.create(recursive: true);
+    return File('${dir.path}${Platform.pathSeparator}cloud_auth.json');
+  }
+
+  Future<void> _loadCloudAuth() async {
+    try {
+      final file = await _cloudAuthFile();
+      if (!await file.exists()) return;
+      final saved =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final savedBase = saved['cloud_api_base'] as String? ?? '';
+      final savedToken = saved['device_token'] as String? ?? '';
+      final savedEmail = saved['email'] as String? ?? '';
+      if (!mounted) return;
+      setState(() {
+        if (savedBase.isNotEmpty) {
+          cloudApiController.text = savedBase;
+        }
+        if (savedEmail.isNotEmpty) {
+          cloudEmailController.text = savedEmail;
+        }
+        cloudDeviceToken = savedToken;
+      });
+      if (savedToken.isNotEmpty) {
+        await loadCloudMe(silent: true);
+      }
+    } catch (_) {
+      await _clearCloudAuth();
+    }
+  }
+
+  Future<void> _saveCloudAuth() async {
+    final file = await _cloudAuthFile();
+    await file.writeAsString(jsonEncode({
+      'cloud_api_base': _cloudApiBase,
+      'device_token': cloudDeviceToken,
+      'email': cloudEmailController.text.trim(),
+    }));
+  }
+
+  Future<void> _clearCloudAuth() async {
+    try {
+      final file = await _cloudAuthFile();
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {
+      // 清理失败不阻断重新激活流程?    }
+    }
+    if (!mounted) return;
+    setState(() {
+      cloudDeviceToken = '';
+      cloudSession = null;
+      cloudWallet = null;
+      cloudLedger = const [];
+    });
+  }
+
+  String _deviceFingerprint() {
+    final user =
+        Platform.environment['USERNAME'] ?? Platform.environment['USER'] ?? '';
+    return [
+      Platform.operatingSystem,
+      Platform.localHostname,
+      user,
+    ].where((item) => item.trim().isNotEmpty).join(':');
+  }
+
+  String _deviceName() {
+    final host = Platform.localHostname.trim();
+    if (host.isEmpty) return 'Windows client';
+    return '${Platform.operatingSystem} $host';
+  }
+
+  Map<String, dynamic> _decodeMap(http.Response res) {
+    return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<void> loadCloudMe({bool silent = false}) async {
+    if (!_cloudLoggedIn) {
+      if (!silent) showError('请先输入激活码激活软件');
+      return;
+    }
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/me'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      setState(() {
+        cloudSession = body;
+        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        final email = user?['email'] as String? ?? '';
+        if (email.isNotEmpty) cloudEmailController.text = email;
+        if (!silent) {
+          message = '云端账号已刷新';
+          messageIsError = false;
+        }
+      });
+      await _saveCloudAuth();
+    } catch (e) {
+      if (silent) {
+        await _clearCloudAuth();
+      } else {
+        showError(e.toString());
+      }
+    }
+  }
+
+  Future<void> loadCloudLedger({bool silent = false}) async {
+    if (!_cloudLicensed) return;
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/credits/ledger'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      setState(() {
+        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudLedger =
+            (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+        if (!silent) {
+          message = '点数明细已刷新';
+          messageIsError = false;
+        }
+      });
+    } catch (e) {
+      if (!silent) showError(e.toString());
+    }
+  }
+
+  Future<void> sendCloudEmailCode() async {
+    if (!_ensureSoftwareActivated()) return;
+    final email = cloudEmailController.text.trim();
+    if (email.isEmpty) {
+      showError('请输入邮箱');
+      return;
+    }
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/auth/email-code'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({'email': email}),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      final debugCode = body['debug_code'] as String? ?? '';
+      setState(() {
+        if (debugCode.isNotEmpty) {
+          cloudEmailCodeController.text = debugCode;
+          message = '验证码已发送，已自动填入';
+        } else {
+          message = '验证码已发送';
+        }
+        messageIsError = false;
+      });
+      await _saveCloudAuth();
+    });
+  }
+
+  Future<void> loginCloudWithEmail() async {
+    if (!_ensureSoftwareActivated()) return;
+    final email = cloudEmailController.text.trim();
+    final code = cloudEmailCodeController.text.trim();
+    if (email.isEmpty) {
+      showError('请输入邮箱');
+      return;
+    }
+    if (code.isEmpty) {
+      showError('请输入邮箱验证码');
+      return;
+    }
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/auth/login'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'email': email,
+          'code': code,
+          'device_fingerprint': _deviceFingerprint(),
+          'device_name': _deviceName(),
+        }),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      setState(() {
+        cloudDeviceToken = body['device_token'] as String? ?? cloudDeviceToken;
+        cloudSession = body;
+        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudEmailCodeController.clear();
+        message = '邮箱账号已绑定，点数余额按该账号管理';
+        messageIsError = false;
+      });
+      await _saveCloudAuth();
+      await loadCloudLedger(silent: true);
+    });
+  }
+
+  Future<void> activateCloudLicense() async {
+    await _activateSoftwareFromInput();
+  }
+
+  Future<bool> _activateSoftwareFromInput() async {
+    final code = cloudActivationCodeController.text.trim();
+    if (code.isEmpty) {
+      showError('请输入激活码');
+      return false;
+    }
+    var activated = false;
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/activate'),
+        headers: _cloudHeaders(auth: false),
+        body: jsonEncode({
+          'license_key': code,
+          'device_fingerprint': _deviceFingerprint(),
+          'device_name': _deviceName(),
+        }),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      setState(() {
+        cloudDeviceToken = body['device_token'] as String? ?? '';
+        cloudSession = body;
+        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudActivationCodeController.clear();
+        message = '软件已激活，请绑定邮箱账号管理点?';
+        messageIsError = false;
+      });
+      await _saveCloudAuth();
+      await loadCloudLedger(silent: true);
+      activated = true;
+    });
+    return activated;
+  }
+
+  void _promptActivationIfNeeded() {
+    if (!mounted || _cloudLicensed || activationDialogOpen) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _cloudLicensed || activationDialogOpen) return;
+      activationDialogOpen = true;
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: _activationDialog,
+      ).whenComplete(() {
+        activationDialogOpen = false;
+        if (mounted && !_cloudLicensed) _promptActivationIfNeeded();
+      });
+    });
+  }
+
+  Widget _activationDialog(BuildContext dialogContext) {
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        backgroundColor: panelBg,
+        title: const Text('软件激活'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('请输入激活码后继续使用云端功能。',
+                  style: TextStyle(color: Colors.white70, height: 1.4)),
+              const SizedBox(height: 14),
+              _input(cloudActivationCodeController, '激活码'),
+              const SizedBox(height: 10),
+              if (message.isNotEmpty && messageIsError)
+                Text(
+                  message,
+                  style: const TextStyle(color: Color(0xFFFFB0C2)),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: loading
+                ? null
+                : () async {
+                    final ok = await _activateSoftwareFromInput();
+                    if (ok && mounted && Navigator.of(dialogContext).canPop()) {
+                      Navigator.of(dialogContext).pop();
+                    }
+                  },
+            icon: const Icon(Icons.verified_user_outlined),
+            label: const Text('激活'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _accountModule() {
+    if (_cloudAccountBound) return _boundAccountModule();
+    return _emailLoginModule();
+  }
+
+  Widget _emailLoginModule() {
+    final wallet = cloudWallet ?? const <String, dynamic>{};
+    final available = wallet['available_points'] ?? 0;
+    final frozen = wallet['frozen_points'] ?? 0;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 58),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF202438),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: purpleLine.withValues(alpha: 0.85)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.login, size: 18, color: Color(0xFFD4A4FF)),
+          const SizedBox(width: 8),
+          _headerInfo('账号可选', '可用 $available / 冻结 $frozen'),
+          const SizedBox(width: 12),
+          SizedBox(
+              width: 180, child: _headerInput(cloudEmailController, '邮箱账号')),
+          const SizedBox(width: 8),
+          SizedBox(
+              width: 96, child: _headerInput(cloudEmailCodeController, '验证码')),
+          const SizedBox(width: 8),
+          _headerButton('发码', sendCloudEmailCode),
+          const SizedBox(width: 8),
+          _headerButton('登录', loginCloudWithEmail, primary: true),
+        ],
+      ),
+    );
+  }
+
+  Widget _boundAccountModule() {
+    final wallet = cloudWallet ?? const <String, dynamic>{};
+    final available = wallet['available_points'] ?? 0;
+    final frozen = wallet['frozen_points'] ?? 0;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 58, maxWidth: 600),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFF202438),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: purpleLine.withValues(alpha: 0.85)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.account_circle, size: 22, color: Color(0xFFD4A4FF)),
+          const SizedBox(width: 8),
+          Flexible(
+            flex: 3,
+            child: _headerInfo('账号', _cloudAccountText),
+          ),
+          const SizedBox(width: 12),
+          _headerInfo('可用', '$available 点',
+              valueColor: const Color(0xFFB9F8D0)),
+          const SizedBox(width: 12),
+          _headerInfo('冻结', '$frozen 点'),
+          const SizedBox(width: 12),
+          Flexible(
+            flex: 3,
+            child: _headerInfo('点数明细', _latestLedgerText),
+          ),
+          const SizedBox(width: 8),
+          _headerIconButton(Icons.refresh, () async {
+            await loadCloudMe(silent: true);
+            await loadCloudLedger(silent: true);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _headerInfo(String label, String value, {Color? valueColor}) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(color: Colors.white54, fontSize: 11)),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: valueColor ?? Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _headerInput(TextEditingController controller, String hint) {
+    return SizedBox(
+      height: 38,
+      child: TextField(
+        controller: controller,
+        style: const TextStyle(fontSize: 13),
+        decoration: InputDecoration(
+          hintText: hint,
+          filled: true,
+          fillColor: const Color(0xFF171A28),
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(7)),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(7),
+            borderSide: BorderSide(color: purpleLine.withValues(alpha: 0.45)),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(7)),
+            borderSide: BorderSide(color: cyan, width: 1.2),
+          ),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
+        ),
+      ),
+    );
+  }
+
+  Widget _headerButton(
+    String text,
+    VoidCallback onPressed, {
+    bool primary = false,
+  }) {
+    return SizedBox(
+      height: 38,
+      child: primary
+          ? ElevatedButton(
+              onPressed: loading ? null : onPressed,
+              style: ElevatedButton.styleFrom(
+                elevation: 0,
+                foregroundColor: Colors.white,
+                backgroundColor: cyan,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              child: Text(text,
+                  style: const TextStyle(fontWeight: FontWeight.w900)),
+            )
+          : OutlinedButton(
+              onPressed: loading ? null : onPressed,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: BorderSide(color: purpleLine.withValues(alpha: 0.8)),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              child: Text(text,
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+            ),
+    );
+  }
+
+  Widget _headerIconButton(IconData icon, VoidCallback onPressed) {
+    return SizedBox(
+      width: 36,
+      height: 36,
+      child: IconButton(
+        tooltip: '刷新账号点数',
+        onPressed: loading ? null : onPressed,
+        icon: Icon(icon, size: 18),
+        color: Colors.white,
+        style: IconButton.styleFrom(
+          backgroundColor: panelBg2,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+    );
+  }
+
+  int? _cloudDurationSeconds() {
+    final value = int.tryParse(cloudDurationController.text.trim());
+    if (value == null || value <= 0) return null;
+    return value;
+  }
+
+  Future<void> estimateCloudJob() async {
+    if (!_ensureCloudAccountReady()) return;
+    final duration = _cloudDurationSeconds();
+    if (duration == null) {
+      showError('请输入云端任务时长');
+      return;
+    }
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/jobs/estimate'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'duration_seconds': duration,
+          'resolution': '1080p',
+        }),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      setState(() {
+        cloudEstimate = body;
+        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        message = '云端任务已预?';
+        messageIsError = false;
+      });
+    });
+  }
+
+  Future<_BootstrapResult> _loadBootstrapFromAvailableApi() async {
+    final candidates = _apiBaseCandidates();
+    Object? lastError;
+    for (final candidate in candidates) {
+      try {
+        return await _loadBootstrapCandidate(candidate);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (await _startBundledLocalApiIfAvailable()) {
+      for (var attempt = 0; attempt < 40; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        for (final candidate in candidates) {
+          try {
+            return await _loadBootstrapCandidate(
+              candidate,
+              timeout: const Duration(seconds: 2),
+            );
+          } catch (e) {
+            lastError = e;
+          }
+        }
+      }
+    }
+    throw Exception('无法连接本地服务：$lastError');
+  }
+
+  Future<_BootstrapResult> _loadBootstrapCandidate(
+    String candidate, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final res =
+        await http.get(Uri.parse('$candidate/api/bootstrap')).timeout(timeout);
+    _check(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (_isExpectedBootstrapPayload(body)) {
+      return _BootstrapResult(candidate, body);
+    }
+    throw Exception('$candidate 不是当前口播智能体后端');
+  }
+
+  Future<bool> _startBundledLocalApiIfAvailable() async {
+    if (!Platform.isWindows || _localApiProcess != null) return false;
+    final appDir = File(Platform.resolvedExecutable).parent;
+    final candidates = [
+      File('${appDir.path}${Platform.pathSeparator}oral_video_agent_api.exe'),
+      File('${appDir.path}${Platform.pathSeparator}api'
+          '${Platform.pathSeparator}oral_video_agent_api.exe'),
+      File('${appDir.path}${Platform.pathSeparator}backend'
+          '${Platform.pathSeparator}oral_video_agent_api.exe'),
+    ];
+    for (final apiExe in candidates) {
+      if (!await apiExe.exists()) continue;
+      _localApiProcess = await Process.start(
+        apiExe.path,
+        const ['--host', '127.0.0.1', '--port', '8000'],
+        workingDirectory: appDir.path,
+        environment: {'ORAL_VIDEO_AGENT_HOME': appDir.path},
+      );
+      unawaited(_localApiProcess!.stdout.drain<void>());
+      unawaited(_localApiProcess!.stderr.drain<void>());
+      return true;
+    }
+    return false;
+  }
+
+  List<String> _apiBaseCandidates() {
+    const preferred = [_configuredApiBase, _fallbackApiBase];
+    return [
+      for (final base in preferred)
+        if (base.isNotEmpty)
+          base.endsWith('/') ? base.substring(0, base.length - 1) : base,
+    ].toSet().toList();
+  }
+
+  bool _isExpectedBootstrapPayload(Map<String, dynamic> body) {
+    final humans = body['digital_humans'];
+    return body['providers'] is Map &&
+        body['voices'] is List &&
+        humans is List &&
+        body['bgm'] is List &&
+        _customDigitalHumansHaveThumbnails(humans);
+  }
+
+  bool _customDigitalHumansHaveThumbnails(List<dynamic> humans) {
+    for (final item in humans) {
+      if (item is! Map) continue;
+      final id = item['digital_human_id']?.toString() ?? '';
+      final builtIn = item['built_in'] == true;
+      if (!builtIn && id.startsWith('custom:')) {
+        final thumbnailUrl = item['thumbnail_url']?.toString() ?? '';
+        if (thumbnailUrl.isEmpty) return false;
+      }
+    }
+    return true;
   }
 
   Future<void> loadPublisherAccounts() async {
@@ -239,7 +1096,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _syncPublisherNicknameField(visibleAccounts);
       });
     } catch (e) {
-      setState(() => message = e.toString());
+      setState(() {
+        message = e.toString();
+        messageIsError = true;
+      });
     }
   }
 
@@ -251,11 +1111,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         break;
       }
     }
-    final nickname = (selected?['nickname'] as String? ?? '').trim();
+    final nickname = _normalizedPublisherNickname(selected?['nickname']);
     if (nickname.isNotEmpty) {
       publisherNicknameController.text = nickname;
     } else {
-      publisherNicknameController.text = '登录后自动识别';
+      publisherNicknameController.text = _publisherNicknamePlaceholder;
     }
   }
 
@@ -265,7 +1125,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final kept = <Map<String, dynamic>>[];
     final pendingPlatforms = <String>{};
     for (final account in accounts.reversed) {
-      final nickname = (account['nickname'] as String? ?? '').trim();
+      final nickname = _normalizedPublisherNickname(account['nickname']);
       final status = account['status'] as String? ?? '';
       final platform = account['platform'] as String? ?? '';
       final isPendingPlaceholder = nickname.isEmpty && status != 'logged_in';
@@ -311,16 +1171,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> createPublisherAccount() async {
-    final nickname = publisherNicknameController.text.trim();
-    if (nickname.isNotEmpty && nickname != '登录后自动识别') {
+    final rawNickname = publisherNicknameController.text.trim();
+    final nickname =
+        rawNickname == _publisherNicknamePlaceholder ? '' : rawNickname;
+    if (nickname.isNotEmpty) {
       final existing = publisherAccounts.where((account) {
         return account['platform'] == selectedPublishPlatform &&
-            ((account['nickname'] as String? ?? '').trim() == nickname);
+            (_normalizedPublisherNickname(account['nickname']) == nickname);
       }).toList();
       if (existing.isNotEmpty) {
         setState(() =>
             selectedPublisherAccount = existing.first['account_id'] as String);
-        showInfo('该账号已存在，已为你选中。');
+        showInfo('该账号已存在，已为你选中?');
         return;
       }
     }
@@ -330,7 +1192,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'platform': selectedPublishPlatform,
-          'nickname': nickname == '登录后自动识别' ? '' : nickname,
+          'nickname': nickname,
         }),
       );
       _check(res);
@@ -339,7 +1201,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await loadPublisherAccounts();
       setState(() {
         selectedPublisherAccount = account['account_id'] as String;
-        message = '账号已添加，请点击“登录”打开平台登录窗口，登录成功后会自动识别账号名称。';
+        message = '账号已添加，请点击登录打弢平台登录窗口，登录成功后会自动识别账号名称?';
         messageIsError = false;
       });
     });
@@ -347,7 +1209,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> loginPublisherAccount() async {
     if (selectedPublisherAccount.isEmpty) {
-      showError('请先添加或选择发布账号。');
+      showError('请先添加或择发布账号?');
       return;
     }
     await _runBusy(() async {
@@ -359,7 +1221,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       );
       _check(res);
       await loadPublisherAccounts();
-      showInfo('已请求打开登录窗口，请按平台提示完成扫码或验证。');
+      showInfo('已请求打弢登录窗口，请按平台提示完成扫码或验证?');
     });
   }
 
@@ -378,11 +1240,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Future<void> createPublishJobs() async {
     final taskId = _taskId;
     if (taskId == null) {
-      showError('请先创建视频任务。');
+      showError('请先创建视频任务?');
       return;
     }
     if (selectedPublisherAccount.isEmpty) {
-      showError('请先选择发布账号。');
+      showError('请先选择发布账号?');
       return;
     }
     if (publishTitleController.text.trim().isEmpty ||
@@ -399,6 +1261,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         .map((value) => value.trim())
         .where((value) => value.isNotEmpty)
         .toList();
+    if (generationMode != 'cloud' && _outputVideoPath == null) {
+      await loadOutput();
+    }
+    final publishVideoPath = _outputVideoPath;
     setState(() => publishing = true);
     await _runBusy(() async {
       final res = await http.post(
@@ -410,12 +1276,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'body': publishBodyController.text.trim(),
           'topics': topics,
           'publish_mode': selectedPublishMode,
+          'video_path': publishVideoPath ?? '',
+          'cover_path': _currentCoverPath ?? '',
         }),
       );
       _check(res);
       await loadPublisherAccounts();
       await _loadTask(taskId);
-      showInfo('发布任务已创建，请在下方查看任务状态。');
+      showInfo('发布任务已创建，请在下方查看任务状?');
     });
     setState(() => publishing = false);
   }
@@ -465,7 +1333,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   void _check(http.Response res) {
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw Exception('${res.statusCode}: ${utf8.decode(res.bodyBytes)}');
+      final bodyText = utf8.decode(res.bodyBytes);
+      String? detail;
+      try {
+        final body = jsonDecode(bodyText);
+        if (body is Map && body['detail'] != null) {
+          detail = body['detail'].toString();
+        }
+      } catch (_) {
+        detail = null;
+      }
+      if (detail != null && detail.isNotEmpty) {
+        throw Exception(detail);
+      }
+      throw Exception('${res.statusCode}: $bodyText');
     }
   }
 
@@ -482,6 +1363,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         currentTask['original_script'] as String? ?? '';
     rewrittenScriptController.text =
         currentTask['rewritten_script'] as String? ?? '';
+    if (generatedVoiceKey.isNotEmpty &&
+        generatedVoiceKey != _voiceKeyFor(_renderScript)) {
+      _invalidateGeneratedVoice();
+    }
     final taskId = currentTask['task_id'] as String? ?? '';
     final publishSource = ((currentTask['rewritten_script'] as String?) ??
             (currentTask['original_script'] as String?) ??
@@ -497,11 +1382,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> createTask() async {
+    if (!_ensureSoftwareActivated()) return;
+    final shareText = urlController.text.trim();
+    if (generationMode == 'cloud' && shareText.isEmpty) {
+      await createCloudTranscriptTask();
+      return;
+    }
+    await createLocalLinkTranscriptTask();
+  }
+
+  Future<void> createLocalLinkTranscriptTask() async {
+    final shareText = urlController.text.trim();
+    if (shareText.isEmpty) {
+      showError('请先粘贴 Douyin 分享链接，或点击“选择视频”上传本地视频素材');
+      return;
+    }
     await _runBusy(() async {
       final res = await http.post(
         Uri.parse('$apiBase/api/tasks'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'douyin_url': urlController.text.trim()}),
+        body: jsonEncode({'douyin_url': shareText}),
       );
       _check(res);
       final body =
@@ -510,10 +1410,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         task = body;
         output = null;
         outputRefresh++;
+        coverPath = '';
+        _invalidateGeneratedVoice();
         publishContentGeneratedKey = '';
         publishTitleController.clear();
         publishBodyController.clear();
         publishTopicsController.clear();
+        message = '正在解析 Douyin 分享链接';
+        messageIsError = false;
       });
       _syncEditors(body);
       final taskId = body['task_id'] as String;
@@ -521,13 +1425,148 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
   }
 
+  Future<void> createCloudTranscriptTask() async {
+    if (!_ensureCloudAccountReady()) return;
+    if (cloudSourceVideoPath.isEmpty) {
+      showError('请先粘贴 Douyin 分享链接，或点击“选择视频”上传本地视频素材');
+      return;
+    }
+    final sourceFile = File(cloudSourceVideoPath);
+    if (!await sourceFile.exists()) {
+      showError('选择的视频文件不存在');
+      return;
+    }
+    setState(() {
+      loading = true;
+      message = '正在提交云端文案提取任务';
+      messageIsError = false;
+      cloudJob = null;
+    });
+    try {
+      final result = await _runCloudPreprocess(
+        payload: {
+          'task_type': 'preprocess',
+          'operation': 'extract',
+          'douyin_url': urlController.text.trim(),
+        },
+        sourceFile: sourceFile,
+        sourceFileName: cloudSourceVideoName.isNotEmpty
+            ? cloudSourceVideoName
+            : _fileNameFromPath(cloudSourceVideoPath),
+      );
+      final originalScript = result['original_script']?.toString().trim() ?? '';
+      if (originalScript.isEmpty) {
+        throw Exception('云端未返回识别文案');
+      }
+      if (!mounted) return;
+      setState(() {
+        originalScriptController.text = originalScript;
+        task = {
+          'task_id':
+              'cloud-${cloudJob?['job_id'] ?? DateTime.now().millisecondsSinceEpoch}',
+          'status': 'transcribed',
+          'original_script': originalScript,
+          'rewritten_script': rewrittenScriptController.text.trim(),
+          'progress_steps': const [],
+        };
+        output = null;
+        outputRefresh++;
+        coverPath = '';
+        _invalidateGeneratedVoice();
+        message = '云端文案提取完成';
+        messageIsError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        message = e.toString();
+        messageIsError = true;
+      });
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
+  Future<void> rewriteCloud(String source) async {
+    if (!_ensureCloudAccountReady()) return;
+    setState(() {
+      loading = true;
+      message = '正在提交云端仿写任务';
+      messageIsError = false;
+      cloudJob = null;
+    });
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$_cloudApiBase/api/client/rewrite'),
+            headers: _cloudHeaders(),
+            body: jsonEncode({
+              'source_script': source,
+              'style': selectedStyle,
+              'max_chars': 300,
+              'product_info': productController.text.trim(),
+              'target_audience': audienceController.text.trim(),
+            }),
+          )
+          .timeout(const Duration(seconds: 45));
+      _check(res);
+      final result = _decodeMap(res);
+      final rewrittenScript =
+          result['rewritten_script']?.toString().trim() ?? '';
+      if (rewrittenScript.isEmpty) {
+        throw Exception('云端未返回仿写文案');
+      }
+      if (!mounted) return;
+      setState(() {
+        rewrittenScriptController.text = rewrittenScript;
+        task = {
+          ...?task,
+          'status': 'rewritten',
+          'original_script': source,
+          'rewritten_script': rewrittenScript,
+          'progress_steps': task?['progress_steps'] ?? const [],
+        };
+        message = '云端仿写完成';
+        messageIsError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        message = e.toString();
+        messageIsError = true;
+      });
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
   Future<void> uploadSourceVideo() async {
+    if (!_ensureSoftwareActivated()) return;
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['mp4', 'mov', 'mkv', 'webm'],
     );
     final path = picked?.files.single.path;
     if (path == null) return;
+    if (generationMode == 'cloud') {
+      final file = File(path);
+      if (!await file.exists()) {
+        showError('选择的视频文件不存在');
+        return;
+      }
+      setState(() {
+        cloudSourceVideoPath = path;
+        cloudSourceVideoName =
+            picked?.files.single.name ?? _fileNameFromPath(path);
+        cloudJob = null;
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        outputRefresh++;
+        message = '已选择云端素材：$cloudSourceVideoName';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request =
           http.MultipartRequest('POST', Uri.parse('$apiBase/api/tasks/upload'));
@@ -551,14 +1590,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _pollImport(String taskId) async {
-    final deadline = DateTime.now().add(const Duration(minutes: 3));
+    final deadline = DateTime.now().add(const Duration(minutes: 20));
     while (DateTime.now().isBefore(deadline)) {
       await Future.delayed(const Duration(seconds: 3));
       final res = await http.get(Uri.parse('$apiBase/api/tasks/$taskId'));
       if (res.statusCode < 200 || res.statusCode >= 300) return;
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      setState(() => task = body);
+      final progressMessage = _importProgressMessage(body);
+      setState(() {
+        task = body;
+        if (progressMessage.isNotEmpty) {
+          message = progressMessage;
+          messageIsError = false;
+        }
+      });
       _syncEditors(body);
       final status = body['status'] as String? ?? '';
       if (status == 'failed') {
@@ -568,19 +1614,48 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if ((body['original_script'] as String? ?? '').isNotEmpty ||
           status == 'transcribed' ||
           status == 'completed') {
+        setState(() {
+          message = '视频文案提取完成';
+          messageIsError = false;
+        });
         return;
       }
     }
+    if (!mounted) return;
+    setState(() {
+      message = '视频还在后台处理，长视频可能需要更久；稍后点击刷新或重新打开任务即可查看结果';
+      messageIsError = false;
+    });
+  }
+
+  String _importProgressMessage(Map<String, dynamic> body) {
+    if ((body['original_script'] as String? ?? '').trim().isNotEmpty) {
+      return '视频文案提取完成';
+    }
+    final active = _activeProgressStep(body);
+    final key = active?['key'] as String? ?? '';
+    return switch (key) {
+      'resolve_link' => '正在解析 Douyin 分享链接',
+      'download_video' => '正在下载源视频，长视频会稍慢',
+      'transcribe' => '正在识别视频文案，5分钟以上视频可能需要几分钟',
+      'extract' => '正在提取视频文案',
+      _ => '',
+    };
   }
 
   Future<void> rewrite() async {
-    final taskId = task?['task_id'] as String?;
-    if (taskId == null) return;
+    if (!_ensureSoftwareActivated()) return;
     final source = originalScriptController.text.trim();
     if (source.isEmpty) {
       setState(() => message = '请先提取或填写原始文案');
       return;
     }
+    if (generationMode == 'cloud') {
+      await rewriteCloud(source);
+      return;
+    }
+    final taskId = task?['task_id'] as String?;
+    if (taskId == null) return;
     await _runBusy(() async {
       final res = await http.post(
         Uri.parse('$apiBase/api/tasks/$taskId/rewrite'),
@@ -601,6 +1676,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> generateTitle() async {
+    if (!_ensureSoftwareActivated()) return;
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     await _runBusy(() async {
@@ -613,12 +1689,106 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
   }
 
+  Future<void> generateCover() async {
+    if (!_ensureSoftwareActivated()) return;
+    final taskId = task?['task_id'] as String?;
+    final script = _renderScript;
+    if (taskId == null && script.isEmpty) {
+      showError('请先生成文案后再生成封面');
+      return;
+    }
+    await _runBusy(() async {
+      if (taskId != null && !taskId.startsWith('cloud-')) {
+        final res =
+            await http.post(Uri.parse('$apiBase/api/tasks/$taskId/cover'));
+        _check(res);
+        final body =
+            jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        setState(() {
+          task = body;
+          coverPath = body['cover_path'] as String? ?? coverPath;
+          outputRefresh++;
+          message = '封面已生成';
+          messageIsError = false;
+        });
+        return;
+      }
+      final res = await http.post(
+        Uri.parse('$apiBase/api/covers/generate'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'title':
+              (task?['title'] as String? ?? publishTitleController.text).trim(),
+          'script': script,
+          'background_path': _outputVideoPath ?? '',
+        }),
+      );
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      setState(() {
+        coverPath = body['cover_path'] as String? ?? '';
+        outputRefresh++;
+        message = '封面已生成';
+        messageIsError = false;
+      });
+    });
+  }
+
+  Future<void> uploadCover() async {
+    if (!_ensureSoftwareActivated()) return;
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
+    );
+    final path = picked?.files.single.path;
+    if (path == null) return;
+    final taskId = task?['task_id'] as String?;
+    if (taskId == null || taskId.startsWith('cloud-')) {
+      setState(() {
+        coverPath = path;
+        outputRefresh++;
+        message = '已选择自定义封面';
+        messageIsError = false;
+      });
+      return;
+    }
+    await _runBusy(() async {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$apiBase/api/tasks/$taskId/cover/upload'),
+      );
+      request.files.add(await http.MultipartFile.fromPath('file', path));
+      final streamed = await request.send();
+      final res = await http.Response.fromStream(streamed);
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      setState(() {
+        task = body;
+        coverPath = body['cover_path'] as String? ?? path;
+        outputRefresh++;
+        message = '已上传自定义封面';
+        messageIsError = false;
+      });
+    });
+  }
+
   Future<void> cloneVoice() async {
+    if (!_ensureSoftwareActivated()) return;
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     final script = _renderScript;
     if (script.isEmpty) {
-      setState(() => message = '请先生成或填写文案');
+      showError('请先生成或填写文案');
+      return;
+    }
+    if (selectedVoice.isEmpty) {
+      showError('请先选择或上传声音');
+      return;
+    }
+    if (generationMode == 'cloud') {
+      await cloneVoiceCloud(taskId, script);
       return;
     }
     await _runBusy(() async {
@@ -630,33 +1800,147 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _check(res);
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      setState(() => task = body);
+      setState(() {
+        task = body;
+        generatedVoiceKey = _voiceKeyFor(script);
+      });
+    });
+  }
+
+  Future<void> cloneVoiceCloud(String taskId, String script) async {
+    if (!_ensureCloudAccountReady()) return;
+    await _runBusy(() async {
+      setState(() {
+        message = '正在准备云端克隆声音素材';
+        messageIsError = false;
+      });
+      final referencePath = await _downloadPreviewToTempFile(
+        _selectedVoicePreviewUrl,
+        'voice_reference',
+      );
+      final referenceFile = File(referencePath);
+      if (!await referenceFile.exists()) {
+        throw Exception('声音参考文件下载失败，请重新选择或上传声音');
+      }
+      final fileName = _fileNameFromPath(referencePath);
+      final uploadSpecs = [
+        {
+          'kind': 'voice_reference',
+          'file_name': fileName,
+          'content_type': _contentTypeForPath(fileName),
+          'file_size_bytes': await referenceFile.length(),
+        }
+      ];
+      final payload = {
+        ..._renderPayload(script),
+        'task_type': 'preprocess',
+        'operation': 'voice',
+        'source_script': script,
+        'client_task_id': taskId,
+      };
+      final sessionRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/preprocess/upload-session'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'assets': uploadSpecs,
+          'payload': payload,
+        }),
+      );
+      _check(sessionRes);
+      final uploadJob = _decodeMap(sessionRes);
+      final jobId = uploadJob['job_id'] as String;
+      if (!mounted) return;
+      setState(() {
+        cloudJob = uploadJob;
+        cloudVoiceJobId = jobId;
+      });
+      final assets = (uploadJob['assets'] as List?) ?? const [];
+      if (assets.length != 1 || assets.first is! Map) {
+        throw Exception('云端没有返回声音素材上传链接');
+      }
+      final asset = (assets.first as Map).cast<String, dynamic>();
+      final upload = (asset['upload'] as Map).cast<String, dynamic>();
+      setState(() {
+        message = '正在上传参考声音到云端';
+        messageIsError = false;
+      });
+      await _uploadFileToPresignedUrl(upload, referenceFile);
+      final uploadedRes = await http.post(
+        Uri.parse(
+          '$_cloudApiBase/api/client/jobs/$jobId/assets/${asset['asset_id']}/uploaded',
+        ),
+        headers: _cloudHeaders(),
+        body: jsonEncode({'file_size_bytes': await referenceFile.length()}),
+      );
+      _check(uploadedRes);
+      final submitRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/preprocess/jobs/$jobId/submit'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({'payload': payload}),
+      );
+      _check(submitRes);
+      final submitted = _decodeMap(submitRes);
+      if (mounted) {
+        setState(() {
+          cloudJob = submitted;
+          message = '云端声音克隆任务已提交';
+          messageIsError = false;
+        });
+      }
+      await _waitCloudPreprocessResult(jobId);
+      final localPath = await _downloadCloudJobOutputToLocal(
+        jobId,
+        fallbackFileName: 'voice.wav',
+      );
+      try {
+        await confirmCloudDownload(silent: true);
+      } catch (_) {
+        // The local WAV is already saved; scheduled cleanup still protects cloud storage.
+      }
+      if (!mounted) return;
+      setState(() {
+        cloudVoiceAudioPath = localPath;
+        generatedVoiceKey = _voiceKeyFor(script);
+        outputRefresh++;
+        message = '声音已克隆，可以播放声音或生成成品视频';
+        messageIsError = false;
+      });
     });
   }
 
   Future<void> playVoice() async {
-    final taskId = _taskId;
-    if (taskId == null) {
-      setState(() => message = '请先选择任务');
+    if (selectedVoice.isEmpty) {
+      showError('请先选择声音');
       return;
     }
-    final voiceUrl = '$apiBase/api/tasks/$taskId/voice';
+    final voiceUrl = _generatedVoiceUrl;
+    if (voiceUrl == null) {
+      showError('请先点击“克隆声音生成后再播放声?');
+      return;
+    }
     try {
-      if (_voicePlayer != null) {
-        await _voicePlayer?.stop();
-        _voicePlayer?.dispose();
-        _voicePlayer = null;
-      }
+      await _stopOriginalAudioPreview();
       if (_isPlayingVoice) {
-        setState(() => _isPlayingVoice = false);
+        await _stopVoicePreview();
+        showInfo('已停止播放声?');
         return;
       }
+      await _stopVoicePreview();
       _voicePlayer = Player();
-      setState(() => _isPlayingVoice = true);
-      await _voicePlayer!.open(Media(voiceUrl));
+      setState(() {
+        _isPlayingVoice = true;
+        _isPlayingOriginalAudio = false;
+      });
+      final localPath = _isLocalFilePath(voiceUrl)
+          ? voiceUrl
+          : await _downloadPreviewToTempFile(voiceUrl, 'voice');
+      await _voicePlayer!.open(Media(_playableMediaSource(localPath)));
+      await _voicePlayer!.setVolume(_voicePreviewMediaVolume);
       await _voicePlayer!.play();
-      _voicePlayer!.stream.completed.listen((_) {
-        if (mounted) setState(() => _isPlayingVoice = false);
+      await _voicePlayer!.setVolume(_voicePreviewMediaVolume);
+      showInfo('正在播放声音');
+      _voicePlayer!.stream.completed.listen((completed) {
+        if (completed && mounted) setState(() => _isPlayingVoice = false);
       });
     } catch (e) {
       setState(() {
@@ -668,7 +1952,237 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  Future<void> playOriginalAudio() async {
+    if (selectedVoice.isEmpty) {
+      showError('请先选择声音');
+      return;
+    }
+    final sourceUrl = _selectedVoicePreviewUrl;
+    try {
+      await _stopVoicePreview();
+      if (_isPlayingOriginalAudio) {
+        await _stopOriginalAudioPreview();
+        showInfo('已停止播放原?');
+        return;
+      }
+      await _stopOriginalAudioPreview();
+      _originalAudioPlayer = Player();
+      setState(() {
+        _isPlayingOriginalAudio = true;
+        _isPlayingVoice = false;
+      });
+      final localPath =
+          await _downloadPreviewToTempFile(sourceUrl, 'original_voice');
+      await _originalAudioPlayer!.open(Media(_playableMediaSource(localPath)));
+      await _originalAudioPlayer!.setVolume(_voicePreviewMediaVolume);
+      await _originalAudioPlayer!.play();
+      await _originalAudioPlayer!.setVolume(_voicePreviewMediaVolume);
+      showInfo('正在播放原音');
+      _originalAudioPlayer!.stream.completed.listen((completed) {
+        if (completed && mounted) {
+          setState(() => _isPlayingOriginalAudio = false);
+        }
+      });
+    } catch (e) {
+      setState(() {
+        message = '原音播放失败: ${e.toString()}';
+        _isPlayingOriginalAudio = false;
+      });
+      _originalAudioPlayer?.dispose();
+      _originalAudioPlayer = null;
+    }
+  }
+
+  Future<String> _downloadPreviewToTempFile(
+    String sourceUrl,
+    String prefix, {
+    String? preferredFileName,
+  }) async {
+    final res = await http.get(Uri.parse(sourceUrl));
+    _check(res);
+    final dir = await getTemporaryDirectory();
+    final ext = _extensionForResponse(res, sourceUrl, preferredFileName);
+    final hash = sourceUrl.codeUnits
+        .fold<int>(0, (value, code) => (value * 31 + code) & 0x7FFFFFFF)
+        .toRadixString(16);
+    final path = '${dir.path}${Platform.pathSeparator}${prefix}_$hash$ext';
+    final file = File(path);
+    await file.writeAsBytes(res.bodyBytes, flush: true);
+    return file.path;
+  }
+
+  String _extensionForResponse(
+    http.Response res,
+    String sourceUrl,
+    String? preferredFileName,
+  ) {
+    final preferred = (preferredFileName ?? '').toLowerCase();
+    for (final ext in const [
+      '.wav',
+      '.mp3',
+      '.m4a',
+      '.aac',
+      '.flac',
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.webp',
+      '.mp4',
+      '.mov',
+      '.mkv',
+      '.webm',
+    ]) {
+      if (preferred.endsWith(ext)) return ext;
+    }
+    final contentType = (res.headers['content-type'] ?? '').toLowerCase();
+    if (contentType.contains('png')) return '.png';
+    if (contentType.contains('jpeg') || contentType.contains('jpg'))
+      return '.jpg';
+    if (contentType.contains('webp')) return '.webp';
+    if (contentType.startsWith('video/mp4')) return '.mp4';
+    if (contentType.contains('quicktime')) return '.mov';
+    return _audioExtensionForResponse(res, sourceUrl);
+  }
+
+  String _audioExtensionForResponse(http.Response res, String sourceUrl) {
+    final contentType = (res.headers['content-type'] ?? '').toLowerCase();
+    if (contentType.contains('mpeg')) return '.mp3';
+    if (contentType.contains('mp4') || contentType.contains('m4a')) {
+      return '.m4a';
+    }
+    if (contentType.contains('aac')) return '.aac';
+    if (contentType.contains('flac')) return '.flac';
+    if (contentType.contains('wav') || contentType.contains('wave')) {
+      return '.wav';
+    }
+    final path = Uri.tryParse(sourceUrl)?.path.toLowerCase() ?? '';
+    for (final ext in const ['.wav', '.mp3', '.m4a', '.aac', '.flac']) {
+      if (path.endsWith(ext)) return ext;
+    }
+    return '.audio';
+  }
+
+  String _playableMediaSource(String source) {
+    if (source.startsWith('http://') ||
+        source.startsWith('https://') ||
+        source.startsWith('file://')) {
+      return source;
+    }
+    if (source.contains(RegExp(r'^[A-Za-z]:[\\/]')) ||
+        source.startsWith(r'\\')) {
+      return Uri.file(source).toString();
+    }
+    return source;
+  }
+
+  bool _isLocalFilePath(String source) {
+    if (source.startsWith('file://')) return true;
+    if (source.startsWith('http://') || source.startsWith('https://')) {
+      return false;
+    }
+    return source.contains(RegExp(r'^[A-Za-z]:[\\/]')) ||
+        source.startsWith(r'\\') ||
+        File(source).existsSync();
+  }
+
+  Future<void> _stopVoicePreview() async {
+    if (_voicePlayer != null) {
+      await _voicePlayer?.stop();
+      _voicePlayer?.dispose();
+      _voicePlayer = null;
+    }
+    if (mounted && _isPlayingVoice) {
+      setState(() => _isPlayingVoice = false);
+    }
+  }
+
+  Future<void> _stopOriginalAudioPreview() async {
+    if (_originalAudioPlayer != null) {
+      await _originalAudioPlayer?.stop();
+      _originalAudioPlayer?.dispose();
+      _originalAudioPlayer = null;
+    }
+    if (mounted && _isPlayingOriginalAudio) {
+      setState(() => _isPlayingOriginalAudio = false);
+    }
+  }
+
+  Future<void> playBgm() async {
+    if (selectedBgm == 'none') {
+      showError('请先选择背景音乐');
+      return;
+    }
+    final bgmUrl = _selectedBgmUrl;
+    try {
+      if (_isPlayingBgm) {
+        await _stopBgmPreview();
+        showInfo('已停止播放BGM');
+        return;
+      }
+      await _stopBgmPreview();
+      _bgmPlayer = Player();
+      setState(() => _isPlayingBgm = true);
+      final localPath = await _downloadPreviewToTempFile(bgmUrl, 'bgm');
+      await _bgmPlayer!.setVolume(_bgmPreviewVolume);
+      await _bgmPlayer!.open(Media(_playableMediaSource(localPath)));
+      await _bgmPlayer!.setVolume(_bgmPreviewVolume);
+      await _bgmPlayer!.play();
+      showInfo('正在播放BGM');
+      _bgmPlayer!.stream.completed.listen((completed) {
+        if (completed && mounted) setState(() => _isPlayingBgm = false);
+      });
+    } catch (e) {
+      setState(() {
+        message = '播放BGM失败: ${e.toString()}';
+        _isPlayingBgm = false;
+      });
+      _bgmPlayer?.dispose();
+      _bgmPlayer = null;
+    }
+  }
+
+  Future<void> _stopBgmPreview() async {
+    if (_bgmPlayer != null) {
+      await _bgmPlayer?.stop();
+      _bgmPlayer?.dispose();
+      _bgmPlayer = null;
+    }
+    if (mounted && _isPlayingBgm) {
+      setState(() => _isPlayingBgm = false);
+    }
+  }
+
+  void _updateBgmVolume(double value) {
+    setState(() => bgmVolume = value);
+    final player = _bgmPlayer;
+    if (player != null) {
+      unawaited(player.setVolume(_bgmPreviewVolume));
+    }
+  }
+
+  void _updateVoicePreviewVolume(double value) {
+    setState(() => voicePreviewVolume = value);
+    final volume = _voicePreviewMediaVolume;
+    final voicePlayer = _voicePlayer;
+    final originalPlayer = _originalAudioPlayer;
+    if (voicePlayer != null) {
+      unawaited(voicePlayer.setVolume(volume));
+    }
+    if (originalPlayer != null) {
+      unawaited(originalPlayer.setVolume(volume));
+    }
+  }
+
+  double get _voicePreviewMediaVolume {
+    return (voicePreviewVolume * 100).clamp(0, 100).toDouble();
+  }
+
+  double get _bgmPreviewVolume {
+    return (bgmVolume * 100).clamp(0, 100).toDouble();
+  }
+
   Future<void> uploadDigitalHuman() async {
+    if (!_ensureSoftwareActivated()) return;
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['mp4', 'mov', 'mkv', 'webm'],
@@ -689,7 +2203,60 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final item = body['digital_human'] as Map<String, dynamic>;
       await loadBootstrap();
       final digitalHumanId = item['digital_human_id'] as String;
-      setState(() => selectedDigitalHuman = digitalHumanId);
+      setState(() {
+        selectedDigitalHuman = digitalHumanId;
+        mouthAtlasDiagnosis = null;
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        outputRefresh++;
+        message = '数字人形象已上传并选中';
+        messageIsError = false;
+      });
+    });
+  }
+
+  Future<void> deleteDigitalHuman() async {
+    if (!_ensureSoftwareActivated()) return;
+    final digitalHumanId = selectedDigitalHuman;
+    if (digitalHumanId.isEmpty) {
+      showError('请先选择要删除的数字?');
+      return;
+    }
+    if (!digitalHumanId.startsWith('custom:')) {
+      showError('只能删除你上传的数字?');
+      return;
+    }
+    final assetId = digitalHumanId.substring('custom:'.length);
+    if (assetId.isEmpty) {
+      showError('数字人素?ID 无效');
+      return;
+    }
+    await _runBusy(() async {
+      final uri =
+          Uri.parse('$apiBase/api/assets/${Uri.encodeComponent(assetId)}');
+      final res = await http.delete(uri);
+      _check(res);
+      if (!mounted) return;
+      setState(() {
+        selectedDigitalHuman = '';
+        mouthAtlasDiagnosis = null;
+        digitalHumans = digitalHumans
+            .where((item) => item['digital_human_id'] != digitalHumanId)
+            .toList();
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        outputRefresh++;
+      });
+      await loadBootstrap();
+      if (!mounted) return;
+      setState(() {
+        selectedDigitalHuman = '';
+        mouthAtlasDiagnosis = null;
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        outputRefresh++;
+      });
+      showInfo('已删除数字人');
     });
   }
 
@@ -731,6 +2298,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> uploadVoice() async {
+    if (!_ensureSoftwareActivated()) return;
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['wav', 'mp3', 'm4a', 'aac'],
@@ -750,11 +2318,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final item = body['voice'] as Map<String, dynamic>;
       await loadBootstrap();
-      setState(() => selectedVoice = item['voice_id'] as String);
+      setState(() {
+        selectedVoice = item['voice_id'] as String;
+        _invalidateGeneratedVoice();
+      });
     });
   }
 
   Future<void> uploadBgm() async {
+    if (!_ensureSoftwareActivated()) return;
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'flac'],
@@ -778,7 +2350,49 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
   }
 
-  Future<void> render() async {
+  Future<void> uploadPipAsset() async {
+    if (!_ensureSoftwareActivated()) return;
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: [
+        'png',
+        'jpg',
+        'jpeg',
+        'webp',
+        'mp4',
+        'mov',
+        'mkv',
+        'webm'
+      ],
+    );
+    final file = picked?.files.single;
+    final path = file?.path;
+    if (path == null || file == null) return;
+    await _runBusy(() async {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$apiBase/api/pip/upload'),
+      );
+      request.files.add(await http.MultipartFile.fromPath('file', path));
+      final streamed = await request.send();
+      final res = await http.Response.fromStream(streamed);
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final asset = body['asset'] as Map<String, dynamic>;
+      setState(() {
+        pipAssetId = asset['asset_id'] as String;
+        pipAssetName = asset['filename'] as String? ?? file.name;
+        pipAssetPath = path;
+        pipEnabled = true;
+        message = '画中画素材已上传';
+        messageIsError = false;
+      });
+    });
+  }
+
+  Future<void> generateSubtitles() async {
+    if (!_ensureSoftwareActivated()) return;
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     final script = _renderScript;
@@ -786,6 +2400,319 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() => message = '请先生成或填写文案');
       return;
     }
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/tasks/$taskId/subtitles'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(_renderPayload(script)),
+      );
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      setState(() {
+        task = body;
+        message = '字幕已生成';
+        messageIsError = false;
+      });
+      await refreshSubtitlePreview(silent: true);
+    });
+  }
+
+  Future<void> refreshSubtitlePreview({bool silent = false}) async {
+    final script = _renderScript;
+    if (script.isEmpty) {
+      if (!silent) setState(() => message = '请先生成或填写文案');
+      return;
+    }
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/subtitles/preview'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'script': script,
+          'style': _subtitleStylePayload(),
+        }),
+      );
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final lines =
+          (body['lines'] as List?)?.map((line) => line.toString()).toList() ??
+              const <String>[];
+      setState(() {
+        subtitlePreviewLines = lines;
+        if (!silent) {
+          message = '字幕预览已刷新';
+          messageIsError = false;
+        }
+      });
+    } catch (e) {
+      if (!silent) showError(e.toString());
+    }
+  }
+
+  Future<void> editSubtitlesAndPip() async {
+    await refreshSubtitlePreview(silent: true);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, dialogSetState) {
+            void updateDialog(VoidCallback update) {
+              setState(update);
+              dialogSetState(() {});
+            }
+
+            return AlertDialog(
+              backgroundColor: panelBg,
+              title: const Text('编辑字幕及画中画'),
+              content: SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                    SwitchListTile(
+                      value: subtitlesEnabled,
+                      onChanged: (value) =>
+                          updateDialog(() => subtitlesEnabled = value),
+                      title: const Text('字幕 启用'),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _dropdown(
+                            selectedSubtitleFont,
+                            _subtitleFontOptions,
+                            (value) {
+                              if (value == null) return;
+                              updateDialog(() => selectedSubtitleFont = value);
+                            },
+                            labels: _subtitleFontLabels,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _subtitlePresetButton(
+                          '黄字',
+                          const Color(0xFFFFE600),
+                          const Color(0x00000000),
+                          updateDialog,
+                        ),
+                        const SizedBox(width: 8),
+                        _subtitlePresetButton(
+                          '白字',
+                          const Color(0xFFFFFFFF),
+                          const Color(0x00000000),
+                          updateDialog,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _labeledSlider(
+                      '字号',
+                      subtitleSize,
+                      12,
+                      56,
+                      (value) => updateDialog(() => subtitleSize = value),
+                      subtitleSize.round().toString(),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SwitchListTile(
+                            value: pipEnabled,
+                            onChanged: (value) =>
+                                updateDialog(() => pipEnabled = value),
+                            title: const Text('画中画启用'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _ghostButton('上传画中画', () async {
+                          await uploadPipAsset();
+                          if (mounted) dialogSetState(() {});
+                        }),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _dropdown(
+                            pipPosition,
+                            _pipPositionOptions,
+                            (value) {
+                              if (value == null) return;
+                              updateDialog(() => _setPipPosition(value));
+                            },
+                            labels: _pipPositionLabels,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Opacity(
+                            opacity: pipPosition == 'fullscreen' ? 0.45 : 1,
+                            child: IgnorePointer(
+                              ignoring: pipPosition == 'fullscreen',
+                              child: _labeledSlider(
+                                '画中画大小',
+                                pipScale,
+                                0.1,
+                                0.95,
+                                (value) => updateDialog(() {
+                                  pipScale = value;
+                                  _clampPipCustomPosition();
+                                }),
+                                pipPosition == 'fullscreen'
+                                    ? '100%'
+                                    : '${(pipScale * 100).round()}%',
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _ghostButton(
+                            '画中画全屏',
+                            () => updateDialog(
+                              () => _setPipPosition('fullscreen'),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _ghostButton(
+                            '自定义拖放',
+                            () => updateDialog(
+                              () => _setPipPosition('custom'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _dropdown(
+                            pipTimingMode,
+                            _pipTimingOptions,
+                            (value) {
+                              if (value == null) return;
+                              updateDialog(() => pipTimingMode = value);
+                            },
+                            labels: _pipTimingLabels,
+                          ),
+                        ),
+                        if (pipTimingMode == 'time') ...[
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 92,
+                            child: _smallTextField(
+                              pipStartController,
+                              '开始秒',
+                              updateDialog,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          SizedBox(
+                            width: 92,
+                            child: _smallTextField(
+                              pipEndController,
+                              '结束秒',
+                              updateDialog,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (pipTimingMode == 'sentence') ...[
+                      const SizedBox(height: 8),
+                      _smallTextField(
+                        pipTriggerController,
+                        '触发句子',
+                        updateDialog,
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                      _subtitlePreviewBox(updateDialog: updateDialog),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    await refreshSubtitlePreview();
+                    if (mounted) dialogSetState(() {});
+                  },
+                  child: const Text('刷新'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('完成'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _smallTextField(
+    TextEditingController controller,
+    String hint,
+    void Function(VoidCallback update) updateDialog,
+  ) {
+    return SizedBox(
+      height: 42,
+      child: TextField(
+        controller: controller,
+        onChanged: (_) => updateDialog(() {}),
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+        decoration: InputDecoration(
+          hintText: hint,
+          filled: true,
+          fillColor: const Color(0xFF171A28),
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: purpleLine.withValues(alpha: 0.45)),
+          ),
+          focusedBorder: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+            borderSide: BorderSide(color: cyan, width: 1.2),
+          ),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        ),
+      ),
+    );
+  }
+
+  Future<void> render() async {
+    if (!_ensureSoftwareActivated()) return;
+    if (generationMode == 'cloud') {
+      await renderCloud();
+      return;
+    }
+    final taskId = task?['task_id'] as String?;
+    if (taskId == null) return;
+    final script = _renderScript;
+    if (script.isEmpty) {
+      setState(() => message = '请先生成或填写文案');
+      return;
+    }
+    if (!_validateCompositionSettings()) return;
     setState(() {
       loading = true;
       renderingVideo = true;
@@ -864,6 +2791,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> stopRender() async {
+    if (generationMode == 'cloud') {
+      await stopCloudRender();
+      return;
+    }
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     try {
@@ -878,6 +2809,761 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       });
     } catch (e) {
       setState(() => message = e.toString());
+    }
+  }
+
+  Future<_CloudUploadFile> _digitalHumanSourceUploadFile() async {
+    final digitalHumanId = selectedDigitalHuman.trim();
+    if (digitalHumanId.isEmpty) {
+      throw Exception('请先上传或选择数字人形象');
+    }
+    final profile = _digitalHumanProfile(digitalHumanId);
+    final name = profile?['name']?.toString().trim();
+    final preferredName = '${_safeUploadFileNameBase(
+      (name == null || name.isEmpty) ? 'digital_human' : name,
+    )}.mp4';
+    final url = Uri.parse('$apiBase/api/digital-humans/reference').replace(
+        queryParameters: {'digital_human_id': digitalHumanId}).toString();
+    final localPath = await _downloadPreviewToTempFile(
+      url,
+      'digital_human_source',
+      preferredFileName: preferredName,
+    );
+    final file = File(localPath);
+    if (!await file.exists()) {
+      throw Exception('数字人形象视频下载失败');
+    }
+    final fileName = _fileNameFromPath(localPath);
+    return _CloudUploadFile(
+      kind: 'source_video',
+      file: file,
+      fileName: fileName,
+      contentType: _contentTypeForPath(fileName),
+    );
+  }
+
+  String _safeUploadFileNameBase(String value) {
+    final normalized = value.trim().replaceAll(RegExp(r'[\\/:*?"<>|]+'), '_');
+    final compact = normalized.replaceAll(RegExp(r'\s+'), '_');
+    return compact.isEmpty ? 'digital_human' : compact;
+  }
+
+  Future<void> renderCloud() async {
+    if (!_ensureCloudAccountReady()) return;
+    if (selectedDigitalHuman.isEmpty) {
+      showError('请先上传或选择数字人形象');
+      return;
+    }
+    final script = _renderScript;
+    if (script.isEmpty) {
+      showError('请先生成或填写文案');
+      return;
+    }
+    if (!_validateCompositionSettings()) return;
+    final duration = _cloudDurationSeconds();
+    if (duration == null) {
+      showError('请输入云端任务时长');
+      return;
+    }
+
+    setState(() {
+      loading = true;
+      renderingVideo = true;
+      cloudJob = null;
+      cloudOutputUrl = '';
+      cloudOutputLocalPath = '';
+      outputRefresh++;
+      message = '正在上传云端素材';
+      messageIsError = false;
+    });
+
+    try {
+      final sourceUpload = await _digitalHumanSourceUploadFile();
+      final fileName = sourceUpload.fileName;
+      final uploadFiles = <_CloudUploadFile>[
+        sourceUpload,
+      ];
+      final voicePath = _hasFreshCloudVoice(script)
+          ? cloudVoiceAudioPath
+          : task?['extracted_audio_path'] as String? ?? '';
+      var hasVoiceAudio = false;
+      if (voicePath.isNotEmpty) {
+        final voiceFile = File(voicePath);
+        if (await voiceFile.exists()) {
+          hasVoiceAudio = true;
+          uploadFiles.add(
+            _CloudUploadFile(
+              kind: 'voice_audio',
+              file: voiceFile,
+              fileName: _fileNameFromPath(voicePath),
+              contentType: _contentTypeForPath(voicePath),
+            ),
+          );
+        }
+      }
+      if (!hasVoiceAudio) {
+        throw Exception('请先点击“克隆声音”，声音生成完成后再生成成品视频');
+      }
+      if (pipEnabled && pipAssetId.isEmpty) {
+        throw Exception('请先上传画中画素材');
+      }
+      final uploadSpecs = <Map<String, dynamic>>[];
+      for (final item in uploadFiles) {
+        uploadSpecs.add({
+          'kind': item.kind,
+          'file_name': item.fileName,
+          'content_type': item.contentType,
+          'file_size_bytes': await item.file.length(),
+        });
+      }
+      final cloudBasePayload = {
+        ..._renderPayload(script),
+        'bgm_id': 'none',
+        'bgm_volume': 0,
+        'subtitle_enabled': false,
+        'pip_enabled': false,
+        'pip_asset_id': null,
+        'source_file_name': fileName,
+        'original_script': originalScriptController.text.trim(),
+        'rewritten_script': rewrittenScriptController.text.trim(),
+      };
+      final sessionRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/jobs/upload-session'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'assets': uploadSpecs,
+          'payload': cloudBasePayload,
+        }),
+      );
+      _check(sessionRes);
+      final uploadJob = _decodeMap(sessionRes);
+      if (!mounted) return;
+      setState(() {
+        cloudJob = uploadJob;
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+      });
+      final assets = (uploadJob['assets'] as List?) ?? const [];
+      if (assets.length != uploadFiles.length ||
+          assets.any((asset) => asset is! Map)) {
+        throw Exception('云端没有返回素材上传链接');
+      }
+      final jobId = uploadJob['job_id'] as String;
+      for (var index = 0; index < assets.length; index++) {
+        final asset = (assets[index] as Map).cast<String, dynamic>();
+        final uploadFile = uploadFiles[index];
+        final upload = (asset['upload'] as Map).cast<String, dynamic>();
+        final uploadSize = await uploadFile.file.length();
+
+        setState(() {
+          message =
+              '正在上传素材到云端临时存储：${uploadFile.fileName} (${index + 1}/${assets.length})';
+          messageIsError = false;
+        });
+        await _uploadFileToPresignedUrl(upload, uploadFile.file);
+
+        final assetId = asset['asset_id'] as String;
+        final uploadedRes = await http.post(
+          Uri.parse(
+              '$_cloudApiBase/api/client/jobs/$jobId/assets/$assetId/uploaded'),
+          headers: _cloudHeaders(),
+          body: jsonEncode({'file_size_bytes': uploadSize}),
+        );
+        _check(uploadedRes);
+      }
+
+      setState(() => message = '正在提交云端生成任务');
+      final submittedRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/submit'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'duration_seconds': duration,
+          'resolution': '1080p',
+          'payload': cloudBasePayload,
+        }),
+      );
+      _check(submittedRes);
+      final submitted = _decodeMap(submittedRes);
+      if (!mounted) return;
+      setState(() {
+        cloudJob = submitted;
+        cloudEstimate = {
+          'estimated_points': submitted['estimated_points'],
+          'duration_seconds': duration,
+          'resolution': '1080p',
+        };
+        loading = false;
+        message = '云端任务已进入队列';
+        messageIsError = false;
+      });
+      await loadCloudMe(silent: true);
+      _startCloudPolling(jobId);
+    } catch (e) {
+      _stopCloudPolling();
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        renderingVideo = false;
+        message = e.toString();
+        messageIsError = true;
+      });
+    }
+  }
+
+  Future<void> _uploadFileToPresignedUrl(
+    Map<String, dynamic> upload,
+    File file,
+  ) async {
+    final fileSize = await file.length();
+    final timeout = _cloudUploadTimeout(fileSize);
+    try {
+      await _uploadFileToPresignedUrlInner(upload, file, fileSize).timeout(
+        timeout,
+      );
+    } on TimeoutException {
+      throw TimeoutException(
+        '上传素材到云端临时存储超时，已等待 ${timeout.inMinutes} 分钟，请检查网络后重试',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _runCloudPreprocess({
+    required Map<String, dynamic> payload,
+    File? sourceFile,
+    String? sourceFileName,
+  }) async {
+    final preprocessPayload = {
+      ...payload,
+      'client': 'oral_video_agent_client',
+    };
+    String jobId;
+    if (sourceFile != null) {
+      final fileName = sourceFileName?.trim().isNotEmpty == true
+          ? sourceFileName!.trim()
+          : _fileNameFromPath(sourceFile.path);
+      final uploadSpecs = [
+        {
+          'kind': 'source_video',
+          'file_name': fileName,
+          'content_type': _contentTypeForPath(fileName),
+          'file_size_bytes': await sourceFile.length(),
+        }
+      ];
+      final sessionRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/preprocess/upload-session'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'assets': uploadSpecs,
+          'payload': preprocessPayload,
+        }),
+      );
+      _check(sessionRes);
+      final uploadJob = _decodeMap(sessionRes);
+      jobId = uploadJob['job_id'] as String;
+      if (!mounted) throw Exception('页面已关闭');
+      setState(() => cloudJob = uploadJob);
+      final assets = (uploadJob['assets'] as List?) ?? const [];
+      if (assets.length != 1 || assets.first is! Map) {
+        throw Exception('云端没有返回预处理素材上传链接');
+      }
+      final asset = (assets.first as Map).cast<String, dynamic>();
+      final upload = (asset['upload'] as Map).cast<String, dynamic>();
+      setState(() {
+        message = '正在上传视频到云端提取文案';
+        messageIsError = false;
+      });
+      await _uploadFileToPresignedUrl(upload, sourceFile);
+      final uploadedRes = await http.post(
+        Uri.parse(
+          '$_cloudApiBase/api/client/jobs/$jobId/assets/${asset['asset_id']}/uploaded',
+        ),
+        headers: _cloudHeaders(),
+        body: jsonEncode({'file_size_bytes': await sourceFile.length()}),
+      );
+      _check(uploadedRes);
+      final submitRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/preprocess/jobs/$jobId/submit'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({'payload': preprocessPayload}),
+      );
+      _check(submitRes);
+      final submitted = _decodeMap(submitRes);
+      if (mounted) setState(() => cloudJob = submitted);
+    } else {
+      final createRes = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/preprocess/jobs'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({'payload': preprocessPayload}),
+      );
+      _check(createRes);
+      final created = _decodeMap(createRes);
+      jobId = created['job_id'] as String;
+      if (mounted) setState(() => cloudJob = created);
+    }
+    return _waitCloudPreprocessResult(jobId);
+  }
+
+  Future<Map<String, dynamic>> _waitCloudPreprocessResult(String jobId) async {
+    final deadline = DateTime.now().add(const Duration(minutes: 20));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(seconds: 2));
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/jobs/$jobId'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) throw Exception('页面已关闭');
+      final status = body['status']?.toString() ?? '';
+      final percent = body['progress_percent'];
+      setState(() {
+        cloudJob = body;
+        message = status == 'running' && percent is num
+            ? '云端任务处理中：${percent.round()}%'
+            : '云端任务：${_cloudStatusText(status)}';
+        messageIsError = status == 'failed';
+      });
+      if (status == 'completed') {
+        final result = (body['result'] as Map?)?.cast<String, dynamic>();
+        if (result == null) throw Exception('云端任务没有返回结果');
+        return result;
+      }
+      if (status == 'failed') {
+        throw Exception(body['error_message']?.toString() ?? '云端任务失败');
+      }
+      if (status == 'canceled') {
+        throw Exception('云端任务已取消');
+      }
+    }
+    throw TimeoutException('云端任务等待超时');
+  }
+
+  Future<void> _uploadFileToPresignedUrlInner(
+    Map<String, dynamic> upload,
+    File file,
+    int fileSize,
+  ) async {
+    final url = upload['url'] as String? ?? '';
+    if (url.isEmpty) throw Exception('云端上传链接为空');
+    final method = (upload['method'] as String? ?? 'PUT').toUpperCase();
+    final headers = (upload['headers'] as Map? ?? const {})
+        .map((key, value) => MapEntry('$key', '$value'));
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 20);
+    try {
+      final request = await client.openUrl(method, Uri.parse(url));
+      request.followRedirects = false;
+      request.contentLength = fileSize;
+      headers.forEach((key, value) {
+        if (key.toLowerCase() == HttpHeaders.contentLengthHeader) return;
+        request.headers.set(key, value);
+      });
+      await request.addStream(_trackedCosUploadStream(file, fileSize));
+      final response = await request.close();
+      final body = await utf8.decodeStream(response);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception('云端素材上传失败 ${response.statusCode}: $body');
+      }
+    } on SocketException catch (e) {
+      throw Exception('云端素材上传连接失败: ${e.message}');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Duration _cloudUploadTimeout(int fileSizeBytes) {
+    final fileMiB = fileSizeBytes / (1024 * 1024);
+    final minutes = math.max(5, math.min(60, (fileMiB / 2).ceil() + 3));
+    return Duration(minutes: minutes);
+  }
+
+  Stream<List<int>> _trackedCosUploadStream(File file, int totalBytes) async* {
+    var sent = 0;
+    var lastPercent = -1;
+    var lastUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+    await for (final chunk in file.openRead()) {
+      sent += chunk.length;
+      _updateCosUploadProgress(
+        sent: sent,
+        total: totalBytes,
+        lastPercent: lastPercent,
+        lastUpdate: lastUpdate,
+        onUpdated: (percent, updateTime) {
+          lastPercent = percent;
+          lastUpdate = updateTime;
+        },
+      );
+      yield chunk;
+    }
+  }
+
+  void _updateCosUploadProgress({
+    required int sent,
+    required int total,
+    required int lastPercent,
+    required DateTime lastUpdate,
+    required void Function(int percent, DateTime updateTime) onUpdated,
+  }) {
+    if (!mounted || total <= 0) return;
+    final percent = ((sent / total) * 100).clamp(0, 100).floor();
+    final now = DateTime.now();
+    final shouldUpdate = sent >= total ||
+        percent >= lastPercent + 5 ||
+        now.difference(lastUpdate).inMilliseconds >= 600;
+    if (!shouldUpdate) return;
+    onUpdated(percent, now);
+    setState(() {
+      message =
+          '正在上传素材到云端临时存储 $percent% (${_formatBytes(sent)} / ${_formatBytes(total)})';
+      messageIsError = false;
+    });
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+    }
+    if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(1)}KB';
+    }
+    return '${bytes}B';
+  }
+
+  void _startCloudPolling(String jobId) {
+    _stopCloudPolling();
+    cloudPollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _pollCloudJob(jobId);
+    });
+  }
+
+  void _stopCloudPolling() {
+    cloudPollTimer?.cancel();
+    cloudPollTimer = null;
+  }
+
+  Future<void> _pollCloudJob(String jobId) async {
+    if (!_cloudLoggedIn || !_cloudLicensed) return;
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/jobs/$jobId'),
+        headers: _cloudHeaders(),
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      final status = body['status'] as String? ?? '';
+      setState(() {
+        cloudJob = body;
+        message = _cloudJobMessage(body);
+        messageIsError = status == 'failed';
+      });
+      if (status == 'completed') {
+        _stopCloudPolling();
+        await _loadCloudDownload(jobId);
+        await loadCloudMe(silent: true);
+        if (!mounted) return;
+        setState(() {
+          loading = false;
+          renderingVideo = false;
+          message = '云端视频已生成';
+          messageIsError = false;
+        });
+      } else if (status == 'failed' || status == 'canceled') {
+        _stopCloudPolling();
+        await loadCloudMe(silent: true);
+        if (!mounted) return;
+        setState(() {
+          loading = false;
+          renderingVideo = false;
+        });
+      }
+    } catch (_) {
+      // 临时网络抖动不终止云端任务轮诃69?    }
+    }
+  }
+
+  Future<void> _loadCloudDownload(String jobId) async {
+    if (cloudOutputLocalPath.isNotEmpty &&
+        await File(cloudOutputLocalPath).exists()) {
+      return;
+    }
+    final res = await http.get(
+      Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/download'),
+      headers: _cloudHeaders(),
+    );
+    _check(res);
+    final body = _decodeMap(res);
+    final download = (body['download'] as Map).cast<String, dynamic>();
+    final url = download['url'] as String? ?? '';
+    if (url.isEmpty) throw Exception('云端下载链接为空');
+    final headers = (download['headers'] as Map? ?? const {})
+        .map((key, value) => MapEntry('$key', '$value'));
+    final cosKey = download['cos_key'] as String? ?? '';
+    final fileName = _cloudOutputFileName(jobId, cosKey);
+    if (mounted) {
+      setState(() {
+        message = '正在保存云端成品到本地';
+        messageIsError = false;
+      });
+    }
+    final localPath = await _downloadCloudOutputToLocal(
+      url: url,
+      headers: headers,
+      fileName: fileName,
+    );
+    final finalPath = await _postprocessCloudOutputIfNeeded(localPath);
+    if (!mounted) return;
+    setState(() {
+      cloudOutputUrl = url;
+      cloudOutputLocalPath = finalPath;
+      outputRefresh++;
+      message = finalPath == localPath ? '云端成品已保存到本地' : '云端成品已完成本地合成';
+      messageIsError = false;
+    });
+    try {
+      await confirmCloudDownload(silent: true);
+    } catch (_) {
+      // The local file is already saved; scheduled cleanup still protects cloud storage.
+    }
+  }
+
+  bool get _needsLocalCloudPostprocess {
+    return subtitlesEnabled || selectedBgm != 'none' || pipEnabled;
+  }
+
+  Future<String> _postprocessCloudOutputIfNeeded(String sourcePath) async {
+    if (!_needsLocalCloudPostprocess) return sourcePath;
+    if (pipEnabled && pipAssetId.isEmpty) {
+      throw Exception('请先上传画中画素材');
+    }
+    if (mounted) {
+      setState(() {
+        message = '正在本地合成字幕、BGM和画中画';
+        messageIsError = false;
+      });
+    }
+    final payload = {
+      'source_video_path': sourcePath,
+      'options': _renderPayload(_renderScript),
+    };
+    final res = await http.post(
+      Uri.parse('$apiBase/api/videos/postprocess'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+    _check(res);
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (body['ready'] != true) {
+      throw Exception(body['detail'] as String? ?? '本地后处理合成失败');
+    }
+    final path = body['path'] as String? ?? '';
+    if (path.isEmpty) throw Exception('本地后处理没有返回成品路径');
+    return path;
+  }
+
+  Future<String> _downloadCloudJobOutputToLocal(
+    String jobId, {
+    required String fallbackFileName,
+  }) async {
+    final res = await http.get(
+      Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/download'),
+      headers: _cloudHeaders(),
+    );
+    _check(res);
+    final body = _decodeMap(res);
+    final download = (body['download'] as Map).cast<String, dynamic>();
+    final url = download['url'] as String? ?? '';
+    if (url.isEmpty) throw Exception('云端下载链接为空');
+    final headers = (download['headers'] as Map? ?? const {})
+        .map((key, value) => MapEntry('$key', '$value'));
+    final cosKey = download['cos_key'] as String? ?? '';
+    final fileName = _cloudGenericOutputFileName(
+      jobId,
+      cosKey,
+      fallbackFileName: fallbackFileName,
+    );
+    if (mounted) {
+      setState(() {
+        message = '正在保存云端文件到本地';
+        messageIsError = false;
+      });
+    }
+    return _downloadCloudOutputToLocal(
+      url: url,
+      headers: headers,
+      fileName: fileName,
+    );
+  }
+
+  String _cloudGenericOutputFileName(
+    String jobId,
+    String cosKey, {
+    required String fallbackFileName,
+  }) {
+    final rawName = cosKey.trim().isEmpty
+        ? fallbackFileName
+        : Uri.decodeComponent(_fileNameFromPath(cosKey));
+    final safeName =
+        rawName.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    final name = safeName.isEmpty ? fallbackFileName : safeName;
+    final hasExtension = RegExp(r'\.[A-Za-z0-9]{2,5}$').hasMatch(name);
+    final fallbackExtension =
+        RegExp(r'\.[A-Za-z0-9]{2,5}$').firstMatch(fallbackFileName)?.group(0) ??
+            '';
+    final withExt = hasExtension || fallbackExtension.isEmpty
+        ? name
+        : '$name$fallbackExtension';
+    return '$jobId-$withExt';
+  }
+
+  String _cloudOutputFileName(String jobId, String cosKey) {
+    final rawName = cosKey.trim().isEmpty
+        ? 'result.mp4'
+        : Uri.decodeComponent(_fileNameFromPath(cosKey));
+    final safeName =
+        rawName.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    final name = safeName.isEmpty ? 'result.mp4' : safeName;
+    final lower = name.toLowerCase();
+    final withExt = lower.endsWith('.mp4') ? name : '$name.mp4';
+    return '$jobId-$withExt';
+  }
+
+  Future<File> _cloudOutputFile(String fileName) async {
+    final dir = await getApplicationSupportDirectory();
+    final outputDir = Directory('${dir.path}${Platform.pathSeparator}outputs');
+    await outputDir.create(recursive: true);
+    return File('${outputDir.path}${Platform.pathSeparator}$fileName');
+  }
+
+  Future<String> _downloadCloudOutputToLocal({
+    required String url,
+    required Map<String, String> headers,
+    required String fileName,
+  }) async {
+    final dest = await _cloudOutputFile(fileName);
+    final tmp = File('${dest.path}.download');
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 20);
+    IOSink? sink;
+    try {
+      final request = await client.getUrl(Uri.parse(url));
+      headers.forEach((key, value) {
+        request.headers.set(key, value);
+      });
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final body = await utf8.decodeStream(response);
+        throw Exception('云端成品下载失败 ${response.statusCode}: $body');
+      }
+      final total = response.contentLength;
+      var received = 0;
+      var lastUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+      sink = tmp.openWrite();
+      await for (final chunk in response) {
+        received += chunk.length;
+        sink.add(chunk);
+        final now = DateTime.now();
+        if (mounted &&
+            total > 0 &&
+            now.difference(lastUpdate).inMilliseconds >= 600) {
+          lastUpdate = now;
+          final percent = ((received / total) * 100).clamp(0, 100).floor();
+          setState(() {
+            message =
+                '正在保存云端成品到本地 $percent% (${_formatBytes(received)} / ${_formatBytes(total)})';
+            messageIsError = false;
+          });
+        }
+      }
+      await sink.close();
+      sink = null;
+      if (await dest.exists()) {
+        await dest.delete();
+      }
+      await tmp.rename(dest.path);
+      final saved = File(dest.path);
+      if (!await saved.exists() || await saved.length() == 0) {
+        throw Exception('本地成品文件保存失败');
+      }
+      return saved.path;
+    } finally {
+      if (sink != null) {
+        await sink.close();
+      }
+      client.close(force: true);
+      if (await tmp.exists()) {
+        await tmp.delete();
+      }
+    }
+  }
+
+  Future<void> stopCloudRender() async {
+    final jobId = _cloudJobId;
+    if (jobId == null) {
+      _stopCloudPolling();
+      setState(() {
+        loading = false;
+        renderingVideo = false;
+        message = '已重置云端生成状态';
+        messageIsError = false;
+      });
+      return;
+    }
+    try {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/cancel'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      _stopCloudPolling();
+      setState(() {
+        cloudJob = body;
+        loading = false;
+        renderingVideo = false;
+        message = '云端任务已取消';
+        messageIsError = false;
+      });
+      await loadCloudMe(silent: true);
+    } catch (e) {
+      _stopCloudPolling();
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        renderingVideo = false;
+        message = e.toString();
+        messageIsError = true;
+      });
+    }
+  }
+
+  Future<void> confirmCloudDownload({bool silent = false}) async {
+    final jobId = _cloudJobId;
+    if (jobId == null) {
+      showError('没有可确认的云端任务');
+      return;
+    }
+    Future<void> action() async {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/download-confirmed'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      setState(() {
+        cloudJob = (body['job'] as Map?)?.cast<String, dynamic>() ?? cloudJob;
+        if (!silent) {
+          message = '已确认下载，云端临时文件已清理';
+          messageIsError = false;
+        }
+      });
+    }
+
+    if (silent) {
+      await action();
+    } else {
+      await _runBusy(action);
     }
   }
 
@@ -899,10 +3585,31 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> previewOutputVideo() async {
+    if (generationMode == 'cloud') {
+      final jobId = _cloudJobId;
+      if (cloudOutputLocalPath.isEmpty &&
+          jobId != null &&
+          (cloudJob?['status'] as String?) == 'completed') {
+        await _loadCloudDownload(jobId);
+      }
+      final url = cloudOutputLocalPath.isNotEmpty
+          ? cloudOutputLocalPath
+          : cloudOutputUrl;
+      if (url.isEmpty) {
+        showError('请先完成云端生成任务');
+        return;
+      }
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _VideoPlayerDialog(url: url),
+      );
+      return;
+    }
     await loadOutput();
     final url = _outputVideoUrl;
     if (url == null) {
-      setState(() => message = '请先生成视频，生成完成后再预览');
+      setState(() => message = '请先生成视频，生成完成后再预?');
       return;
     }
     if (!mounted) return;
@@ -913,6 +3620,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> openOutputVideo() async {
+    if (generationMode == 'cloud') {
+      final jobId = _cloudJobId;
+      if (cloudOutputLocalPath.isEmpty &&
+          jobId != null &&
+          (cloudJob?['status'] as String?) == 'completed') {
+        await _loadCloudDownload(jobId);
+      }
+      final path = cloudOutputLocalPath;
+      if (path.isNotEmpty && await File(path).exists()) {
+        await _openLocalVideoPath(path);
+        return;
+      }
+      final url = cloudOutputUrl;
+      if (url.isEmpty) {
+        showError('还没有可打开的云端成品视频');
+        return;
+      }
+      await _openExternalUrl(url);
+      return;
+    }
     final taskId = _taskId;
     if (taskId == null) {
       setState(() => message = '请先创建视频任务');
@@ -935,7 +3662,35 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         await Process.start('xdg-open', [File(path).parent.path]);
       }
     } catch (e) {
-      setState(() => message = '打开视频失败：$e');
+      setState(() => message = '打开视频失败?e');
+    }
+  }
+
+  Future<void> _openLocalVideoPath(String path) async {
+    try {
+      if (Platform.isWindows) {
+        await Process.start('explorer.exe', ['/select,', path]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', ['-R', path]);
+      } else {
+        await Process.start('xdg-open', [File(path).parent.path]);
+      }
+    } catch (e) {
+      showError('打开视频失败：$e');
+    }
+  }
+
+  Future<void> _openExternalUrl(String url) async {
+    try {
+      if (Platform.isWindows) {
+        await Process.start('cmd', ['/c', 'start', '', url]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', [url]);
+      } else {
+        await Process.start('xdg-open', [url]);
+      }
+    } catch (e) {
+      showError('打开链接失败?e');
     }
   }
 
@@ -948,12 +3703,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     try {
       await action();
     } catch (e) {
-      showError(e.toString());
+      showError(_friendlyError(e));
     } finally {
       if (mounted && !renderingVideo) {
         setState(() => loading = false);
       }
     }
+  }
+
+  String _friendlyError(Object error) {
+    final text = error.toString();
+    const prefix = 'Exception: ';
+    return text.startsWith(prefix) ? text.substring(prefix.length) : text;
   }
 
   String get _renderScript {
@@ -962,7 +3723,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return originalScriptController.text.trim();
   }
 
+  String _voiceKeyFor(String script) =>
+      '$selectedVoice:${script.trim().hashCode}';
+
+  bool _hasFreshCloudVoice(String script) {
+    if (cloudVoiceAudioPath.isEmpty) return false;
+    if (generatedVoiceKey != _voiceKeyFor(script)) return false;
+    return File(cloudVoiceAudioPath).existsSync();
+  }
+
+  void _invalidateGeneratedVoice() {
+    cloudVoiceAudioPath = '';
+    cloudVoiceJobId = '';
+    generatedVoiceKey = '';
+  }
+
   Map<String, dynamic> _renderPayload(String script) {
+    final pipRect = _pipNormalizedRect();
     return {
       'script': script,
       'voice_id': selectedVoice,
@@ -975,25 +3752,133 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'expression_mode': toothHd ? 'sync' : 'basic',
       'bgm_id': selectedBgm,
       'bgm_volume': bgmVolume,
-      'subtitle_style': {
-        'font_size': subtitleSize.round(),
-        'color': '#FFFFFF',
-        'outline_color': '#000000',
-        'position': 'bottom',
-        'max_chars_per_line': 18,
-      },
+      'subtitle_enabled': subtitlesEnabled,
+      'subtitle_style': _subtitleStylePayload(),
+      'pip_enabled': pipEnabled,
+      'pip_asset_id': pipAssetId.isEmpty ? null : pipAssetId,
+      'pip_position': pipPosition,
+      'pip_scale': pipScale,
+      'pip_x': pipRect.left,
+      'pip_y': pipRect.top,
+      'pip_width': pipRect.width,
+      'pip_height': pipRect.height,
+      'pip_timing_mode': pipTimingMode,
+      'pip_start_seconds': _optionalSeconds(pipStartController.text),
+      'pip_end_seconds': _optionalSeconds(pipEndController.text),
+      'pip_trigger_text': pipTriggerController.text.trim().isEmpty
+          ? null
+          : pipTriggerController.text.trim(),
     };
+  }
+
+  double? _optionalSeconds(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    return double.tryParse(trimmed.replaceAll('，', '.'));
+  }
+
+  bool _validateCompositionSettings() {
+    if (!pipEnabled) return true;
+    if (pipAssetId.isEmpty) {
+      showError('请先上传画中画素材');
+      return false;
+    }
+    if (pipTimingMode == 'time') {
+      final start = _optionalSeconds(pipStartController.text);
+      final end = _optionalSeconds(pipEndController.text);
+      if (start == null) {
+        showError('请填写画中画开始秒数');
+        return false;
+      }
+      if (end != null && end <= start) {
+        showError('画中画结束秒数必须大于开始秒数');
+        return false;
+      }
+    }
+    if (pipTimingMode == 'sentence' &&
+        pipTriggerController.text.trim().isEmpty) {
+      showError('请填写画中画触发句子');
+      return false;
+    }
+    return true;
+  }
+
+  Map<String, dynamic> _subtitleStylePayload() {
+    return {
+      'font_size': subtitleSize.round(),
+      'color': _colorHex(subtitleColor),
+      'outline_color': _colorHex(subtitleOutlineColor),
+      'outline_width': 2,
+      'font_family': selectedSubtitleFont,
+      'position': 'bottom',
+      'margin_v': 70,
+      'max_chars_per_line': 12,
+    };
+  }
+
+  String _colorHex(Color color) {
+    final rgb = color.toARGB32() & 0x00FFFFFF;
+    return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
   }
 
   String? get _taskId => task?['task_id'] as String?;
 
+  String? get _cloudJobId => cloudJob?['job_id'] as String?;
+
+  String get _cloudAccountText {
+    if (!_cloudLicensed) return '软件未激?';
+    final email = _cloudUser?['email'] as String? ?? '';
+    if (email.trim().isEmpty) return '未绑定邮箱账?';
+    return email;
+  }
+
+  String get _latestLedgerText {
+    if (cloudLedger.isEmpty) return '暂无流水';
+    final item = cloudLedger.first;
+    final points = item['points'] ?? 0;
+    final positive = points is num && points > 0;
+    return '${_ledgerTitle(item)} ${positive ? '+' : ''}$points';
+  }
+
+  String get _cloudOutputLabel {
+    if (cloudOutputLocalPath.isNotEmpty) {
+      return _fileNameFromPath(cloudOutputLocalPath);
+    }
+    if (cloudOutputUrl.isNotEmpty) return '云端成品已生成';
+    final status = cloudJob?['status'] as String?;
+    if (status != null && status.isNotEmpty) return _cloudStatusText(status);
+    return '云端成品生成后自动关联';
+  }
+
+  String get _voiceServiceText {
+    if (generationMode == 'cloud' && providers?['voice_online'] != true) {
+      return '云端处理';
+    }
+    if (providers?['voice_online'] == true ||
+        providers?['voice_provider'] == 'placeholder') {
+      return '已启动';
+    }
+    return '未启动';
+  }
+
   String? get _sourceVideoUrl {
     final taskId = _taskId;
-    if (taskId == null || task?['source_video'] == null) return null;
-    return '$apiBase/api/tasks/$taskId/source';
+    final taskSourceUrl = taskId != null && task?['source_video'] != null
+        ? '$apiBase/api/tasks/$taskId/source'
+        : null;
+    if (generationMode == 'cloud') {
+      return cloudSourceVideoPath.isEmpty
+          ? taskSourceUrl
+          : cloudSourceVideoPath;
+    }
+    return taskSourceUrl;
   }
 
   String? get _outputVideoUrl {
+    if (generationMode == 'cloud') {
+      if (cloudOutputLocalPath.isNotEmpty) return cloudOutputLocalPath;
+      return cloudOutputUrl.isEmpty ? null : cloudOutputUrl;
+    }
     final taskId = _taskId;
     if (taskId == null) return null;
     final hasOutputPath = (output?['ready'] == true) ||
@@ -1002,7 +3887,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return '$apiBase/api/tasks/$taskId/download?v=$outputRefresh';
   }
 
+  String get _selectedBgmUrl {
+    return Uri.parse('$apiBase/api/bgm/preview').replace(queryParameters: {
+      'bgm_id': selectedBgm,
+    }).toString();
+  }
+
+  String get _selectedVoicePreviewUrl {
+    return Uri.parse('$apiBase/api/voices/preview')
+        .replace(queryParameters: {'voice_id': selectedVoice}).toString();
+  }
+
+  String? get _generatedVoiceUrl {
+    final script = _renderScript;
+    if (generationMode == 'cloud' && _hasFreshCloudVoice(script)) {
+      return cloudVoiceAudioPath;
+    }
+    final taskId = _taskId;
+    final hasGeneratedVoice =
+        (task?['extracted_audio_path'] as String? ?? '').isNotEmpty;
+    if (taskId == null || !hasGeneratedVoice) return null;
+    return '$apiBase/api/tasks/$taskId/voice?v=$outputRefresh';
+  }
+
   String? get _outputVideoPath {
+    if (generationMode == 'cloud') {
+      return cloudOutputLocalPath.isEmpty ? null : cloudOutputLocalPath;
+    }
     final outputPath = output?['path'] as String?;
     if (outputPath != null && outputPath.isNotEmpty) return outputPath;
     final taskPath = task?['output_video_path'] as String?;
@@ -1010,8 +3921,73 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return null;
   }
 
+  String _fileNameFromPath(String path) {
+    return path.split(RegExp(r'[\\/]')).last;
+  }
+
+  String _contentTypeForPath(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.m4a')) return 'audio/mp4';
+    if (lower.endsWith('.aac')) return 'audio/aac';
+    if (lower.endsWith('.flac')) return 'audio/flac';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.mkv')) return 'video/x-matroska';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    return 'video/mp4';
+  }
+
+  String _cloudStatusText(String status) {
+    return switch (status) {
+      'uploading' => '等待上传',
+      'queued' => '排队中',
+      'running' => '生成中',
+      'completed' => '已完成',
+      'failed' => '失败',
+      'canceled' => '已取消',
+      _ => status,
+    };
+  }
+
+  String _cloudJobMessage(Map<String, dynamic> job) {
+    final status = job['status'] as String? ?? '';
+    final message = job['error_message'] as String? ?? '';
+    if (status == 'failed' && message.isNotEmpty) return message;
+    final percent = job['progress_percent'];
+    if (status == 'running' && percent is num) {
+      return '云端生成中：${percent.round()}%';
+    }
+    return '云端任务：${_cloudStatusText(status)}';
+  }
+
+  String _ledgerTitle(Map<String, dynamic> item) {
+    final event = item['event_type'] as String? ?? '';
+    final source = item['source'] as String? ?? '';
+    final sourceText = source == 'bonus' ? '赠点' : '付费?';
+    return switch (event) {
+      'admin_credit' => '后台加点',
+      'credit_redeem' => '兑换加点',
+      'hold' => '任务冻结',
+      'capture' => '任务扣点',
+      'release' => '任务逢?',
+      'cancel_fee' => '取消扣费',
+      _ => '$event $sourceText',
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (!initialized) {
+      return _gateScaffold('正在启动软件');
+    }
+    if (!_cloudLicensed) {
+      _promptActivationIfNeeded();
+      return _gateScaffold('请先激活软件');
+    }
     final status = task?['status'] as String? ?? '未开始';
     final steps =
         (task?['progress_steps'] as List?)?.cast<Map<String, dynamic>>() ??
@@ -1047,7 +4023,54 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _banner() {
+  Widget _gateScaffold(String title) {
+    return Scaffold(
+      body: Column(
+        children: [
+          _banner(showAccount: false),
+          Expanded(
+            child: Center(
+              child: Container(
+                width: 420,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: panelBg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.lock_outline,
+                      size: 38,
+                      color: Color(0xFFA86CFF),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '激活完成后才能进入主界面',
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (message.isNotEmpty) _messageBar(),
+        ],
+      ),
+    );
+  }
+
+  Widget _banner({bool showAccount = true}) {
     return Container(
       height: 86,
       padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -1063,15 +4086,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const Icon(Icons.auto_awesome, color: Color(0xFFA86CFF), size: 28),
           const SizedBox(width: 8),
           const Text(
-            '杰速口播智能体',
+            '杰口播智能体',
             style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900),
           ),
-          const Spacer(),
-          _topPill('手动', true),
-          const SizedBox(width: 8),
-          _topPill('自动', false),
-          const SizedBox(width: 8),
-          _topPill('设置', false),
+          if (showAccount) ...[
+            const SizedBox(width: 26),
+            Expanded(
+              child: Align(
+                alignment: Alignment.center,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 620),
+                  child: _generationModeSelector(),
+                ),
+              ),
+            ),
+            const SizedBox(width: 18),
+          ] else
+            const Spacer(),
+          if (showAccount) _accountModule(),
         ],
       ),
     );
@@ -1100,6 +4132,113 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  Widget _generationModeSelector() {
+    final isCloud = generationMode == 'cloud';
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: panelBg2,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Text(
+            '运行模式',
+            style: TextStyle(
+              color: Colors.white70,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(width: 10),
+          _modeSelectChip(
+            '本地生成',
+            Icons.radio_button_unchecked,
+            false,
+            null,
+            enabled: false,
+          ),
+          const SizedBox(width: 8),
+          _modeSelectChip(
+            '云端生成',
+            Icons.check_circle_rounded,
+            isCloud,
+            () => setState(() => generationMode = 'cloud'),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '云端生成将按账号点数扣费',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeSelectChip(
+    String label,
+    IconData icon,
+    bool active,
+    VoidCallback? onTap, {
+    bool enabled = true,
+  }) {
+    final canTap = enabled && !loading && onTap != null;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: canTap ? onTap : null,
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: active
+              ? const Color(0xFF34254A)
+              : enabled
+                  ? panelBg
+                  : const Color(0xFF252735),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: active
+                ? pink
+                : enabled
+                    ? Colors.white24
+                    : Colors.white12,
+            width: active ? 1.4 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: active
+                  ? pink
+                  : enabled
+                      ? Colors.white54
+                      : Colors.white30,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: enabled ? Colors.white : Colors.white38,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _leftPanel(String status, List<Map<String, dynamic>> steps) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(8),
@@ -1109,7 +4248,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           _sectionTitle('1. 提取视频文案'),
           Row(
             children: [
-              Expanded(child: _input(urlController, '粘贴抖音分享链接')),
+              Expanded(child: _input(urlController, '粘贴抖音分享链接或完整分享文案')),
               const SizedBox(width: 8),
               _ghostButton('选择视频', uploadSourceVideo),
             ],
@@ -1120,21 +4259,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           _textBox(originalScriptController, '提取的原文案', 8),
           const SizedBox(height: 12),
           _sectionTitle('2. 一键仿写'),
-          Row(
-            children: [
-              Expanded(child: _styleDropdown()),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 110,
-                child: _dropdown(
-                  selectedWordCount,
-                  const ['300字', '500字', '800字'],
-                  (v) => setState(
-                      () => selectedWordCount = v ?? selectedWordCount),
-                ),
-              ),
-            ],
-          ),
+          _styleDropdown(),
           const SizedBox(height: 8),
           _stepButton('2. 一键仿写', rewrite),
           const SizedBox(height: 8),
@@ -1147,33 +4272,91 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ),
           const SizedBox(height: 8),
           _textBox(rewrittenScriptController, '改写后的文案', 8),
+        ],
+      ),
+    );
+  }
+
+  Widget _digitalHumanRenderPanel() {
+    final userDigitalHumans =
+        digitalHumans.where((item) => item['built_in'] != true).toList();
+    final humanOptions = _limitedProfileOptions(
+        userDigitalHumans, 'digital_human_id',
+        preferredSystemPrefix: 'custom:');
+    if (humanOptions.isEmpty) {
+      humanOptions.add('');
+    }
+    final humanLabels = {
+      '': '未选择数字人视频',
+      for (final h in userDigitalHumans)
+        h['digital_human_id'] as String: h['name'] as String,
+    };
+
+    return _panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader('5. 数字人生成成品视频', '视频服务：', '已启动'),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _modeChip('单形象', true),
+              const SizedBox(width: 8),
+              _modeChip('多镜头', false),
+              const Spacer(),
+              Text(
+                _engineStatusText(),
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const SizedBox(
+                width: 70,
+                child: Text(
+                  '数字人',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              _ghostButton('上传形象', uploadDigitalHuman),
+              const SizedBox(width: 8),
+              _ghostButton('删除', deleteDigitalHuman),
+              const SizedBox(width: 8),
+              _stepButton(
+                renderingVideo ? '停止生成' : '生成成品视频',
+                renderingVideo ? stopRender : render,
+                compact: true,
+                allowWhileLoading: renderingVideo,
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _digitalHumanPicker(humanOptions, humanLabels),
           const SizedBox(height: 8),
-          _statusStrip(status, steps),
+          _stepButton(
+            renderingVideo ? '停止生成' : '5. 一键生成成品视频',
+            renderingVideo ? stopRender : render,
+            allowWhileLoading: renderingVideo,
+          ),
         ],
       ),
     );
   }
 
   Widget _centerPanel() {
-    final voiceOptions =
-        voices.map((v) => v['voice_id'] as String).toList(growable: true);
-    if (!voiceOptions.contains(selectedVoice))
-      voiceOptions.insert(0, selectedVoice);
+    final voiceOptions = _limitedProfileOptions(voices, 'voice_id',
+        preferredSystemPrefix: 'clone:');
     final voiceLabels = {
       for (final v in voices) v['voice_id'] as String: v['name'] as String,
-    };
-    final humanOptions = digitalHumans
-        .map((h) => h['digital_human_id'] as String)
-        .toList(growable: true);
-    if (humanOptions.isEmpty) {
-      humanOptions.add('');
-    } else if (!humanOptions.contains(selectedDigitalHuman)) {
-      humanOptions.insert(0, selectedDigitalHuman);
-    }
-    final humanLabels = {
-      '': '未选择数字人视频',
-      for (final h in digitalHumans)
-        h['digital_human_id'] as String: h['name'] as String,
     };
 
     return SingleChildScrollView(
@@ -1184,7 +4367,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _sectionHeader('3. 声音生成', '声音服务：', '已启动'),
+                _sectionHeader('3. 声音生成', '声音服务：', _voiceServiceText),
                 const SizedBox(height: 12),
                 _labeledSlider(
                   '语速',
@@ -1195,12 +4378,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   speechRate.toStringAsFixed(1),
                 ),
                 const SizedBox(height: 10),
+                _labeledSlider(
+                  '音量',
+                  voicePreviewVolume,
+                  0,
+                  1,
+                  _updateVoicePreviewVolume,
+                  '${(voicePreviewVolume * 100).round()}%',
+                ),
+                const SizedBox(height: 10),
                 _formRow('声音', [
                   Expanded(
                     child: _dropdown(
                       selectedVoice,
                       voiceOptions,
-                      (v) => setState(() => selectedVoice = v ?? selectedVoice),
+                      (v) => setState(() {
+                        selectedVoice = v ?? selectedVoice;
+                        _invalidateGeneratedVoice();
+                      }),
                       labels: voiceLabels,
                     ),
                   ),
@@ -1209,6 +4404,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   _stepButton(
                     _isPlayingVoice ? '停止播放' : '播放声音',
                     playVoice,
+                    compact: true,
+                  ),
+                  _stepButton(
+                    _isPlayingOriginalAudio ? '原音停止' : '原音播放',
+                    playOriginalAudio,
                     compact: true,
                   ),
                 ]),
@@ -1220,83 +4420,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _sectionHeader('4. 视频生成', '视频服务：', '已启动'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    _modeChip('单形象', true),
-                    const SizedBox(width: 8),
-                    _modeChip('多镜头', false),
-                    const Spacer(),
-                    Text(
-                      _engineStatusText(),
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                _formRow('数字人引擎', [
-                  Expanded(child: _readonlyBox('高清模式')),
-                ]),
-                const SizedBox(height: 10),
-                _formRow('数字人', [
-                  Expanded(
-                    child: _dropdown(
-                      selectedDigitalHuman,
-                      humanOptions,
-                      (v) => selectDigitalHuman(v ?? ''),
-                      labels: humanLabels,
-                    ),
-                  ),
-                  _ghostButton('上传形象', uploadDigitalHuman),
-                  _ghostButton('删除', () {}),
-                  _stepButton(
-                    renderingVideo ? '停止生成' : '生成视频',
-                    renderingVideo ? stopRender : render,
-                    compact: true,
-                    allowWhileLoading: renderingVideo,
-                  ),
-                  _stepButton('预览视频', previewOutputVideo, compact: true),
-                ]),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Text('牙齿高清'),
-                    Switch(
-                      value: toothHd,
-                      onChanged: (v) => setState(() => toothHd = v),
-                    ),
-                    const Text('开启'),
-                    const Spacer(),
-                    const Text('动作随机'),
-                    Switch(
-                      value: randomMotion,
-                      onChanged: (v) => setState(() => randomMotion = v),
-                    ),
-                    Text(randomMotion ? '开启' : '关闭'),
-                  ],
-                ),
-                _readonlyBox(selectedDigitalHuman.isEmpty
-                    ? '请上传或选择数字人素材'
-                    : selectedDigitalHuman),
-                const SizedBox(height: 10),
-                _mouthApertureStatusCard(),
+                _sectionHeader('4. 字幕/BGM/画中画设置', '合成参数：', '生成前生效'),
                 const SizedBox(height: 10),
                 _subTabs(),
                 const SizedBox(height: 10),
                 _mediaSubTabPanel(),
-                const SizedBox(height: 8),
-                _stepButton(
-                  '5. 字幕/BGM/封面合成',
-                  render,
-                  allowWhileLoading: renderingVideo,
-                ),
               ],
             ),
           ),
+          const SizedBox(height: 10),
+          _digitalHumanRenderPanel(),
         ],
       ),
     );
@@ -1305,6 +4438,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _rightPanel() {
     final sourceUrl = _sourceVideoUrl;
     final outputUrl = _outputVideoUrl;
+    final digitalHumanPreviewUrl = selectedDigitalHuman.isEmpty
+        ? null
+        : _digitalHumanThumbnailUrl(selectedDigitalHuman);
     final title = task?['title'] as String? ?? '未生成';
     return SingleChildScrollView(
       padding: const EdgeInsets.all(10),
@@ -1322,29 +4458,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
               ),
               clipBehavior: Clip.antiAlias,
-              child: outputUrl != null
-                  ? _OutputVideoPreview(url: outputUrl)
-                  : sourceUrl != null
-                      ? _OutputVideoPreview(url: sourceUrl)
-                      : _previewPlaceholder(),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (outputUrl != null)
+                    _OutputVideoPreview(url: outputUrl)
+                  else if (digitalHumanPreviewUrl != null)
+                    _digitalHumanPreviewImage(digitalHumanPreviewUrl)
+                  else if (sourceUrl != null)
+                    _OutputVideoPreview(url: sourceUrl)
+                  else
+                    _previewPlaceholder(),
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 8),
           _outputFileBar(),
           const SizedBox(height: 12),
-          _sectionTitle('6. 视频封面与预览'),
+          _sectionTitle('6. 视频封面'),
           const SizedBox(height: 8),
-          Row(
-            children: const [
-              Icon(Icons.image_outlined),
-              SizedBox(width: 6),
-              Text('封面', style: TextStyle(fontWeight: FontWeight.w800)),
-            ],
-          ),
+          _coverTools(),
           const SizedBox(height: 8),
-          _dropdown('暗色蒙版1', const ['暗色蒙版1', '亮色大字版', '人物居中版'], (_) {}),
-          const SizedBox(height: 8),
-          _readonlyBox('cover.png'),
+          _coverPreview(),
           const SizedBox(height: 10),
           Text('视频标题：$title', style: const TextStyle(color: Colors.white70)),
           const SizedBox(height: 12),
@@ -1376,10 +4512,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _outputFileBar() {
+    final isCloud = generationMode == 'cloud';
     final path = _outputVideoPath;
-    final fileName = path == null || path.isEmpty
-        ? '成品视频生成后自动关联'
-        : path.split(RegExp(r'[\\/]')).last;
+    final fileName = isCloud
+        ? _cloudOutputLabel
+        : path == null || path.isEmpty
+            ? '成品视频生成后自动关联'
+            : path.split(RegExp(r'[\\/]')).last;
     return Row(
       children: [
         Expanded(child: _readonlyBox(fileName)),
@@ -1387,8 +4526,81 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _ghostButton('打开', openOutputVideo),
         const SizedBox(width: 8),
         _ghostButton('预览', previewOutputVideo),
+        if (isCloud &&
+            cloudOutputUrl.isNotEmpty &&
+            cloudOutputLocalPath.isEmpty) ...[
+          const SizedBox(width: 8),
+          _ghostButton('确认下载', () => confirmCloudDownload()),
+        ],
       ],
     );
+  }
+
+  Widget _coverTools() {
+    return Row(
+      children: [
+        const Icon(Icons.image_outlined, size: 18),
+        const SizedBox(width: 6),
+        const Expanded(
+          child: Text('封面', style: TextStyle(fontWeight: FontWeight.w800)),
+        ),
+        _ghostButton('生成封面', generateCover),
+        const SizedBox(width: 8),
+        _ghostButton('自定义封面', uploadCover),
+      ],
+    );
+  }
+
+  Widget _coverPreview() {
+    final path = _currentCoverPath;
+    final label = path == null ? '封面将自动生成' : _fileNameFromPath(path);
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: SizedBox(
+            height: 220,
+            child: AspectRatio(
+              aspectRatio: 9 / 16,
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF25283A),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+                ),
+                child: path == null
+                    ? const Center(
+                        child:
+                            Icon(Icons.image_outlined, color: Colors.white54),
+                      )
+                    : Image.file(
+                        File(path),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Center(
+                          child:
+                              Icon(Icons.broken_image, color: Colors.white70),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        _readonlyBox(label),
+      ],
+    );
+  }
+
+  String? get _currentCoverPath {
+    if (coverPath.isNotEmpty && File(coverPath).existsSync()) return coverPath;
+    final taskCover = task?['cover_path'] as String?;
+    if (taskCover != null &&
+        taskCover.isNotEmpty &&
+        File(taskCover).existsSync()) {
+      return taskCover;
+    }
+    return null;
   }
 
   Widget _publisherPanel() {
@@ -1461,7 +4673,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               const SizedBox(width: 8),
               Expanded(
                   child: _readonlyBox(publisherNicknameController.text.isEmpty
-                      ? '登录后自动识别'
+                      ? _publisherNicknamePlaceholder
                       : publisherNicknameController.text)),
               const SizedBox(width: 8),
               _ghostButton('添加账号', createPublisherAccount),
@@ -1494,33 +4706,45 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(height: 6),
           _publishModeSelector(),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '发布内容',
-                  style: TextStyle(fontWeight: FontWeight.w900),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF34223C),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: pink.withValues(alpha: 0.55)),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '发布内容',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    _ghostButton(
+                      generatingPublishContent ? '生成中' : 'AI生成',
+                      generatingPublishContent
+                          ? () {}
+                          : () => generatePublishContent(),
+                    ),
+                  ],
                 ),
-              ),
-              _ghostButton(
-                generatingPublishContent ? '生成中' : 'AI生成',
-                generatingPublishContent
-                    ? () {}
-                    : () => generatePublishContent(),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          _input(publishTitleController, '视频标题（20字以内）', maxLength: 20),
-          const SizedBox(height: 8),
-          _textBox(publishBodyController, '发布文案', 4),
-          const SizedBox(height: 8),
-          _input(publishTopicsController, '话题，用空格、逗号或 # 分隔'),
-          const SizedBox(height: 8),
-          _stepButton(
-            publishing ? '发布任务创建中...' : '创建发布任务',
-            createPublishJobs,
-            allowWhileLoading: publishing,
+                const SizedBox(height: 8),
+                _input(publishTitleController, '视频标题（20字以内）', maxLength: 20),
+                const SizedBox(height: 8),
+                _textBox(publishBodyController, '发布文案', 4),
+                const SizedBox(height: 8),
+                _input(publishTopicsController, '话题标签，用 # 分隔'),
+                const SizedBox(height: 8),
+                _stepButton(
+                  publishing ? '发布任务创建中...' : '创建发布任务',
+                  createPublishJobs,
+                  allowWhileLoading: publishing,
+                ),
+              ],
+            ),
           ),
           if (publishJobs.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -1562,7 +4786,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _publishModeChip('draft', '草稿', Icons.edit_note_outlined),
+          child: _publishModeChip('draft', '草60', Icons.edit_note_outlined),
         ),
       ],
     );
@@ -1608,20 +4832,42 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String _accountStatusLabel(String status) {
     return switch (status) {
       'created' => '已创建',
-      'login_opened' => '登录中',
+      'login_opened' => '登录?',
       'logged_in' => '已登录',
       'needs_login' => '待登录',
-      'needs_user_action' => '需人工处理',
-      'expired' => '已过期',
+      'needs_user_action' => '霢人工处理',
+      'expired' => '已过?',
       'failed' => '失败',
       _ => status,
     };
   }
 
   String _accountDisplayName(Map<String, dynamic> account) {
-    final nickname = (account['nickname'] as String? ?? '').trim();
+    final nickname = _normalizedPublisherNickname(account['nickname']);
     if (nickname.isNotEmpty) return nickname;
-    return '登录后自动识别';
+    return _publisherNicknamePlaceholder;
+  }
+
+  String _normalizedPublisherNickname(Object? value) {
+    final nickname = value is String ? value.trim() : '';
+    if (nickname.isEmpty) return '';
+    final compact = nickname.replaceAll(RegExp(r'\s+'), '');
+    final blockedParts = [
+      '草稿箱',
+      '上传视频',
+      '上传图文',
+      '写长文',
+      '发播客',
+      '拖拽视频',
+      '视频大小',
+      '视频格式',
+      '视频分辨率',
+      '收起侧边栏',
+      'Builderhub',
+      'RedSkill',
+    ];
+    if (blockedParts.any(compact.contains)) return '';
+    return nickname;
   }
 
   String _jobStatusLabel(String status) {
@@ -1662,44 +4908,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   String _engineStatusText() {
     final heygemOnline = providers?['heygem_online'] == true;
-    if (heygemOnline) return '云服务：已开启';
+    if (heygemOnline) return '云服务：已开?';
     return '云服务：未开启';
-  }
-
-  Widget _mouthApertureStatusCard() {
-    final online = providers?['heygem_online'] == true;
-    final color = online ? const Color(0xFF55E6A5) : const Color(0xFFFFC857);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF171B2B),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.55)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                online ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
-                color: color,
-                size: 18,
-              ),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  online ? '云服务：已开启' : '云服务：未开启',
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
   }
 
   double _providerDoubleFrom(
@@ -1784,6 +4994,61 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ],
       ],
     );
+  }
+
+  List<String> _limitedProfileOptions(
+    List<Map<String, dynamic>> items,
+    String idKey, {
+    String? preferredSystemPrefix,
+  }) {
+    final preferredSystemOptions = <String>[];
+    final fallbackSystemOptions = <String>[];
+    final seenSystem = <String>{};
+    final userOptions = <MapEntry<int, Map<String, dynamic>>>[];
+    final seenUser = <String>{};
+
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final id = item[idKey]?.toString() ?? '';
+      if (id.isEmpty) continue;
+      final builtIn = item['built_in'] == true;
+      if (builtIn) {
+        if (seenSystem.add(id)) {
+          if (preferredSystemPrefix != null &&
+              id.startsWith(preferredSystemPrefix)) {
+            preferredSystemOptions.add(id);
+          } else {
+            fallbackSystemOptions.add(id);
+          }
+        }
+        continue;
+      }
+      if (seenUser.add(id)) {
+        userOptions.add(MapEntry(i, item));
+      }
+    }
+
+    userOptions.sort((a, b) {
+      final aUsedAt = a.value['last_used_at']?.toString() ?? '';
+      final bUsedAt = b.value['last_used_at']?.toString() ?? '';
+      if (aUsedAt.isNotEmpty || bUsedAt.isNotEmpty) {
+        return bUsedAt.compareTo(aUsedAt);
+      }
+      return a.key.compareTo(b.key);
+    });
+
+    final systemOptions = (preferredSystemOptions.isNotEmpty
+            ? preferredSystemOptions
+            : fallbackSystemOptions)
+        .take(4);
+
+    return [
+      ...systemOptions,
+      ...userOptions
+          .take(10)
+          .map((entry) => entry.value[idKey]?.toString() ?? '')
+          .where((id) => id.isNotEmpty),
+    ];
   }
 
   Widget _styleDropdown() {
@@ -1930,18 +5195,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _topPill(String text, bool active) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-      decoration: BoxDecoration(
-        gradient: active ? const LinearGradient(colors: [cyan, pink]) : null,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: purpleLine),
-      ),
-      child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
-    );
-  }
-
   Widget _tab(String text, IconData icon, bool active) {
     return Container(
       height: 38,
@@ -1978,6 +5231,141 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  Map<String, dynamic>? _digitalHumanProfile(String digitalHumanId) {
+    for (final item in digitalHumans) {
+      if (item['digital_human_id'] == digitalHumanId) return item;
+    }
+    return null;
+  }
+
+  String _digitalHumanThumbnailUrl(String digitalHumanId) {
+    final profile = _digitalHumanProfile(digitalHumanId);
+    final providedUrl = profile?['thumbnail_url']?.toString() ?? '';
+    if (providedUrl.isNotEmpty) {
+      if (providedUrl.startsWith('http://') ||
+          providedUrl.startsWith('https://')) {
+        return providedUrl;
+      }
+      return '$apiBase$providedUrl';
+    }
+    final version = profile?['last_used_at']?.toString() ??
+        profile?['asset_id']?.toString();
+    return Uri.parse('$apiBase/api/digital-humans/thumbnail').replace(
+      queryParameters: {
+        'digital_human_id': digitalHumanId,
+        if (version != null && version.isNotEmpty) 'v': version,
+      },
+    ).toString();
+  }
+
+  Widget _digitalHumanPicker(
+    List<String> options,
+    Map<String, String> labels,
+  ) {
+    final visibleOptions = options.where((id) => id.isNotEmpty).toList();
+    if (visibleOptions.isEmpty) {
+      return _readonlyBox('请上传或选择数字人素?');
+    }
+    final visibleRows = math.min(4, math.max(1, visibleOptions.length));
+    final dividerHeight = math.max(0, visibleRows - 1).toDouble();
+    return Container(
+      height: 72.0 * visibleRows + dividerHeight,
+      decoration: BoxDecoration(
+        color: const Color(0xFF171A28),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: purpleLine.withValues(alpha: 0.45)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: ListView.separated(
+        padding: EdgeInsets.zero,
+        itemCount: visibleOptions.length,
+        itemBuilder: (context, index) {
+          final id = visibleOptions[index];
+          return _digitalHumanRow(id, labels[id] ?? id);
+        },
+        separatorBuilder: (_, __) => Divider(
+          height: 1,
+          color: Colors.white.withValues(alpha: 0.08),
+        ),
+      ),
+    );
+  }
+
+  Widget _digitalHumanRow(String digitalHumanId, String name) {
+    final active = selectedDigitalHuman == digitalHumanId;
+    final profile = _digitalHumanProfile(digitalHumanId);
+    final builtIn = profile?['built_in'] == true;
+    return InkWell(
+      onTap: () => selectDigitalHuman(digitalHumanId),
+      child: Container(
+        height: 72,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF262B47) : Colors.transparent,
+          border: Border(
+            left: BorderSide(
+              color: active ? cyan : Colors.transparent,
+              width: 3,
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: SizedBox(
+                width: 54,
+                height: 48,
+                child: Image.network(
+                  _digitalHumanThumbnailUrl(digitalHumanId),
+                  key: ValueKey(_digitalHumanThumbnailUrl(digitalHumanId)),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    color: const Color(0xFF24283A),
+                    child: const Icon(
+                      Icons.person,
+                      color: Colors.white54,
+                      size: 24,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    builtIn ? '系统模板' : '已上传形象',
+                    style: TextStyle(
+                      color: builtIn
+                          ? const Color(0xFFBFA8FF)
+                          : const Color(0xFF55E6A5),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (active)
+              const Icon(Icons.check_circle,
+                  size: 18, color: Color(0xFF55E6A5)),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _mediaSubTabPanel() {
     return switch (selectedMediaSubTab) {
       'bgm' => _bgmPanel(),
@@ -2004,12 +5392,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _bgmPanel() {
-    final options = [
-      'none',
-      ...(bgmTracks.isEmpty
-          ? const ['default-light', 'default-tech', 'default-warm']
-          : bgmTracks.map((item) => item['bgm_id'].toString())),
-    ];
+    final options = _effectiveBgmOptions();
     final names = {
       'none': '无背景音乐',
       for (final item in bgmTracks)
@@ -2034,62 +5417,107 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             ),
             const SizedBox(width: 8),
             _ghostButton('上传BGM', uploadBgm),
+            const SizedBox(width: 8),
+            _ghostButton(_isPlayingBgm ? '停止BGM' : '播放BGM', playBgm),
           ],
         ),
-        const SizedBox(height: 10),
-        _labeledSlider(
-          'BGM音量',
-          bgmVolume,
-          0,
-          0.6,
-          (v) => setState(() => bgmVolume = v),
-          '${(bgmVolume * 100).round()}%',
-        ),
+        if (selectedBgm != 'none') ...[
+          const SizedBox(height: 10),
+          _labeledSlider(
+            'BGM音量',
+            bgmVolume,
+            0,
+            0.6,
+            _updateBgmVolume,
+            '${(bgmVolume * 100).round()}%',
+          ),
+        ],
         const SizedBox(height: 4),
         Text(
           selectedBgm == 'none'
               ? '最终视频不会混入背景音乐。'
               : selectedBgm.startsWith('custom:')
                   ? '将使用你上传的背景音乐，并按音量混入最终视频。'
-                  : '将使用内置循环背景音乐，并按音量混入最终视频。',
+                  : '将使用模板背景音乐，并按音量混入最终视频。',
           style: const TextStyle(color: Colors.white60, fontSize: 12),
         ),
       ],
     );
   }
 
+  List<String> _effectiveBgmOptions() {
+    return _effectiveBgmOptionsFor(bgmTracks);
+  }
+
+  List<String> _effectiveBgmOptionsFor(List<Map<String, dynamic>> tracks) {
+    final templateIds = <String>[];
+    final fallbackIds = <String>[];
+    final customIds = <String>[];
+    final seen = <String>{'none'};
+    for (final item in tracks) {
+      final id = item['bgm_id']?.toString() ?? '';
+      if (id.isEmpty || !seen.add(id)) continue;
+      if (id.startsWith('template:')) {
+        templateIds.add(id);
+      } else if (id.startsWith('custom:')) {
+        customIds.add(id);
+      } else {
+        fallbackIds.add(id);
+      }
+    }
+    return [
+      'none',
+      ...(templateIds.isNotEmpty ? templateIds : fallbackIds),
+      ...customIds.take(10),
+    ];
+  }
+
   Widget _subtitlePanel() {
+    final subtitleSummary = subtitlePreviewLines.isEmpty
+        ? '字幕文件将自动生成'
+        : subtitlePreviewLines.take(2).join(' / ');
     return Column(
       children: [
         Row(
           children: [
-            Expanded(child: _readonlyBox('字幕文件将自动生成')),
+            Expanded(child: _readonlyBox(subtitleSummary)),
             const SizedBox(width: 8),
-            _stepButton('生成字幕', render, compact: true),
+            _stepButton('生成字幕', generateSubtitles, compact: true),
             const SizedBox(width: 8),
-            _ghostButton('编辑字幕及画中画', () {}),
+            _ghostButton('编辑字幕及画中画', editSubtitlesAndPip),
           ],
         ),
         const SizedBox(height: 10),
         Row(
           children: [
             Checkbox(
-              value: true,
-              onChanged: (_) {},
+              value: subtitlesEnabled,
+              onChanged: (value) =>
+                  setState(() => subtitlesEnabled = value ?? subtitlesEnabled),
             ),
             const Text('字幕 启用'),
             const SizedBox(width: 12),
-            Expanded(child: _readonlyBox('免费 特粗')),
+            Expanded(
+              child: _dropdown(
+                selectedSubtitleFont,
+                _subtitleFontOptions,
+                (value) {
+                  if (value == null) return;
+                  setState(() => selectedSubtitleFont = value);
+                },
+                labels: _subtitleFontLabels,
+              ),
+            ),
             const SizedBox(width: 8),
-            _ghostButton('刷新', () {}),
+            _ghostButton('刷新', refreshSubtitlePreview),
             const SizedBox(width: 8),
             const Text('字幕颜色'),
             const SizedBox(width: 8),
-            _colorSquare(Colors.black),
+            _colorSquare(subtitleColor),
             const SizedBox(width: 8),
             const Text('描边颜色'),
             const SizedBox(width: 8),
-            _colorSquare(Colors.white),
+            _colorSquare(subtitleOutlineColor),
           ],
         ),
         _labeledSlider(
@@ -2100,13 +5528,346 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           (v) => setState(() => subtitleSize = v),
           subtitleSize.round().toString(),
         ),
+        const SizedBox(height: 8),
+        _readonlyBox(_pipSummaryText),
       ],
+    );
+  }
+
+  String get _pipSummaryText {
+    if (!pipEnabled) return '画中画未启用';
+    final name = pipAssetName.isEmpty ? '未选择素材' : pipAssetName;
+    if (pipTimingMode == 'time') {
+      final start = pipStartController.text.trim().isEmpty
+          ? '0'
+          : pipStartController.text.trim();
+      final end = pipEndController.text.trim();
+      return end.isEmpty
+          ? '画中画：$name，从 ${start}s 开始'
+          : '画中画：$name，${start}s - ${end}s';
+    }
+    if (pipTimingMode == 'sentence') {
+      final trigger = pipTriggerController.text.trim();
+      return trigger.isEmpty ? '画中画：$name，按句子显示' : '画中画：$name，触发句：$trigger';
+    }
+    return '画中画：$name，全程显示';
+  }
+
+  Widget _subtitlePresetButton(
+    String label,
+    Color color,
+    Color outlineColor,
+    void Function(VoidCallback update) updateDialog,
+  ) {
+    return OutlinedButton(
+      onPressed: () => updateDialog(() {
+        subtitleColor = color;
+        subtitleOutlineColor = outlineColor;
+      }),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        side: BorderSide(color: purpleLine.withValues(alpha: 0.8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+      child: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+    );
+  }
+
+  double _pipHeightForWidth(double width) {
+    final height = width * _pipCanvasAspectRatio / _pipMediaAspectRatio;
+    return height.clamp(0.04, 1.0).toDouble();
+  }
+
+  Rect _pipNormalizedRect() {
+    if (pipPosition == 'fullscreen') {
+      return const Rect.fromLTWH(0, 0, 1, 1);
+    }
+
+    final width = pipScale.clamp(0.1, 0.95).toDouble();
+    final height = _pipHeightForWidth(width);
+    final maxX = math.max(0.0, 1.0 - width);
+    final maxY = math.max(0.0, 1.0 - height);
+
+    final rawX = switch (pipPosition) {
+      'top_left' => _pipMarginX,
+      'bottom_left' => _pipMarginX,
+      'bottom_right' => maxX - _pipMarginX,
+      'center' => maxX / 2,
+      'custom' => pipX,
+      _ => maxX - _pipMarginX,
+    };
+    final rawY = switch (pipPosition) {
+      'bottom_left' => maxY - _pipMarginY,
+      'bottom_right' => maxY - _pipMarginY,
+      'center' => maxY / 2,
+      'custom' => pipY,
+      _ => _pipMarginY,
+    };
+
+    return Rect.fromLTWH(
+      rawX.clamp(0.0, maxX).toDouble(),
+      rawY.clamp(0.0, maxY).toDouble(),
+      width,
+      height,
+    );
+  }
+
+  void _setPipPosition(String value) {
+    if (value == 'custom' && pipPosition != 'custom') {
+      final rect = _pipNormalizedRect();
+      pipX = rect.left;
+      pipY = rect.top;
+    }
+    pipPosition = value;
+    _clampPipCustomPosition();
+  }
+
+  void _clampPipCustomPosition() {
+    final rect = _pipNormalizedRect();
+    final maxX = math.max(0.0, 1.0 - rect.width);
+    final maxY = math.max(0.0, 1.0 - rect.height);
+    pipX = pipX.clamp(0.0, maxX).toDouble();
+    pipY = pipY.clamp(0.0, maxY).toDouble();
+  }
+
+  void _updatePreviewState(
+    VoidCallback update,
+    void Function(VoidCallback update)? updateDialog,
+  ) {
+    if (updateDialog != null) {
+      updateDialog(update);
+    } else {
+      setState(update);
+    }
+  }
+
+  void _dragCustomPip(
+    DragUpdateDetails details,
+    Size canvasSize,
+    void Function(VoidCallback update)? updateDialog,
+  ) {
+    if (pipPosition != 'custom' ||
+        canvasSize.width <= 0 ||
+        canvasSize.height <= 0) {
+      return;
+    }
+    _updatePreviewState(() {
+      pipX += details.delta.dx / canvasSize.width;
+      pipY += details.delta.dy / canvasSize.height;
+      _clampPipCustomPosition();
+    }, updateDialog);
+  }
+
+  void _resizeCustomPip(
+    DragUpdateDetails details,
+    Size canvasSize,
+    void Function(VoidCallback update)? updateDialog,
+  ) {
+    if (pipPosition != 'custom' ||
+        canvasSize.width <= 0 ||
+        canvasSize.height <= 0) {
+      return;
+    }
+    final widthDelta = details.delta.dx / canvasSize.width;
+    final heightDelta = details.delta.dy /
+        canvasSize.height /
+        (_pipCanvasAspectRatio / _pipMediaAspectRatio);
+    final delta =
+        widthDelta.abs() > heightDelta.abs() ? widthDelta : heightDelta;
+    _updatePreviewState(() {
+      pipScale = (pipScale + delta).clamp(0.1, 0.95).toDouble();
+      _clampPipCustomPosition();
+    }, updateDialog);
+  }
+
+  Rect _pipCanvasRect(Size canvasSize) {
+    final rect = _pipNormalizedRect();
+    return Rect.fromLTWH(
+      rect.left * canvasSize.width,
+      rect.top * canvasSize.height,
+      rect.width * canvasSize.width,
+      rect.height * canvasSize.height,
+    );
+  }
+
+  Widget _subtitlePreviewBox({
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final previewText = subtitlePreviewLines.isEmpty
+        ? (_renderScript.isEmpty ? '字幕预览' : _renderScript)
+        : subtitlePreviewLines.take(3).join('\n');
+    return SizedBox(
+      height: 320,
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: _pipCanvasAspectRatio,
+          child: Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF27345F), Color(0xFF11131B)],
+              ),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: purpleLine.withValues(alpha: 0.45)),
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final canvasSize =
+                    Size(constraints.maxWidth, constraints.maxHeight);
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Center(
+                      child: Icon(
+                        Icons.person,
+                        size: 78,
+                        color: Colors.white.withValues(alpha: 0.45),
+                      ),
+                    ),
+                    if (pipEnabled)
+                      _pipPreviewLayer(canvasSize, updateDialog: updateDialog),
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      bottom: 14,
+                      child: Opacity(
+                        opacity: subtitlesEnabled ? 1 : 0.35,
+                        child: Text(
+                          previewText,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: subtitleColor,
+                            fontSize: subtitleSize.clamp(12, 56).toDouble(),
+                            fontFamily: selectedSubtitleFont,
+                            fontWeight: FontWeight.w900,
+                            height: 1.08,
+                            shadows: [
+                              Shadow(
+                                offset: const Offset(1.8, 1.8),
+                                color: subtitleOutlineColor,
+                              ),
+                              Shadow(
+                                offset: const Offset(-1.8, 1.8),
+                                color: subtitleOutlineColor,
+                              ),
+                              Shadow(
+                                offset: const Offset(1.8, -1.8),
+                                color: subtitleOutlineColor,
+                              ),
+                              Shadow(
+                                offset: const Offset(-1.8, -1.8),
+                                color: subtitleOutlineColor,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pipPreviewLayer(
+    Size canvasSize, {
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final rect = _pipCanvasRect(canvasSize);
+    final editable = pipPosition == 'custom';
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: GestureDetector(
+        onPanUpdate: editable
+            ? (details) => _dragCustomPip(details, canvasSize, updateDialog)
+            : null,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF202334),
+                  borderRadius:
+                      BorderRadius.circular(pipPosition == 'fullscreen' ? 0 : 6),
+                  border: Border.all(
+                    color: cyan.withValues(alpha: 0.8),
+                    width: 2,
+                  ),
+                ),
+                child: pipAssetId.isEmpty
+                    ? const Center(
+                        child:
+                            Icon(Icons.image_outlined, color: Colors.white70),
+                      )
+                    : _pipPreviewMedia(),
+              ),
+            ),
+            if (editable)
+              Positioned(
+                right: 4,
+                bottom: 4,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanUpdate: (details) =>
+                      _resizeCustomPip(details, canvasSize, updateDialog),
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: cyan,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                    child: const Icon(
+                      Icons.open_in_full,
+                      color: Colors.white,
+                      size: 13,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _pipPreviewMedia() {
+    final previewUrl = '$apiBase/api/pip/$pipAssetId/preview';
+    final lowerName = pipAssetName.toLowerCase();
+    final isImage = lowerName.endsWith('.png') ||
+        lowerName.endsWith('.jpg') ||
+        lowerName.endsWith('.jpeg') ||
+        lowerName.endsWith('.webp');
+    if (!isImage) {
+      return const Center(
+        child: Icon(Icons.movie_outlined, color: Colors.white70),
+      );
+    }
+    return Image.network(
+      previewUrl,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) =>
+          const Center(child: Icon(Icons.broken_image, color: Colors.white70)),
     );
   }
 
   Widget _subTabs() {
     const items = [
-      ('video', Icons.movie_outlined, '视频'),
       ('bgm', Icons.music_note, '背景音乐'),
       ('subtitles', Icons.closed_caption_outlined, '字幕及画中画'),
     ];
@@ -2186,6 +5947,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     };
   }
 
+  // ignore: unused_element
   Widget _statusStrip(String status, List<Map<String, dynamic>> steps) {
     final percent = _progressPercent(steps);
     final active = _activeProgressStep(task);
@@ -2312,6 +6074,52 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _digitalHumanPreviewImage(String url) {
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => _previewPlaceholder(),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _previewBgmButton() {
+    final enabled = selectedBgm != 'none';
+    return Opacity(
+      opacity: enabled ? 1 : 0.45,
+      child: Material(
+        color: const Color(0xE61A1D2C),
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: enabled ? playBgm : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: purpleLine.withValues(alpha: 0.75)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _isPlayingBgm ? Icons.stop_rounded : Icons.music_note_rounded,
+                  size: 18,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _isPlayingBgm ? '停止BGM' : '播放BGM',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

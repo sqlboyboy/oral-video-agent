@@ -3,6 +3,7 @@ import pytest
 from app.models import RewriteRequest
 from app.providers.rewrite import (
     DeepSeekRewriteProvider,
+    MAX_REWRITE_CHARS,
     RewriteProvider,
     _format_spoken_lines,
     _script_similarity,
@@ -10,6 +11,7 @@ from app.providers.rewrite import (
     create_rewrite_provider,
 )
 from app.settings import Settings
+from app.text_normalization import to_simplified_chinese
 
 
 def test_build_rewrite_prompt_contains_constraints_and_inputs():
@@ -38,6 +40,12 @@ def test_create_rewrite_provider_defaults_to_placeholder():
     provider = create_rewrite_provider(Settings(rewrite_provider="placeholder"))
 
     assert isinstance(provider, RewriteProvider)
+
+
+def test_rewrite_prompt_uses_model_constraint_for_300_chars():
+    prompt = build_rewrite_prompt("source", RewriteRequest())
+
+    assert f"不超过 {MAX_REWRITE_CHARS} 字" in prompt
 
 
 def test_deepseek_provider_reports_missing_key_when_used():
@@ -89,3 +97,11 @@ def test_rewrite_output_removes_punctuation_but_keeps_lines():
 
     assert result == "大家好今天聊方法\n先讲第一点\n再讲第二点"
     assert not any(char in result for char in "，。！？；：,.!?;:")
+
+
+def test_rewrite_outputs_simplified_chinese():
+    result = RewriteProvider().rewrite("開直播後臺觀眾", RewriteRequest())
+
+    assert to_simplified_chinese("開直播後臺觀眾") == "开直播后台观众"
+    assert "開" not in result
+    assert "後臺" not in result

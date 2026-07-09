@@ -1,3 +1,11 @@
+# 最新交接信息
+
+云端控制中心、AutoDL worker、Flutter 云端生成、环境变量和服务器信息，请先看：
+
+```text
+docs/codex-handoff-cloud-mvp.md
+```
+
 # 项目当前进度
 
 更新时间：2026-06-21

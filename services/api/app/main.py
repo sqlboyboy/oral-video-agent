@@ -2,10 +2,13 @@ import json
 import math
 import re
 import struct
+import subprocess
 import threading
 import wave
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+from uuid import uuid4
 
 import requests
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -13,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, ensure_voice_reference_wav, save_upload
-from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, storage_dir
+from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PostprocessVideoRequest, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, project_root, storage_dir
 from .mouth_quality import build_mouth_quality_report, collect_mouth_quality_signals
 from .pipeline.cover import extract_first_frame_cover_png, generate_cover_png
 from .pipeline.renderer import (
@@ -24,21 +27,22 @@ from .pipeline.renderer import (
     prepare_video_for_audio_duration,
 )
 from .progress import complete_progress, fail_progress, start_progress
-from .pipeline.subtitles import generate_srt, preview_subtitles
+from .pipeline.subtitles import generate_srt, preview_subtitles, subtitle_time_range_for_text
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.digital_human import create_digital_human_provider
 from .providers.rewrite import create_rewrite_provider
 from .providers.rewrite_styles import REWRITE_STYLE_PRESETS
 from .providers.tts import create_voice_provider
-from .providers.video_importer import VideoImportError, VideoImporter
+from .providers.video_importer import VideoImportError, VideoImporter, extract_first_url
 from .publisher import router as publisher_router
 from .repository import repo
 from .settings import get_settings
-from tools.diagnose_mouth_naturalness import analyze_atlas_video
-
 import sys
 import asyncio
+import mimetypes
+import os
+from urllib.parse import urlencode
 
 # 修复 Windows 下 Python 3.13+ 运行 Playwright 报错 NotImplementedError 的问题
 if sys.platform == 'win32':
@@ -73,7 +77,24 @@ video_importer = VideoImporter()
 renderer = Renderer()
 
 DIGITAL_HUMAN_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
+AUDIO_TEMPLATE_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm"}
 render_cancel_events: Dict[str, threading.Event] = {}
+RECENT_USAGE_PATH = Path(
+    os.getenv("RECENT_USAGE_PATH", storage_dir("assets") / "recent_asset_usage.json")
+)
+SYSTEM_OPTION_LIMIT = 4
+RECENT_USER_OPTION_LIMIT = 10
+MIN_DIGITAL_HUMAN_REFERENCE_BYTES = 1024
+VOICE_TEMPLATE_ORDER = {
+    "标准女生": 0,
+    "标准男声": 1,
+    "温和男声": 2,
+    "元气女生": 3,
+}
+BGM_TEMPLATE_ORDER = {
+    "宣传类口播": 0,
+    "通用类口播": 1,
+}
 
 
 def limit_title(value: str, max_chars: int = 20) -> str:
@@ -252,6 +273,135 @@ def selected_digital_human_provider(engine: Optional[str]):
     return configured or "heygem-local", digital_human_provider
 
 
+def preset_assets_dir(name: str) -> Path:
+    configured = os.getenv("ORAL_VIDEO_AGENT_PRESET_ROOT")
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured).expanduser().resolve() / name)
+    root = project_root()
+    candidates.extend([root / name, root.parent / name])
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0] if candidates else root / name
+
+
+def clone_voice_templates_dir() -> Path:
+    return preset_assets_dir("clone")
+
+
+def bgm_templates_dir() -> Path:
+    return preset_assets_dir("bgm")
+
+
+def _template_sort_key(path: Path, order: Dict[str, int]) -> tuple[int, str]:
+    return (order.get(path.stem, len(order)), path.stem)
+
+
+def voice_reference_path(
+    voice_id: Optional[str],
+    voice_reference_asset_id: Optional[str] = None,
+) -> Optional[Path]:
+    if voice_id and voice_id.startswith("clone:"):
+        filename = voice_id.removeprefix("clone:")
+        candidate = clone_voice_templates_dir() / filename
+        if not candidate.exists() or candidate.suffix.lower() not in AUDIO_TEMPLATE_EXTS:
+            raise HTTPException(status_code=404, detail="克隆声音模板不存在")
+        return candidate
+    reference = custom_asset_path(voice_id, "voice_reference")
+    if reference is not None:
+        return reference
+    return custom_asset_id_path(voice_reference_asset_id, "voice_reference")
+
+
+def _safe_cache_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._") or "preview"
+
+
+def _write_builtin_voice_preview(path: Path, voice_id: str) -> None:
+    presets = {
+        "classic-female": 440.0,
+        "classic-male": 220.0,
+        "warm-narrator": 330.0,
+        "energetic-host": 520.0,
+    }
+    sample_rate = 16000
+    duration_seconds = 1.2
+    total_samples = int(sample_rate * duration_seconds)
+    frequency = presets.get(voice_id, 330.0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        for index in range(total_samples):
+            t = index / sample_rate
+            envelope = min(1.0, index / (sample_rate * 0.08))
+            envelope *= min(1.0, (total_samples - index) / (sample_rate * 0.12))
+            value = 0.22 * math.sin(2 * math.pi * frequency * t) * envelope
+            wav.writeframesraw(struct.pack("<h", int(value * 32767)))
+
+
+def resolve_voice_preview_audio(voice_id: Optional[str]) -> Path:
+    if not voice_id:
+        raise HTTPException(status_code=400, detail="请选择声音")
+    reference = voice_reference_path(voice_id)
+    if reference is not None:
+        if not reference.exists():
+            raise HTTPException(status_code=404, detail="声音文件不存在")
+        return reference
+    if any(voice.voice_id == voice_id for voice in BUILT_IN_VOICES):
+        output = storage_dir("voice_previews") / f"{_safe_cache_name(voice_id)}.wav"
+        if output.exists() and output.stat().st_size > 44:
+            return output
+        try:
+            voice_provider.synthesize("你好，这是一段声音试听。", voice_id, output)
+            if output.exists() and output.stat().st_size > 44:
+                return output
+        except Exception:
+            pass
+        _write_builtin_voice_preview(output, voice_id)
+        return output
+    raise HTTPException(status_code=404, detail="声音不存在")
+
+
+def ensure_voice_preview_wav(path: Path, voice_id: str) -> Path:
+    if path.suffix.lower() == ".wav":
+        return path
+    ffmpeg = _ffmpeg_executable()
+    if ffmpeg is None:
+        return path
+    try:
+        stamp = int(path.stat().st_mtime)
+    except OSError:
+        stamp = 0
+    output = storage_dir("voice_previews") / f"{_safe_cache_name(voice_id)}_{stamp}.wav"
+    if output.exists() and output.stat().st_size > 44:
+        return output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(path),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "44100",
+            str(output),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode == 0 and output.exists() and output.stat().st_size > 44:
+        return output
+    return path
+
+
 def digital_human_templates_dir() -> Path:
     if settings.digital_human_templates_dir:
         path = Path(settings.digital_human_templates_dir)
@@ -395,18 +545,223 @@ def digital_human_health():
     }
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _load_recent_usage() -> Dict[str, List[Dict[str, str]]]:
+    if not RECENT_USAGE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(RECENT_USAGE_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    usage: Dict[str, List[Dict[str, str]]] = {}
+    for kind in ("voice", "digital_human", "bgm"):
+        raw_items = data.get(kind, [])
+        if not isinstance(raw_items, list):
+            continue
+        usage[kind] = [
+            item
+            for item in raw_items
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and isinstance(item.get("used_at"), str)
+        ]
+    return usage
+
+
+def _save_recent_usage(usage: Dict[str, List[Dict[str, str]]]) -> None:
+    RECENT_USAGE_PATH.write_text(
+        json.dumps(usage, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _record_recent_usage(kind: str, item_id: Optional[str]) -> None:
+    if not item_id or not item_id.startswith("custom:"):
+        return
+    usage = _load_recent_usage()
+    current = [item for item in usage.get(kind, []) if item.get("id") != item_id]
+    current.insert(0, {"id": item_id, "used_at": _utc_now_iso()})
+    usage[kind] = current[:50]
+    _save_recent_usage(usage)
+
+
+def _remove_recent_usage(kind: str, item_id: Optional[str]) -> None:
+    if not item_id:
+        return
+    usage = _load_recent_usage()
+    current = usage.get(kind, [])
+    filtered = [item for item in current if item.get("id") != item_id]
+    if len(filtered) != len(current):
+        usage[kind] = filtered
+        _save_recent_usage(usage)
+
+
+def _fallback_usage_order(kind: str) -> Dict[str, str]:
+    values: Dict[str, str] = {}
+    for index, task in enumerate(repo.list()):
+        options = task.render_options
+        if options is None:
+            continue
+        if kind == "voice":
+            item_id = options.voice_id
+        elif kind == "digital_human":
+            item_id = options.digital_human_id
+        elif kind == "bgm":
+            item_id = options.bgm_id
+        else:
+            item_id = None
+        if item_id and item_id.startswith("custom:"):
+            values[item_id] = f"task-order:{index:08d}"
+    return values
+
+
+def _recent_custom_items(
+    kind: str,
+    items: List[VoiceProfile] | List[DigitalHumanProfile],
+) -> List[VoiceProfile] | List[DigitalHumanProfile]:
+    usage_by_id = {
+        item["id"]: item["used_at"]
+        for item in _load_recent_usage().get(kind, [])
+        if item.get("id")
+    }
+
+    def item_id(item: VoiceProfile | DigitalHumanProfile) -> str:
+        if isinstance(item, VoiceProfile):
+            return item.voice_id
+        return item.digital_human_id
+
+    deduped: Dict[str, VoiceProfile | DigitalHumanProfile] = {}
+    for item in items:
+        key = item_id(item)
+        if key in deduped:
+            continue
+        used_at = usage_by_id.get(key)
+        if used_at is None:
+            continue
+        item.last_used_at = used_at
+        deduped[key] = item
+
+    ordered = list(deduped.values())
+    ordered.sort(key=_custom_usage_sort_key, reverse=True)
+    result: List[VoiceProfile] | List[DigitalHumanProfile] = []
+    seen_names: set[str] = set()
+    for item in ordered:
+        name_key = item.name.strip().lower()
+        if name_key in seen_names:
+            continue
+        seen_names.add(name_key)
+        result.append(item)
+        if len(result) >= RECENT_USER_OPTION_LIMIT:
+            break
+    return result
+
+
+def _dedupe_recent_profiles(
+    items: List[VoiceProfile] | List[DigitalHumanProfile],
+) -> List[VoiceProfile] | List[DigitalHumanProfile]:
+    result: List[VoiceProfile] | List[DigitalHumanProfile] = []
+    seen_names: set[str] = set()
+    for item in items:
+        name_key = item.name.strip().lower()
+        if name_key in seen_names:
+            continue
+        seen_names.add(name_key)
+        result.append(item)
+        if len(result) >= RECENT_USER_OPTION_LIMIT:
+            break
+    return result
+
+
+def _custom_usage_sort_key(item: VoiceProfile | DigitalHumanProfile) -> tuple[int, float, str]:
+    value = item.last_used_at or ""
+    if value.startswith("task-order:"):
+        try:
+            return (1, float(value.removeprefix("task-order:")), "")
+        except ValueError:
+            return (1, 0.0, value)
+    try:
+        return (2, float(value), "")
+    except ValueError:
+        pass
+    if value:
+        return (3, 0.0, value)
+    return (0, 0.0, "")
+
+
+def _custom_usage_value(kind: str, item_id: str) -> Optional[str]:
+    usage_by_id = {
+        item["id"]: item["used_at"]
+        for item in _load_recent_usage().get(kind, [])
+        if item.get("id")
+    }
+    used_at = usage_by_id.get(item_id)
+    if used_at is not None:
+        return used_at
+    return None
+
+
+def _usage_sort_key(value: Optional[str]) -> tuple[int, float, str]:
+    if not value:
+        return (0, 0.0, "")
+    if value.startswith("task-order:"):
+        try:
+            return (1, float(value.removeprefix("task-order:")), "")
+        except ValueError:
+            return (1, 0.0, value)
+    try:
+        return (2, float(value), "")
+    except ValueError:
+        return (3, 0.0, value)
+
+
 @app.get("/api/voices", tags=["assets"])
 def list_voices():
     return build_voice_catalog()
 
 
+@app.get("/api/voices/preview", tags=["assets"])
+def preview_voice(voice_id: str):
+    path = resolve_voice_preview_audio(voice_id)
+    path = ensure_voice_preview_wav(path, voice_id)
+    _record_recent_usage("voice", voice_id)
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "audio/wav",
+    )
+
+
 def build_voice_catalog():
+    clone_templates = (
+        sorted(
+            (
+                path
+                for path in clone_voice_templates_dir().iterdir()
+                if path.is_file() and path.suffix.lower() in AUDIO_TEMPLATE_EXTS
+            ),
+            key=lambda path: _template_sort_key(path, VOICE_TEMPLATE_ORDER),
+        )
+        if clone_voice_templates_dir().exists()
+        else []
+    )
+    template_voices = [
+        VoiceProfile(
+            voice_id=f"clone:{path.name}",
+            name=path.stem,
+            description="系统克隆声音模板",
+            built_in=True,
+        )
+        for path in clone_templates
+    ]
     assets = [
         asset
         for asset in asset_store.list("voice_reference")
         if Path(asset.path).exists() and Path(asset.path).stat().st_size > 1024
     ]
-    assets.sort(key=lambda asset: Path(asset.path).stat().st_mtime, reverse=True)
     custom_voices = [
         VoiceProfile(
             voice_id=f"custom:{asset.asset_id}",
@@ -415,9 +770,15 @@ def build_voice_catalog():
             built_in=False,
             asset_id=asset.asset_id,
         )
-        for asset in assets[:12]
+        for asset in assets
     ]
-    return {"items": [*BUILT_IN_VOICES, *custom_voices]}
+    return {
+        "items": [
+            *template_voices,
+            *BUILT_IN_VOICES[: max(0, SYSTEM_OPTION_LIMIT - len(template_voices))],
+            *_recent_custom_items("voice", custom_voices),
+        ]
+    }
 
 
 @app.post("/api/voices/upload", tags=["assets"])
@@ -432,16 +793,44 @@ def upload_voice_reference(file: UploadFile = File(...)):
         # Keep upload permissive for files that need manual inspection; preview
         # and synthesis will report a clear decode error if the audio is invalid.
         pass
+    voice_id = f"custom:{asset.asset_id}"
+    _record_recent_usage("voice", voice_id)
     return {
         "asset": asset,
         "voice": VoiceProfile(
-            voice_id=f"custom:{asset.asset_id}",
+            voice_id=voice_id,
             name=Path(asset.filename).stem,
             description="用户上传的授权声音参考",
             built_in=False,
             asset_id=asset.asset_id,
         ),
     }
+
+
+@app.post("/api/pip/upload", tags=["assets"])
+def upload_pip_asset(file: UploadFile = File(...)):
+    try:
+        asset = save_upload(file, "pip", "pip")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"asset": asset}
+
+
+@app.get("/api/pip/{asset_id}/preview", tags=["assets"])
+def preview_pip_asset(asset_id: str):
+    try:
+        asset = asset_store.get(asset_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="画中画素材不存在")
+    if asset.kind != "pip":
+        raise HTTPException(status_code=400, detail="画中画素材类型不匹配")
+    path = Path(asset.path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="画中画素材文件不存在")
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+    )
 
 
 @app.get("/api/digital-humans", tags=["assets"])
@@ -464,17 +853,103 @@ def build_digital_human_catalog():
         )
         for path in templates
     ]
-    custom_humans = [
-        DigitalHumanProfile(
+    for profile, path in zip(built_in_templates, templates):
+        profile.last_used_at = datetime.fromtimestamp(
+            path.stat().st_mtime, timezone.utc
+        ).isoformat()
+        try:
+            digital_human_thumbnail_path(profile.digital_human_id)
+        except Exception:
+            pass
+        profile.thumbnail_url = digital_human_thumbnail_url(
+            profile.digital_human_id,
+            profile.last_used_at,
+        )
+    custom_humans = []
+    for asset in asset_store.list("digital_human_reference"):
+        path = Path(asset.path)
+        if not path.exists() or path.stat().st_size <= MIN_DIGITAL_HUMAN_REFERENCE_BYTES:
+            continue
+        digital_human_id = f"custom:{asset.asset_id}"
+        profile = DigitalHumanProfile(
             digital_human_id=f"custom:{asset.asset_id}",
             name=Path(asset.filename).stem,
             description="用户上传的真人出镜数字人参考视频",
             built_in=False,
             asset_id=asset.asset_id,
         )
-        for asset in asset_store.list("digital_human_reference")
-    ]
-    return {"items": [*built_in_templates, *custom_humans]}
+        profile.last_used_at = _custom_usage_value("digital_human", digital_human_id)
+        if profile.last_used_at is None:
+            profile.last_used_at = datetime.fromtimestamp(
+                path.stat().st_mtime, timezone.utc
+            ).isoformat()
+        try:
+            digital_human_thumbnail_path(digital_human_id)
+        except Exception:
+            pass
+        profile.thumbnail_url = digital_human_thumbnail_url(
+            digital_human_id,
+            profile.last_used_at,
+        )
+        custom_humans.append(profile)
+    custom_humans.sort(key=_custom_usage_sort_key, reverse=True)
+    return {
+        "items": [
+            *_dedupe_recent_profiles(custom_humans),
+        ]
+    }
+
+
+def _safe_thumbnail_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "digital_human"
+
+
+def digital_human_thumbnail_url(
+    digital_human_id: str,
+    version: Optional[str] = None,
+) -> str:
+    query = {"digital_human_id": digital_human_id}
+    if version:
+        query["v"] = version
+    return f"/api/digital-humans/thumbnail?{urlencode(query)}"
+
+
+def digital_human_thumbnail_path(digital_human_id: str) -> Path:
+    reference = digital_human_reference_path(digital_human_id)
+    if reference is None:
+        raise HTTPException(status_code=400, detail="请选择数字人")
+    output = storage_dir("thumbnails", "digital_humans") / f"{_safe_thumbnail_name(digital_human_id)}.png"
+    if output.exists() and output.stat().st_mtime >= reference.stat().st_mtime:
+        return output
+    try:
+        extract_first_frame_cover_png(reference, output)
+    except Exception:
+        generate_cover_png(reference.stem, "", output)
+    return output
+
+
+@app.get("/api/digital-humans/thumbnail", tags=["assets"])
+def digital_human_thumbnail(digital_human_id: str):
+    if not digital_human_id:
+        raise HTTPException(status_code=400, detail="请选择数字人")
+    return FileResponse(
+        digital_human_thumbnail_path(digital_human_id),
+        media_type="image/png",
+    )
+
+
+@app.get("/api/digital-humans/reference", tags=["assets"])
+def download_digital_human_reference(digital_human_id: str):
+    if not digital_human_id:
+        raise HTTPException(status_code=400, detail="请选择数字人")
+    reference = digital_human_reference_path(digital_human_id)
+    if reference is None or not reference.exists():
+        raise HTTPException(status_code=404, detail="数字人视频不存在")
+    return FileResponse(
+        reference,
+        filename=reference.name,
+        media_type=mimetypes.guess_type(reference.name)[0] or "video/mp4",
+    )
 
 
 @app.post("/api/digital-humans/upload", tags=["assets"])
@@ -483,15 +958,25 @@ def upload_digital_human_reference(file: UploadFile = File(...)):
         asset = save_upload(file, "digital_humans", "digital_human_reference")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    digital_human_id = f"custom:{asset.asset_id}"
+    _record_recent_usage("digital_human", digital_human_id)
+    used_at = _utc_now_iso()
+    try:
+        digital_human_thumbnail_path(digital_human_id)
+    except Exception:
+        pass
+    profile = DigitalHumanProfile(
+        digital_human_id=digital_human_id,
+        name=Path(asset.filename).stem,
+        description="用户上传的真人出镜数字人参考视频",
+        built_in=False,
+        asset_id=asset.asset_id,
+        last_used_at=used_at,
+        thumbnail_url=digital_human_thumbnail_url(digital_human_id, used_at),
+    )
     return {
         "asset": asset,
-        "digital_human": DigitalHumanProfile(
-            digital_human_id=f"custom:{asset.asset_id}",
-            name=Path(asset.filename).stem,
-            description="用户上传的真人出镜数字人参考视频",
-            built_in=False,
-            asset_id=asset.asset_id,
-        ),
+        "digital_human": profile,
     }
 
 
@@ -508,6 +993,8 @@ def digital_human_atlas_diagnosis(digital_human_id: str):
     if not reference.exists():
         raise HTTPException(status_code=404, detail="数字人参考视频文件不存在")
     try:
+        from tools.diagnose_mouth_naturalness import analyze_atlas_video
+
         return analyze_atlas_video(reference, sample_stride=2, max_frames=240)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"口型素材诊断失败：{exc}")
@@ -519,17 +1006,65 @@ def list_bgm():
 
 
 def build_bgm_catalog():
-    custom_bgm = [
-        BgmTrack(
-            bgm_id=f"custom:{asset.asset_id}",
-            name=Path(asset.filename).stem,
-            mood="custom",
-            built_in=False,
-            asset_id=asset.asset_id,
+    template_files = (
+        sorted(
+            (
+                path
+                for path in bgm_templates_dir().iterdir()
+                if path.is_file() and path.suffix.lower() in AUDIO_TEMPLATE_EXTS
+            ),
+            key=lambda path: _template_sort_key(path, BGM_TEMPLATE_ORDER),
         )
-        for asset in asset_store.list("bgm")
+        if bgm_templates_dir().exists()
+        else []
+    )
+    template_bgm = [
+        BgmTrack(
+            bgm_id=f"template:{path.name}",
+            name=path.stem,
+            mood="template",
+            built_in=True,
+        )
+        for path in template_files
     ]
-    return {"items": [*BUILT_IN_BGM, *custom_bgm]}
+    bgm_assets = [
+        asset
+        for asset in asset_store.list("bgm")
+        if Path(asset.path).exists()
+    ]
+    custom_candidates = []
+    for asset in bgm_assets:
+        bgm_id = f"custom:{asset.asset_id}"
+        used_at = _custom_usage_value("bgm", bgm_id)
+        if used_at is None:
+            continue
+        name = Path(asset.filename).stem
+        custom_candidates.append(
+            (
+                _usage_sort_key(used_at),
+                BgmTrack(
+                    bgm_id=bgm_id,
+                    name=name,
+                    mood="custom",
+                    built_in=False,
+                    asset_id=asset.asset_id,
+                ),
+            )
+        )
+    custom_candidates.sort(key=lambda item: item[0], reverse=True)
+    custom_bgm = []
+    seen_custom_names: set[str] = set()
+    for _, track in custom_candidates:
+        name = track.name
+        name_key = name.strip().lower()
+        if name_key in seen_custom_names:
+            continue
+        seen_custom_names.add(name_key)
+        custom_bgm.append(track)
+        if len(custom_bgm) >= RECENT_USER_OPTION_LIMIT:
+            break
+    built_in_fallback = [] if template_bgm else BUILT_IN_BGM
+    return {"items": [*template_bgm, *built_in_fallback, *custom_bgm]}
 
 
 def resolve_bgm_audio(bgm_id: Optional[str]) -> Optional[Path]:
@@ -537,12 +1072,47 @@ def resolve_bgm_audio(bgm_id: Optional[str]) -> Optional[Path]:
         return None
     if bgm_id in {"none", "off", "disabled"}:
         return None
+    if bgm_id.startswith("template:"):
+        filename = bgm_id.removeprefix("template:")
+        candidate = bgm_templates_dir() / filename
+        if candidate.exists() and candidate.suffix.lower() in AUDIO_TEMPLATE_EXTS:
+            return candidate
+        raise HTTPException(status_code=404, detail="BGM 模板不存在")
     custom = custom_asset_path(bgm_id, "bgm")
     if custom is not None:
         return custom
     if any(track.bgm_id == bgm_id for track in BUILT_IN_BGM):
         return ensure_builtin_bgm_wav(bgm_id)
     return None
+
+
+def resolve_pip_asset(options: RenderOptions) -> Optional[Path]:
+    if not options.pip_enabled:
+        return None
+    if not options.pip_asset_id:
+        raise HTTPException(status_code=400, detail="请先上传画中画素材")
+    try:
+        asset = asset_store.get(options.pip_asset_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="画中画素材不存在")
+    if asset.kind != "pip":
+        raise HTTPException(status_code=400, detail="画中画素材类型不匹配")
+    path = Path(asset.path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="画中画素材文件不存在")
+    return path
+
+
+@app.get("/api/bgm/preview", tags=["assets"])
+def preview_bgm(bgm_id: str):
+    path = resolve_bgm_audio(bgm_id)
+    if path is None:
+        raise HTTPException(status_code=400, detail="请选择背景音乐")
+    _record_recent_usage("bgm", bgm_id)
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+    )
 
 
 def ensure_builtin_bgm_wav(bgm_id: str) -> Path:
@@ -587,10 +1157,12 @@ def upload_bgm(file: UploadFile = File(...)):
         asset = save_upload(file, "bgm", "bgm")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    bgm_id = f"custom:{asset.asset_id}"
+    _record_recent_usage("bgm", bgm_id)
     return {
         "asset": asset,
         "bgm": BgmTrack(
-            bgm_id=f"custom:{asset.asset_id}",
+            bgm_id=bgm_id,
             name=Path(asset.filename).stem,
             mood="custom",
             built_in=False,
@@ -630,6 +1202,17 @@ def delete_asset(asset_id: str):
     except KeyError:
         raise HTTPException(status_code=404, detail="素材不存在")
     Path(asset.path).unlink(missing_ok=True)
+    if asset.kind == "digital_human_reference":
+        digital_human_id = f"custom:{asset.asset_id}"
+        _remove_recent_usage("digital_human", digital_human_id)
+        thumbnail = storage_dir("thumbnails", "digital_humans") / (
+            f"{_safe_thumbnail_name(digital_human_id)}.png"
+        )
+        thumbnail.unlink(missing_ok=True)
+    elif asset.kind == "voice_reference":
+        _remove_recent_usage("voice", f"custom:{asset.asset_id}")
+    elif asset.kind == "bgm":
+        _remove_recent_usage("bgm", f"custom:{asset.asset_id}")
     return {"ok": True}
 
 
@@ -696,32 +1279,109 @@ def task_mouth_quality_report(include_missing: bool = True):
     return build_mouth_quality_report(repo.list(), include_missing=include_missing)
 
 
+def _normalized_share_key(share_text: Optional[str]) -> str:
+    if not share_text:
+        return ""
+    return (extract_first_url(share_text) or share_text).strip()
+
+
+def _is_placeholder_transcript(text: str) -> bool:
+    cleaned = text.strip()
+    return "口播内容示例" in cleaned and "来源" in cleaned
+
+
+def _find_cached_link_task(share_text: str) -> Optional[OralVideoTask]:
+    target = _normalized_share_key(share_text)
+    if not target:
+        return None
+    for existing in reversed(repo.list()):
+        if _normalized_share_key(existing.douyin_url) != target:
+            continue
+        if existing.status not in {
+            TaskStatus.transcribed,
+            TaskStatus.rewritten,
+            TaskStatus.completed,
+        }:
+            continue
+        if not existing.original_script.strip() or not existing.source_video:
+            continue
+        if _is_placeholder_transcript(existing.original_script):
+            continue
+        if not Path(existing.source_video.path).exists():
+            continue
+        return existing
+    return None
+
+
+def _mark_stage(task: OralVideoTask, key: str, status: str) -> None:
+    if status == "running":
+        start_progress(task, key)
+    elif status == "completed":
+        complete_progress(task, key)
+    elif status == "failed":
+        fail_progress(task, key)
+    repo.put(task)
+
+
 @app.post("/api/tasks", tags=["tasks"])
 def create_task(req: CreateTaskRequest) -> OralVideoTask:
     task = OralVideoTask(title=req.title, douyin_url=req.douyin_url)
     repo.put(task)
 
     if req.douyin_url:
+        cached_task = _find_cached_link_task(req.douyin_url)
+        if cached_task:
+            task.source_video = cached_task.source_video.model_copy(deep=True)
+            task.original_script = cached_task.original_script
+            task.status = TaskStatus.transcribed
+            complete_progress(
+                task, "resolve_link", "download_video", "transcribe", "extract"
+            )
+            repo.put(task)
+            return task
+
         # Run import + transcribe in a background thread so the HTTP response
         # returns immediately. Client should poll GET /api/tasks/{task_id}.
         def _run():
+            active_stage = "extract"
+
+            def _on_import_stage(key: str, status: str) -> None:
+                nonlocal active_stage
+                if status == "running":
+                    active_stage = key
+                _mark_stage(task, key, status)
+
             start_progress(task, "extract")
             repo.put(task)
             try:
-                source_video = video_importer.import_from_share_text(req.douyin_url)
+                source_video = video_importer.import_from_share_text(
+                    req.douyin_url, on_stage=_on_import_stage
+                )
             except VideoImportError as exc:
+                fail_progress(task, active_stage)
+                fail_progress(task, "extract")
                 task.status = TaskStatus.failed
                 task.error_message = str(exc)
                 repo.put(task)
                 return
             task.source_video = source_video
             task.status = TaskStatus.imported
+            active_stage = "transcribe"
+            start_progress(task, "transcribe")
             repo.put(task)
-            task.original_script = asr_provider.transcribe(
-                Path(source_video.path), source_video.filename
-            )
+            try:
+                task.original_script = asr_provider.transcribe(
+                    Path(source_video.path), source_video.filename
+                )
+            except Exception as exc:
+                fail_progress(task, "transcribe")
+                fail_progress(task, "extract")
+                task.status = TaskStatus.failed
+                task.error_message = f"视频文案识别失败：{exc}"
+                repo.put(task)
+                return
             task.status = TaskStatus.transcribed
-            complete_progress(task, "extract")
+            complete_progress(task, "transcribe", "extract")
             repo.put(task)
 
         threading.Thread(target=_run, daemon=True).start()
@@ -845,6 +1505,56 @@ def generate_task_publish_content(task_id: str) -> PublishContentSuggestion:
     return suggestion
 
 
+def _generate_task_cover_file(task: OralVideoTask, script: str, cover_path: Path) -> Path:
+    frame_path: Path | None = None
+    if task.output_video_path and Path(task.output_video_path).exists():
+        frame_path = cover_path.with_name(f"{cover_path.stem}_frame.png")
+        try:
+            extract_first_frame_cover_png(Path(task.output_video_path), frame_path)
+        except Exception:
+            frame_path = None
+    try:
+        return generate_cover_png(
+            task.video_title or task.title or "",
+            script,
+            cover_path,
+            background_image_path=frame_path,
+        )
+    finally:
+        if frame_path is not None:
+            frame_path.unlink(missing_ok=True)
+
+
+@app.post("/api/covers/generate", tags=["tasks"])
+def generate_standalone_cover(payload: dict) -> Dict[str, str]:
+    title = str(payload.get("title") or "").strip()
+    script = str(payload.get("script") or "").strip()
+    background = str(payload.get("background_path") or "").strip()
+    if not title and not script:
+        raise HTTPException(status_code=400, detail="没有可生成封面的标题或文案")
+    cover_path = storage_dir("covers") / f"{uuid4()}.png"
+    frame_path: Path | None = None
+    background_path: Path | None = None
+    if background:
+        candidate = Path(background)
+        if candidate.exists():
+            if candidate.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
+                frame_path = cover_path.with_name(f"{cover_path.stem}_frame.png")
+                try:
+                    extract_first_frame_cover_png(candidate, frame_path)
+                    background_path = frame_path
+                except Exception:
+                    background_path = None
+            elif candidate.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                background_path = candidate
+    try:
+        generate_cover_png(title, script, cover_path, background_image_path=background_path)
+    finally:
+        if frame_path is not None:
+            frame_path.unlink(missing_ok=True)
+    return {"cover_path": str(cover_path)}
+
+
 @app.post("/api/tasks/{task_id}/cover", tags=["tasks"])
 def generate_task_cover(task_id: str) -> OralVideoTask:
     try:
@@ -860,14 +1570,29 @@ def generate_task_cover(task_id: str) -> OralVideoTask:
         task.title = task.video_title
         complete_progress(task, "title")
     cover_path = storage_dir("covers") / f"{task_id}.png"
-    if task.output_video_path and Path(task.output_video_path).exists():
-        try:
-            extract_first_frame_cover_png(Path(task.output_video_path), cover_path)
-        except Exception:
-            generate_cover_png(task.video_title, script, cover_path)
-    else:
-        generate_cover_png(task.video_title, script, cover_path)
+    _generate_task_cover_file(task, script, cover_path)
     task.cover_path = str(cover_path)
+    complete_progress(task, "cover")
+    return repo.put(task)
+
+
+@app.post("/api/tasks/{task_id}/cover/upload", tags=["tasks"])
+def upload_task_cover(task_id: str, file: UploadFile = File(...)) -> OralVideoTask:
+    try:
+        task = repo.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    try:
+        asset = save_upload(file, "covers", "cover")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    start_progress(task, "cover")
+    task.cover_path = str(Path(asset.path))
+    if not task.video_title:
+        script = task.rewritten_script or task.original_script
+        if script:
+            task.video_title = task.title or generate_title(script)
+            task.title = task.video_title
     complete_progress(task, "cover")
     return repo.put(task)
 
@@ -900,11 +1625,13 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     selected_engine, active_digital_human_provider = selected_digital_human_provider(
         options.digital_human_engine
     )
-    voice_ref = custom_asset_path(options.voice_id, "voice_reference")
-    if voice_ref is None:
-        voice_ref = custom_asset_id_path(options.voice_reference_asset_id, "voice_reference")
+    voice_ref = voice_reference_path(options.voice_id, options.voice_reference_asset_id)
     bgm_audio = resolve_bgm_audio(options.bgm_id)
+    pip_asset = resolve_pip_asset(options)
     digital_human_video = digital_human_reference_path(options.digital_human_id)
+    _record_recent_usage("voice", options.voice_id)
+    _record_recent_usage("digital_human", options.digital_human_id)
+    _record_recent_usage("bgm", options.bgm_id)
     source_video = digital_human_video or (Path(task.source_video.path) if task.source_video else None)
     cancel_event = threading.Event()
     render_cancel_events[task_id] = cancel_event
@@ -926,6 +1653,24 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
 
         audio_duration = media_duration_seconds(audio_path)
+        if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
+            range_text = (options.pip_trigger_text or "").strip()
+            time_range = subtitle_time_range_for_text(
+                script,
+                options.subtitle_style,
+                range_text,
+                duration_seconds=audio_duration,
+            )
+            if time_range is None:
+                raise RuntimeError("没有在文案字幕中找到画中画触发句，请换一句更完整的话或改用按秒显示。")
+            options = options.model_copy(
+                update={
+                    "pip_start_seconds": time_range[0],
+                    "pip_end_seconds": time_range[1],
+                }
+            )
+            task.render_options = options
+            repo.put(task)
         digital_path = storage_dir("outputs") / f"{task_id}_digital.mp4"
         prepared_reference_video = source_video
         if source_video is not None:
@@ -937,10 +1682,15 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
             )
             ensure_not_cancelled(task, cancel_event)
 
-        subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
+        subtitle_path: Optional[Path] = None
         start_progress(task, "subtitle")
         repo.put(task)
-        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=audio_duration)
+        if options.subtitle_enabled:
+            subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
+            generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=audio_duration)
+            task.subtitle_path = str(subtitle_path)
+        else:
+            task.subtitle_path = None
         ensure_not_cancelled(task, cancel_event)
         complete_progress(task, "subtitle")
         repo.put(task)
@@ -962,21 +1712,25 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         ensure_not_cancelled(task, cancel_event)
         task.mouth_quality = collect_mouth_quality_signals(digital_path)
         repo.put(task)
+        render_kwargs = {
+            "source_video": digital_path,
+            "voice_audio": audio_path,
+            "subtitle_file": subtitle_path,
+            "bgm_audio": bgm_audio,
+            "cancel_event": cancel_event,
+        }
+        if pip_asset is not None:
+            render_kwargs["pip_asset"] = pip_asset
         rendered_path = renderer.render(
             task_id,
             script,
             options,
             output_path,
-            source_video=digital_path,
-            voice_audio=audio_path,
-            subtitle_file=subtitle_path,
-            bgm_audio=bgm_audio,
-            cancel_event=cancel_event,
+            **render_kwargs,
         )
 
         ensure_not_cancelled(task, cancel_event)
         complete_progress(task, "digital_human")
-        task.subtitle_path = str(subtitle_path)
         task.output_video_path = str(rendered_path)
         repo.put(task)
         if not is_playable_mp4(rendered_path):
@@ -993,10 +1747,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         start_progress(task, "cover")
         repo.put(task)
         cover_path = storage_dir("covers") / f"{task_id}.png"
-        try:
-            extract_first_frame_cover_png(rendered_path, cover_path)
-        except Exception:
-            generate_cover_png(task.video_title, script, cover_path)
+        _generate_task_cover_file(task, script, cover_path)
         task.cover_path = str(cover_path)
         complete_progress(task, "cover")
         repo.put(task)
@@ -1050,18 +1801,62 @@ def clone_task_voice(task_id: str, options: RenderOptions) -> OralVideoTask:
     if not script:
         raise HTTPException(status_code=400, detail="没有可合成的文案")
 
-    voice_ref = custom_asset_path(options.voice_id, "voice_reference")
-    if voice_ref is None:
-        voice_ref = custom_asset_id_path(options.voice_reference_asset_id, "voice_reference")
+    voice_ref = voice_reference_path(options.voice_id, options.voice_reference_asset_id)
     if voice_ref is None:
         raise HTTPException(status_code=400, detail="声音克隆需要先上传并选择参考音色")
 
+    _record_recent_usage("voice", options.voice_id)
     audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
     start_progress(task, "voice")
-    voice_provider.synthesize(script, options.voice_id, audio_path, reference_audio=voice_ref)
-    task.extracted_audio_path = str(audio_path)
-    complete_progress(task, "voice")
+    try:
+        voice_provider.synthesize(script, options.voice_id, audio_path, reference_audio=voice_ref)
+        task.extracted_audio_path = str(audio_path)
+        complete_progress(task, "voice")
+        task.render_options = options
+        return repo.put(task)
+    except Exception as exc:
+        fail_progress(task, "voice")
+        task.error_message = str(exc)
+        repo.put(task)
+        detail = str(exc)
+        lower_detail = detail.lower()
+        status_code = 503 if (
+            "connection" in lower_detail
+            or "连接" in detail
+            or "10061" in detail
+            or "refused" in lower_detail
+        ) else 500
+        if status_code == 503:
+            detail = (
+                "本地声音克隆服务未启动。云端生成会在云端克隆声音，可直接点击“生成视频”；"
+                "如需本地生成，请先启动本机声音服务。"
+            )
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@app.post("/api/tasks/{task_id}/subtitles", tags=["tasks"])
+def generate_task_subtitles(task_id: str, options: RenderOptions) -> OralVideoTask:
+    try:
+        task = repo.get(task_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    script = options.script or task.rewritten_script or task.original_script
+    if not script:
+        raise HTTPException(status_code=400, detail="没有可生成的字幕文案")
+
     task.render_options = options
+    start_progress(task, "subtitle")
+    if options.subtitle_enabled:
+        subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
+        duration = media_duration_seconds(task.extracted_audio_path)
+        if duration is None and task.source_video:
+            duration = media_duration_seconds(task.source_video.path)
+        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        task.subtitle_path = str(subtitle_path)
+    else:
+        task.subtitle_path = None
+    complete_progress(task, "subtitle")
     return repo.put(task)
 
 
@@ -1125,3 +1920,62 @@ def download_task(task_id: str):
     if not task.output_video_path or not is_playable_mp4(task.output_video_path):
         raise HTTPException(status_code=404, detail="成品还未生成")
     return FileResponse(task.output_video_path, filename=f"{task_id}.mp4", media_type="video/mp4")
+
+
+@app.post("/api/videos/postprocess", tags=["tasks"])
+def postprocess_video(request: PostprocessVideoRequest):
+    source_path = Path(request.source_video_path).expanduser()
+    if not source_path.exists() or not source_path.is_file():
+        raise HTTPException(status_code=404, detail="待合成视频不存在")
+    if not is_playable_mp4(source_path):
+        raise HTTPException(status_code=400, detail="待合成视频不是可播放的 MP4")
+
+    options = request.options
+    script = (options.script or "").strip()
+    bgm_audio = resolve_bgm_audio(options.bgm_id)
+    pip_asset = resolve_pip_asset(options)
+    duration = media_duration_seconds(source_path)
+
+    if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
+        range_text = (options.pip_trigger_text or "").strip()
+        time_range = subtitle_time_range_for_text(
+            script,
+            options.subtitle_style,
+            range_text,
+            duration_seconds=duration,
+        )
+        if time_range is None:
+            raise HTTPException(status_code=400, detail="没有在文案字幕中找到画中画触发句，请换一句更完整的话或改用按秒显示。")
+        options = options.model_copy(
+            update={
+                "pip_start_seconds": time_range[0],
+                "pip_end_seconds": time_range[1],
+            }
+        )
+
+    postprocess_id = f"postprocess-{uuid4()}"
+    subtitle_path: Path | None = None
+    if options.subtitle_enabled:
+        subtitle_path = storage_dir("subtitles") / f"{postprocess_id}.srt"
+        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+
+    output_path = storage_dir("outputs") / f"{postprocess_id}.mp4"
+    try:
+        rendered_path = renderer.postprocess(
+            source_path,
+            subtitle_path,
+            options,
+            output_path,
+            bgm_audio=bgm_audio,
+            pip_asset=pip_asset,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=500, detail=f"本地后处理合成失败：{exc.returncode}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"本地后处理合成失败：{exc}") from exc
+
+    return {
+        "ready": is_playable_mp4(rendered_path),
+        "path": str(rendered_path),
+        "size_bytes": rendered_path.stat().st_size if rendered_path.exists() else 0,
+    }

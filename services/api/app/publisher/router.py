@@ -1,10 +1,12 @@
 import threading
 import threading
+import shutil
 from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, HTTPException
 
+from ..models import storage_dir
 from ..pipeline.renderer import is_playable_mp4
 from ..repository import repo
 from .models import (
@@ -82,6 +84,18 @@ def list_publish_jobs() -> PublishJobListResponse:
     return PublishJobListResponse(items=publisher_store.list_jobs())
 
 
+@router.post("/publisher/reset-local-state")
+def reset_publisher_local_state():
+    publisher_store.clear_all()
+    publisher_root = storage_dir("publisher")
+    for child in ("profiles", "states", "screenshots"):
+        path = publisher_root / child
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        path.mkdir(parents=True, exist_ok=True)
+    return {"ok": True}
+
+
 @router.get("/publish-jobs/{job_id}")
 def get_publish_job(job_id: str) -> PublishJob:
     try:
@@ -97,9 +111,10 @@ def create_publish_jobs(task_id: str, req: PublishRequestV2) -> PublishJobListRe
     except KeyError:
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    if not task.output_video_path or not Path(task.output_video_path).exists():
+    video_path = _resolve_publish_video_path(task.output_video_path, req.video_path)
+    if not video_path:
         raise HTTPException(status_code=409, detail="请先生成可发布的视频")
-    if not is_playable_mp4(task.output_video_path):
+    if not is_playable_mp4(video_path):
         raise HTTPException(status_code=409, detail="成品视频不是可发布的 MP4")
 
     accounts = _select_accounts(req)
@@ -114,12 +129,12 @@ def create_publish_jobs(task_id: str, req: PublishRequestV2) -> PublishJobListRe
             task_id=task_id,
             platform=account.platform,
             account_id=account.account_id,
-            video_path=task.output_video_path,
+            video_path=video_path,
             title=title,
             body=body,
             topics=[topic.strip().lstrip("#") for topic in req.topics if topic.strip()],
             publish_mode=req.publish_mode,
-            cover_path=task.cover_path,
+            cover_path=req.cover_path or task.cover_path,
             scheduled_at=req.scheduled_at,
         )
         publisher_store.put_job(job)
@@ -132,6 +147,17 @@ def create_publish_jobs(task_id: str, req: PublishRequestV2) -> PublishJobListRe
     }
     repo.put(task)
     return PublishJobListResponse(items=jobs)
+
+
+def _resolve_publish_video_path(
+    task_video_path: str | None,
+    request_video_path: str | None,
+) -> str | None:
+    for candidate in (request_video_path, task_video_path):
+        clean = (candidate or "").strip()
+        if clean and Path(clean).exists():
+            return clean
+    return None
 
 
 def _run_publish_job(job_id: str) -> None:

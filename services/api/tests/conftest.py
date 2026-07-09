@@ -29,6 +29,7 @@ _force_env("PIP_CACHE_DIR", CACHE_ROOT / "pip")
 _force_env("PLAYWRIGHT_BROWSERS_PATH", CACHE_ROOT / "ms-playwright")
 _force_env("NUMBA_CACHE_DIR", CACHE_ROOT / "numba")
 _force_env("MPLCONFIGDIR", CACHE_ROOT / "matplotlib")
+_force_env("RECENT_USAGE_PATH", TEST_TEMP_ROOT / "recent_asset_usage.json")
 
 _force_env("ASR_PROVIDER", "placeholder")
 _force_env("REWRITE_PROVIDER", "placeholder")

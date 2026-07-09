@@ -4,8 +4,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from the api service root (two levels up from this file)
-load_dotenv(Path(__file__).parent.parent / ".env")
+# Load .env from the packaged app home first, then fall back to the api service root.
+_packaged_home = os.getenv("ORAL_VIDEO_AGENT_HOME")
+if _packaged_home:
+    load_dotenv(Path(_packaged_home) / ".env", override=True, encoding="utf-8-sig")
+load_dotenv(Path(__file__).parent.parent / ".env", encoding="utf-8-sig")
 
 
 @dataclass(frozen=True)

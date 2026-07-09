@@ -13,12 +13,16 @@ ALLOWED_SUFFIXES = {
     "voice_reference": {".wav", ".mp3", ".m4a", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm"},
     "digital_human_reference": {".mp4", ".mov", ".mkv", ".webm"},
     "bgm": {".wav", ".mp3", ".m4a", ".aac", ".flac"},
+    "pip": {".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".mkv", ".webm"},
+    "cover": {".png", ".jpg", ".jpeg", ".webp"},
 }
 MAX_UPLOAD_BYTES = {
     "source_video": 500 * 1024 * 1024,
     "voice_reference": 500 * 1024 * 1024,
     "digital_human_reference": 500 * 1024 * 1024,
     "bgm": 100 * 1024 * 1024,
+    "pip": 500 * 1024 * 1024,
+    "cover": 20 * 1024 * 1024,
 }
 
 

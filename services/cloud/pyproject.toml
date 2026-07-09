@@ -1,0 +1,27 @@
+[project]
+name = "oral-video-agent-cloud"
+version = "0.1.0"
+description = "Cloud control center for oral-video-agent licensing, queueing, and AutoDL worker dispatch"
+requires-python = ">=3.11"
+dependencies = [
+    "cos-python-sdk-v5>=1.9.37",
+    "fastapi==0.115.6",
+    "psycopg[binary]>=3.2.0",
+    "pydantic==2.10.4",
+    "python-dotenv>=1.2.2",
+    "redis>=5.2.0",
+    "uvicorn[standard]==0.32.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.5",
+    "httpx==0.28.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

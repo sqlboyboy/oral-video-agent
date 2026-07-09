@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..models import storage_dir
 
@@ -52,6 +52,13 @@ class PublisherAccount(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
     error_message: Optional[str] = None
 
+    @field_validator("nickname", mode="before")
+    @classmethod
+    def normalize_nickname(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return ""
+
 
 class PublishJob(BaseModel):
     job_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -79,6 +86,13 @@ class CreatePublisherAccountRequest(BaseModel):
     nickname: str = ""
     provider: str = "rpa"
 
+    @field_validator("nickname", mode="before")
+    @classmethod
+    def normalize_nickname(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        return ""
+
 
 class LoginPublisherAccountRequest(BaseModel):
     timeout_seconds: int = Field(default=300, ge=30, le=1800)
@@ -91,6 +105,8 @@ class PublishRequestV2(BaseModel):
     body: str = ""
     topics: List[str] = Field(default_factory=list)
     publish_mode: str = "direct"
+    video_path: Optional[str] = None
+    cover_path: Optional[str] = None
     scheduled_at: Optional[datetime] = None
 
 

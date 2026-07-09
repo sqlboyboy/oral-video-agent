@@ -6,6 +6,10 @@ import httpx
 
 from ..models import RewriteRequest
 from ..settings import Settings
+from ..text_normalization import to_simplified_chinese
+
+
+MAX_REWRITE_CHARS = 300
 
 
 class ScriptRewriteProvider(Protocol):
@@ -18,6 +22,7 @@ _OUTPUT_PUNCTUATION_PATTERN = re.compile(r"[，,。！？!?；;：:、\"“”'�
 
 
 def _normalize_for_similarity(text: str) -> str:
+    text = to_simplified_chinese(text)
     return _PUNCTUATION_PATTERN.sub("", text).lower()
 
 
@@ -35,6 +40,7 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _format_spoken_lines(text: str, max_line_chars: int = 28) -> str:
+    text = to_simplified_chinese(text)
     cleaned = re.sub(r"\s+", "", text.strip())
     if not cleaned:
         return ""
@@ -87,13 +93,13 @@ def _pick_highlights(original_script: str, limit: int = 3) -> list[str]:
 
 def _target_length(original_script: str) -> str:
     length = len(original_script.strip())
-    low = max(10, int(length * 0.75))
-    high = max(low + 8, int(length * 1.25))
+    high = min(MAX_REWRITE_CHARS, max(20, int(length * 1.25)))
+    low = min(high, max(10, int(length * 0.75)))
     return f"{low}-{high} 字"
 
 
 def _light_paraphrase(text: str) -> str:
-    stripped = text.strip()
+    stripped = to_simplified_chinese(text).strip()
     if "第一条视频" in stripped and "关注" in stripped:
         return (
             "Hello，大家好。今天总算鼓足勇气拍了第一条视频，"
@@ -132,7 +138,12 @@ def _ensure_rewritten_distance(original_script: str, rewritten_script: str) -> s
     return _format_spoken_lines(rewritten_script)
 
 
+def _finalize_rewrite(original_script: str, rewritten_script: str) -> str:
+    return _ensure_rewritten_distance(original_script, rewritten_script)
+
+
 def build_rewrite_prompt(original_script: str, req: RewriteRequest) -> str:
+    original_script = to_simplified_chinese(original_script)
     product = req.product_info or "不额外添加产品信息"
     audience = req.target_audience or "不额外指定人群"
     duration = (
@@ -148,20 +159,21 @@ def build_rewrite_prompt(original_script: str, req: RewriteRequest) -> str:
         f"目标人群：{audience}\n"
         f"期望时长：{duration}\n\n"
         "输出要求：\n"
-        f"1. 字数控制在原文附近，建议 {_target_length(original_script)}。\n"
+        f"1. 最终文案不超过 {MAX_REWRITE_CHARS} 字；字数控制在原文附近，建议 {_target_length(original_script)}。\n"
         "2. 不要输出标题、标签、解释、提示词、【产品名称】、【核心卖点】等占位符。\n"
         "3. 不要新增原文没有的信息，不要把短文案扩成带货长文案。\n"
         "4. 不要只是给原文补标点，至少改写关键动词、称呼、连接词和句式。\n"
         "5. 按自然口播断句输出，明显是一句话的放在同一行，每行一句或半句，不要把一句话拆得太碎。\n"
-        "6. 最终文案不要包含任何中英文标点符号，只使用换行表示停顿。\n"
-        "7. 只输出可直接口播的中文文案，不要额外解释。\n\n"
+        "6. 只使用中文简体，不要输出繁体字。\n"
+        "7. 最终文案不要包含任何中英文标点符号，只使用换行表示停顿。\n"
+        "8. 只输出可直接口播的中文文案，不要额外解释。\n\n"
         f"原口播文本：\n{original_script}"
     )
 
 
 class PlaceholderRewriteProvider:
     def rewrite(self, original_script: str, req: RewriteRequest) -> str:
-        return _ensure_rewritten_distance(original_script, _light_paraphrase(original_script))
+        return _finalize_rewrite(original_script, _light_paraphrase(original_script))
 
 
 class DeepSeekRewriteProvider:
@@ -187,7 +199,7 @@ class DeepSeekRewriteProvider:
                     "messages": [
                         {
                             "role": "system",
-                            "content": "你是专业的中文短视频口播文案策划，只输出可直接口播的原创中文文案。",
+                            "content": "你是专业的中文短视频口播文案策划，只输出可直接口播的原创简体中文文案。",
                         },
                         {"role": "user", "content": prompt},
                     ],
@@ -204,7 +216,7 @@ class DeepSeekRewriteProvider:
             raise RuntimeError(f"DeepSeek 文案改写失败：{exc}") from exc
         if not result:
             raise RuntimeError("DeepSeek 文案改写失败：API 返回了空内容")
-        return _ensure_rewritten_distance(original_script, result)
+        return _finalize_rewrite(original_script, result)
 
 
 def create_rewrite_provider(settings: Settings) -> ScriptRewriteProvider:

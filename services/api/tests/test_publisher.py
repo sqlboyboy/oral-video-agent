@@ -122,6 +122,14 @@ def test_publisher_account_allows_deferred_name_and_deduplicates():
     assert duplicate_unnamed.status_code == 200
     assert duplicate_unnamed.json()["account_id"] == unnamed.json()["account_id"]
 
+    legacy_placeholder = client.post(
+        "/api/publisher/accounts",
+        json={"platform": "douyin", "nickname": False},
+    )
+    assert legacy_placeholder.status_code == 200
+    assert legacy_placeholder.json()["nickname"] == ""
+    assert legacy_placeholder.json()["account_id"] == unnamed.json()["account_id"]
+
     first = client.post(
         "/api/publisher/accounts",
         json={"platform": "douyin", "nickname": "主账号"},
@@ -135,6 +143,41 @@ def test_publisher_account_allows_deferred_name_and_deduplicates():
     assert second.json()["account_id"] == first.json()["account_id"]
     listed = client.get("/api/publisher/accounts")
     assert len(listed.json()["items"]) == 2
+
+
+def test_publish_job_accepts_explicit_video_path(monkeypatch):
+    monkeypatch.setenv("PUBLISHER_DISABLE_PLAYWRIGHT", "true")
+    monkeypatch.setattr(publisher_router_module, "is_playable_mp4", lambda _: True)
+    publisher_store.clear_for_tests()
+
+    created = client.post(
+        "/api/publisher/accounts",
+        json={"platform": "xiaohongshu", "nickname": "Zzz"},
+    )
+    assert created.status_code == 200
+    account = created.json()
+
+    video_path = storage_dir("outputs") / "cloud-downloaded-test.mp4"
+    video_path.write_bytes(b"fake mp4 bytes")
+    task = OralVideoTask(title="云端发布测试", status=TaskStatus.completed)
+    task.video_title = "云端发布标题"
+    task.rewritten_script = "云端发布正文"
+    repo.put(task)
+
+    jobs = client.post(
+        f"/api/tasks/{task.task_id}/publish-jobs",
+        json={
+            "account_ids": [account["account_id"]],
+            "title": "云端发布标题",
+            "body": "云端发布正文",
+            "topics": ["云端"],
+            "video_path": str(video_path),
+        },
+    )
+
+    assert jobs.status_code == 200
+    job = jobs.json()["items"][0]
+    assert job["video_path"] == str(video_path)
 
 
 def test_xiaohongshu_description_combines_body_and_topics():

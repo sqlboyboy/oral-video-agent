@@ -3,7 +3,11 @@ __pycache__/
 .venv/
 .env
 .uv-cache/
+.pytest_cache/
 .DS_Store
+dist/
+test_video/
+*.log
 
 # IDE
 .idea/
@@ -32,6 +36,10 @@ storage/tasks/*
 storage/assets/*
 storage/covers/*
 storage/digital_humans/*
+storage/pip/*
+storage/publisher/*
+storage/thumbnails/*
+storage/voice_previews/*
 storage/models/*
 storage/experiments/*
 storage/logs/*

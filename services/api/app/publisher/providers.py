@@ -208,26 +208,30 @@ def _save_browser_state(context, account: PublisherAccount) -> None:
 
 
 def _apply_login_context_init_scripts(context, platform: PublisherPlatform) -> None:
-    if platform != PublisherPlatform.kuaishou:
-        return
-    try:
-        context.add_init_script(
-            """
-            (() => {
-              try {
-                Object.defineProperty(navigator, 'webdriver', {
-                  get: () => undefined,
-                  configurable: true,
-                });
-              } catch (_) {}
-              try {
-                window.chrome = window.chrome || { runtime: {} };
-              } catch (_) {}
-            })();
-            """
-        )
-    except Exception:
-        pass
+    if platform == PublisherPlatform.kuaishou:
+        try:
+            context.add_init_script(
+                """
+                (() => {
+                  try {
+                    Object.defineProperty(navigator, 'webdriver', {
+                      get: () => undefined,
+                      configurable: true,
+                    });
+                  } catch (_) {}
+                  try {
+                    window.chrome = window.chrome || { runtime: {} };
+                  } catch (_) {}
+                })();
+                """
+            )
+        except Exception:
+            pass
+    if platform == PublisherPlatform.xiaohongshu:
+        try:
+            context.add_init_script(_xiaohongshu_login_layout_script())
+        except Exception:
+            pass
 
 
 def _open_login_window(account_id: str, timeout_seconds: int) -> None:
@@ -240,18 +244,24 @@ def _open_login_window(account_id: str, timeout_seconds: int) -> None:
             context = p.chromium.launch_persistent_context(
                 account.profile_dir,
                 headless=False,
-                args=["--deny-permission-prompts"],
-                viewport=_browser_viewport(account.platform),
+                args=_browser_launch_args(account.platform, login=True),
+                viewport=_login_browser_viewport(account.platform),
             )
             _apply_login_context_init_scripts(context, account.platform)
             page = _prepare_single_page(context)
-            page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
+            _resize_login_browser_window(page, account.platform)
+            _goto_login_page(page, login_url)
+            _resize_login_browser_window(page, account.platform)
+            _prepare_xiaohongshu_login_view(page, account.platform, apply_zoom=True)
+            _prepare_login_page_layout(page, account.platform)
             deadline = time.monotonic() + timeout_seconds
             detected_login = False
             while time.monotonic() < deadline:
                 page = _active_page(context, page)
                 if page is None:
                     break
+                _prepare_xiaohongshu_login_view(page, account.platform)
+                _prepare_login_page_layout(page, account.platform)
                 _save_browser_state(context, account)
                 if _looks_logged_in(page, account.platform):
                     detected_login = True
@@ -297,10 +307,44 @@ def _active_page(context, current_page):
     return None
 
 
+def _goto_login_page(page, login_url: str) -> None:
+    try:
+        page.goto(login_url, wait_until="commit", timeout=30000)
+        page.wait_for_timeout(1800)
+        return
+    except Exception:
+        pass
+    try:
+        page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
+    except Exception:
+        pass
+    try:
+        page.wait_for_timeout(1800)
+    except Exception:
+        pass
+
+
 def _browser_viewport(platform: PublisherPlatform) -> dict[str, int]:
     if platform == PublisherPlatform.xiaohongshu:
         return {"width": 1920, "height": 1080}
     return {"width": 1360, "height": 900}
+
+
+def _login_browser_viewport(platform: PublisherPlatform) -> dict[str, int]:
+    if platform == PublisherPlatform.xiaohongshu:
+        return {"width": 1000, "height": 820}
+    return _browser_viewport(platform)
+
+
+def _browser_launch_args(
+    platform: PublisherPlatform,
+    *,
+    login: bool = False,
+) -> list[str]:
+    args = ["--deny-permission-prompts"]
+    if login and platform == PublisherPlatform.xiaohongshu:
+        args.extend(["--window-size=1000,820", "--window-position=80,40"])
+    return args
 
 
 def _apply_platform_page_zoom(page, platform: PublisherPlatform) -> None:
@@ -310,6 +354,186 @@ def _apply_platform_page_zoom(page, platform: PublisherPlatform) -> None:
     # CSS zoom changes DOM coordinates and can make RPA clicks hit nearby
     # controls such as the scheduled-publish switch.
     return
+
+
+def _prepare_login_page_layout(page, platform: PublisherPlatform) -> None:
+    if platform != PublisherPlatform.xiaohongshu:
+        return
+    try:
+        page.evaluate(_xiaohongshu_login_layout_script())
+    except Exception:
+        pass
+
+
+def _prepare_xiaohongshu_login_view(
+    page,
+    platform: PublisherPlatform,
+    *,
+    apply_zoom: bool = False,
+) -> None:
+    if platform != PublisherPlatform.xiaohongshu:
+        return
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+    _resize_login_browser_window(page, platform)
+    if apply_zoom:
+        try:
+            page.keyboard.press("Control+0")
+            page.wait_for_timeout(80)
+            page.keyboard.press("Control+-")
+            page.wait_for_timeout(80)
+            page.keyboard.press("Control+-")
+            page.wait_for_timeout(120)
+        except Exception:
+            pass
+
+
+def _xiaohongshu_login_layout_script() -> str:
+    return """
+    (() => {
+      if (window.__oralVideoAgentXhsLoginFixStarted) {
+        if (window.__oralVideoAgentXhsLoginFixApply) {
+          window.__oralVideoAgentXhsLoginFixApply();
+        }
+        return;
+      }
+      window.__oralVideoAgentXhsLoginFixStarted = true;
+
+      const isLoginPage = () =>
+        location.hostname.includes('xiaohongshu.com') && location.href.includes('/login');
+
+      const installStyle = () => {
+        if (!document.head) return;
+        const styleId = '__oral_video_agent_xhs_login_fix';
+        let style = document.getElementById(styleId);
+        if (!style) {
+          style = document.createElement('style');
+          style.id = styleId;
+          document.head.appendChild(style);
+        }
+        const css = `
+          html, body, .login-container, .content, .con {
+            overflow-x: hidden !important;
+          }
+          .login-box-container {
+            position: fixed !important;
+            top: 170px !important;
+            left: 620px !important;
+            right: auto !important;
+            bottom: auto !important;
+            transform: none !important;
+            z-index: 2147483647 !important;
+          }
+        `;
+        if (style.textContent !== css) {
+          style.textContent = css;
+        }
+      };
+
+      const textOf = (node) => ((node && node.innerText) || '').replace(/\\s+/g, '');
+
+      const findCard = () => {
+        const direct = document.querySelector('.login-box-container');
+        if (direct) return direct;
+        const inputs = Array.from(document.querySelectorAll('input'));
+        const seed = inputs.find((input) => {
+          const placeholder = input.getAttribute('placeholder') || '';
+          return /手机|验证码|手机号/.test(placeholder);
+        }) || inputs[0];
+        let card = null;
+        let node = seed;
+        for (let depth = 0; node && depth < 9; depth += 1) {
+          const rect = node.getBoundingClientRect();
+          const text = textOf(node);
+          const inputCount = node.querySelectorAll ? node.querySelectorAll('input').length : 0;
+          const buttonCount = node.querySelectorAll ? node.querySelectorAll('button').length : 0;
+          if (
+            inputCount >= 1 &&
+            buttonCount >= 1 &&
+            /登录|验证码|手机号/.test(text) &&
+            rect.width >= 220 &&
+            rect.height >= 160 &&
+            rect.width <= 620 &&
+            rect.height <= 720
+          ) {
+            card = node;
+          }
+          node = node.parentElement;
+        }
+        return card;
+      };
+
+      const apply = () => {
+        try {
+          if (!isLoginPage()) return;
+          installStyle();
+          const card = findCard();
+          if (card) {
+            card.style.setProperty('position', 'fixed', 'important');
+            card.style.setProperty('top', '170px', 'important');
+            card.style.setProperty('left', '620px', 'important');
+            card.style.setProperty('right', 'auto', 'important');
+            card.style.setProperty('bottom', 'auto', 'important');
+            card.style.setProperty('transform', 'none', 'important');
+            card.style.setProperty('z-index', '2147483647', 'important');
+          }
+          if (document.body) {
+            document.body.style.setProperty('overflow-x', 'hidden', 'important');
+          }
+          window.scrollTo(0, 0);
+        } catch (_) {}
+      };
+
+      window.__oralVideoAgentXhsLoginFixApply = apply;
+      const start = () => {
+        apply();
+        window.setInterval(apply, 500);
+        try {
+          new MutationObserver(apply).observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+          });
+        } catch (_) {}
+      };
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
+      } else {
+        start();
+      }
+    })();
+    """
+
+
+def _resize_login_browser_window(page, platform: PublisherPlatform) -> None:
+    if platform != PublisherPlatform.xiaohongshu:
+        return
+    try:
+        page.set_viewport_size(_login_browser_viewport(platform))
+    except Exception:
+        pass
+    try:
+        session = page.context.new_cdp_session(page)
+        window = session.send("Browser.getWindowForTarget")
+        window_id = window.get("windowId")
+        if window_id is None:
+            return
+        session.send(
+            "Browser.setWindowBounds",
+            {
+                "windowId": window_id,
+                "bounds": {
+                    "left": 80,
+                    "top": 40,
+                    "width": 1000,
+                    "height": 820,
+                    "windowState": "normal",
+                },
+            },
+        )
+    except Exception:
+        pass
 
 
 def _looks_logged_in(page, platform: PublisherPlatform) -> bool:
@@ -378,6 +602,7 @@ def _extract_account_nickname(page, platform: PublisherPlatform) -> str | None:
         "小红书创作服务平台",
         "小红书",
         "发布笔记",
+        "草稿箱",
     }
     for selector in selectors:
         try:
@@ -386,7 +611,11 @@ def _extract_account_nickname(page, platform: PublisherPlatform) -> str | None:
             continue
         for text in texts:
             candidate = " ".join(text.split()).strip()
-            if 1 < len(candidate) <= 30 and candidate not in blocked:
+            if (
+                1 < len(candidate) <= 30
+                and candidate not in blocked
+                and not _looks_like_xiaohongshu_menu_text(candidate)
+            ):
                 return candidate
     try:
         title = page.title()
@@ -394,6 +623,27 @@ def _extract_account_nickname(page, platform: PublisherPlatform) -> str | None:
         return None
     title = title.replace("抖音创作者中心", "").replace("快手创作者服务平台", "").replace("小红书创作服务平台", "").strip(" -_|")
     return title if 1 < len(title) <= 30 and title not in blocked else None
+
+
+def _looks_like_xiaohongshu_menu_text(text: str) -> bool:
+    normalized = "".join(text.split())
+    if not normalized:
+        return True
+    blocked_parts = [
+        "草稿箱",
+        "上传视频",
+        "上传图文",
+        "写长文",
+        "发播客",
+        "拖拽视频",
+        "视频大小",
+        "视频格式",
+        "视频分辨率",
+        "收起侧边栏",
+        "Builderhub",
+        "RedSkill",
+    ]
+    return any(part in normalized for part in blocked_parts)
 
 
 def _extract_xiaohongshu_nickname(page) -> str | None:
@@ -404,9 +654,17 @@ def _extract_xiaohongshu_nickname(page) -> str | None:
               const blocked = new Set([
                 '小红书', '创作服务平台', '小红书创作服务平台', '发布笔记',
                 '首页', '笔记管理', '数据看板', '活动中心', '创作学院',
-                '创作百科', '笔记灵感', '智能标题'
+                '创作百科', '笔记灵感', '智能标题', '草稿箱'
               ]);
               const clean = (text) => (text || '').replace(/\\s+/g, ' ').trim();
+              const isBad = (text) => {
+                const value = clean(text);
+                return !value ||
+                  value.length < 2 ||
+                  value.length > 24 ||
+                  blocked.has(value) ||
+                  /草稿箱|上传视频|上传图文|写长文|发播客|拖拽|视频大小|视频格式|视频分辨率|收起侧边栏|Builder hub|Red Skill|管理|数据|活动|学院|百科|预览|封面|智能|平台/.test(value);
+              };
               const isVisible = (el) => {
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -415,6 +673,21 @@ def _extract_xiaohongshu_nickname(page) -> str | None:
                   rect.width > 0 &&
                   rect.height > 0;
               };
+              const directSelectors = [
+                '.user-info .name-box',
+                '.d-topbar-default .name-box',
+                '.d-topbar-default [class*="name"]',
+                '[class*="user-info"] [class*="name"]',
+                '[class*="user"] [class*="nickname"]',
+                '[class*="account"] [class*="name"]',
+              ];
+              for (const selector of directSelectors) {
+                const elements = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+                for (const el of elements) {
+                  const text = clean(el.innerText || el.textContent || el.getAttribute('title') || el.getAttribute('aria-label'));
+                  if (!isBad(text)) return text;
+                }
+              }
               const candidates = Array.from(document.querySelectorAll('body *'))
                 .filter(isVisible)
                 .map((el) => {
@@ -425,12 +698,12 @@ def _extract_xiaohongshu_nickname(page) -> str | None:
                 .filter((item) =>
                   item.x > window.innerWidth * 0.72 &&
                   item.y < 260 &&
-                  item.text.length >= 2 &&
-                  item.text.length <= 24 &&
-                  !blocked.has(item.text) &&
-                  !/发布|首页|管理|数据|活动|学院|百科|预览|封面|礼物|智能|平台/.test(item.text)
+                  !isBad(item.text)
                 )
                 .sort((a, b) => {
+                  const atop = a.y < 70 ? 0 : 1;
+                  const btop = b.y < 70 ? 0 : 1;
+                  if (atop !== btop) return atop - btop;
                   const ay = Math.abs(a.y - 150);
                   const by = Math.abs(b.y - 150);
                   return ay - by || a.text.length - b.text.length;

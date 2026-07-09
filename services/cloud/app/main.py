@@ -1,0 +1,1058 @@
+from __future__ import annotations
+
+import secrets
+import mimetypes
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from .email_sender import create_email_sender
+from .notifier import WebhookNotifier
+from .object_storage import object_storage
+from .redis_state import RedisState
+from .rewrite import RewriteInput, rewrite_script
+from .settings import settings
+from .store import QueueStore, estimate_render_points
+
+
+app = FastAPI(title="Oral Video Agent Cloud", version="0.1.0")
+store = QueueStore(settings.database_path, database_url=settings.database_url)
+notifier = WebhookNotifier(settings.notify_webhook_url)
+redis_state = RedisState(settings.redis_url)
+email_sender = create_email_sender()
+
+
+class JobCreateRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = 0
+    job_type: str = "render"
+
+
+class AdminLicenseKeyRequest(BaseModel):
+    license_key: str | None = None
+    max_activations: int = Field(default=1, ge=1, le=20)
+    grant_points: int | None = Field(default=None, ge=0)
+
+
+class AdminCreditCodeRequest(BaseModel):
+    code: str | None = None
+    points: int = Field(ge=1)
+
+
+class AdminUserCreditRequest(BaseModel):
+    points: int = Field(ge=1)
+    note: str = ""
+
+
+class AdminUserUpdateRequest(BaseModel):
+    status: str | None = None
+    license_status: str | None = None
+
+
+class ClientActivationRequest(BaseModel):
+    license_key: str
+    device_fingerprint: str
+    device_name: str = ""
+
+
+class ClientEmailCodeRequest(BaseModel):
+    email: str
+
+
+class ClientEmailLoginRequest(BaseModel):
+    email: str
+    code: str
+    device_fingerprint: str
+    device_name: str = ""
+
+
+class ClientLicenseActivationRequest(BaseModel):
+    license_key: str
+
+
+class ClientCreditRedeemRequest(BaseModel):
+    code: str
+
+
+class ClientRenderEstimateRequest(BaseModel):
+    duration_seconds: int = Field(gt=0)
+    resolution: str = "1080p"
+
+
+class ClientJobCreateRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    duration_seconds: int = Field(gt=0)
+    resolution: str = "1080p"
+    job_type: str = "render"
+
+
+class ClientAssetUploadSpec(BaseModel):
+    kind: str = "source_video"
+    file_name: str
+    content_type: str = "application/octet-stream"
+    file_size_bytes: int = Field(default=0, ge=0)
+
+
+class ClientUploadSessionRequest(BaseModel):
+    assets: list[ClientAssetUploadSpec] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    job_type: str = "render"
+
+
+class ClientAssetUploadedRequest(BaseModel):
+    file_size_bytes: int = Field(default=0, ge=0)
+
+
+class ClientJobSubmitRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    duration_seconds: int = Field(gt=0)
+    resolution: str = "1080p"
+    priority: int = 0
+
+
+class ClientPreprocessJobRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = 0
+
+
+class ClientRewriteRequest(BaseModel):
+    source_script: str = Field(min_length=1)
+    style: str = "同款口播"
+    product_info: str = ""
+    target_audience: str = ""
+    max_chars: int = Field(default=300, ge=20, le=300)
+
+
+class WorkerHeartbeatRequest(BaseModel):
+    worker_id: str
+    status: str = "idle"
+    current_job_id: str | None = None
+    message: str = ""
+
+
+class WorkerClaimRequest(BaseModel):
+    worker_id: str
+
+
+class JobProgressRequest(BaseModel):
+    worker_id: str
+    percent: int = Field(ge=0, le=100)
+    message: str = ""
+
+
+class JobCompleteRequest(BaseModel):
+    worker_id: str
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobFailRequest(BaseModel):
+    worker_id: str
+    error_message: str
+
+
+def _payload_source_script(payload: dict[str, Any]) -> str:
+    return str(payload.get("source_script") or payload.get("original_script") or "").strip()
+
+
+def _is_direct_rewrite_preprocess(payload: dict[str, Any]) -> bool:
+    operation = str(payload.get("operation") or "").strip().lower()
+    return operation == "rewrite" and bool(_payload_source_script(payload))
+
+
+def _payload_max_chars(payload: dict[str, Any]) -> int:
+    try:
+        return int(payload.get("max_chars") or payload.get("maxChars") or 300)
+    except (TypeError, ValueError):
+        return 300
+
+
+def _rewrite_result_from_payload(payload: dict[str, Any], *, user_id: str) -> dict[str, Any]:
+    original_script = _payload_source_script(payload)
+    rewritten = rewrite_script(
+        RewriteInput(
+            source_script=original_script,
+            style=str(payload.get("style") or "同款口播"),
+            product_info=str(payload.get("product_info") or ""),
+            target_audience=str(payload.get("target_audience") or ""),
+            max_chars=_payload_max_chars(payload),
+        ),
+        settings,
+    )
+    return {
+        "mode": "direct_rewrite",
+        "operation": "rewrite",
+        "original_script": original_script,
+        "rewritten_script": rewritten,
+        "user_id": user_id,
+    }
+
+
+def require_admin(x_admin_token: str = Header(default="")) -> None:
+    if not settings.admin_token or x_admin_token != settings.admin_token:
+        raise HTTPException(status_code=401, detail="invalid admin token")
+
+
+def require_worker(authorization: str = Header(default="")) -> None:
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        raise HTTPException(status_code=401, detail="missing worker token")
+    token = authorization.removeprefix(prefix).strip()
+    if not settings.worker_token or token != settings.worker_token:
+        raise HTTPException(status_code=401, detail="invalid worker token")
+
+
+def require_client(authorization: str = Header(default="")) -> dict[str, Any]:
+    prefix = "Bearer "
+    if not authorization.startswith(prefix):
+        raise HTTPException(status_code=401, detail="missing device token")
+    token = authorization.removeprefix(prefix).strip()
+    try:
+        session = store.get_device_session(access_token=token)
+    except KeyError:
+        raise HTTPException(status_code=401, detail="invalid device token")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    _enforce_rate_limit(
+        key=f"client:{session['device']['device_id']}",
+        limit=settings.client_rate_limit_per_minute,
+    )
+    session["device_token"] = token
+    return session
+
+
+def require_licensed_client(
+    session: dict[str, Any] = Depends(require_client),
+) -> dict[str, Any]:
+    user = session["user"]
+    if user.get("license_status") != "active":
+        raise HTTPException(status_code=403, detail="account license is not active")
+    return session
+
+
+def require_cloud_account(
+    session: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    return session
+
+
+def _enforce_worker_rate_limit(worker_id: str) -> None:
+    _enforce_rate_limit(
+        key=f"worker:{worker_id}",
+        limit=settings.worker_rate_limit_per_minute,
+    )
+
+
+def _enforce_rate_limit(*, key: str, limit: int) -> None:
+    if not redis_state.allow_rate_limit(key=key, limit=limit):
+        raise HTTPException(status_code=429, detail="rate limit exceeded")
+
+
+def _require_local_object_storage() -> None:
+    if not object_storage.using_local_storage:
+        raise HTTPException(status_code=404, detail="local object storage is disabled")
+
+
+def _verify_storage_signature(
+    *,
+    method: str,
+    cos_key: str,
+    expires: int,
+    signature: str,
+) -> None:
+    try:
+        object_storage.verify_signed_request(
+            method=method,
+            cos_key=cos_key,
+            expires_at=expires,
+            signature=signature,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "database_backend": store.backend,
+        "redis": redis_state.health(),
+    }
+
+
+@app.put("/api/storage/objects/{cos_key:path}")
+async def upload_storage_object(
+    cos_key: str,
+    request: Request,
+    expires: int = Query(...),
+    signature: str = Query(...),
+) -> dict[str, Any]:
+    _require_local_object_storage()
+    _verify_storage_signature(
+        method="PUT",
+        cos_key=cos_key,
+        expires=expires,
+        signature=signature,
+    )
+    try:
+        return await object_storage.save_upload_stream(
+            cos_key=cos_key,
+            stream=request.stream(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/storage/objects/{cos_key:path}")
+@app.head("/api/storage/objects/{cos_key:path}")
+async def download_storage_object(
+    cos_key: str,
+    expires: int = Query(...),
+    signature: str = Query(...),
+) -> FileResponse:
+    _require_local_object_storage()
+    _verify_storage_signature(
+        method="GET",
+        cos_key=cos_key,
+        expires=expires,
+        signature=signature,
+    )
+    try:
+        path = object_storage.local_path_for_key(cos_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="object not found")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
+
+
+@app.post("/api/admin/jobs", dependencies=[Depends(require_admin)])
+def create_job(req: JobCreateRequest) -> dict[str, Any]:
+    job = store.create_job(payload=req.payload, priority=req.priority, job_type=req.job_type)
+    redis_state.note_job_queued(job)
+    maybe_notify_open_autodl()
+    return job
+
+
+@app.post("/api/admin/license-keys", dependencies=[Depends(require_admin)])
+def create_license_key(req: AdminLicenseKeyRequest) -> dict[str, Any]:
+    try:
+        return store.create_license_key(
+            license_key=req.license_key,
+            max_activations=req.max_activations,
+            grant_points=req.grant_points
+            if req.grant_points is not None
+            else settings.license_activation_grant_points,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/credit-codes", dependencies=[Depends(require_admin)])
+def create_credit_code(req: AdminCreditCodeRequest) -> dict[str, Any]:
+    try:
+        return store.create_credit_code(code=req.code, points=req.points)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/admin/users", dependencies=[Depends(require_admin)])
+def list_users(email: str | None = None, limit: int = 50) -> dict[str, Any]:
+    return {"items": store.list_users(email=email, limit=max(1, min(limit, 200)))}
+
+
+@app.get("/api/admin/users/{user_id}", dependencies=[Depends(require_admin)])
+def get_admin_user(user_id: str) -> dict[str, Any]:
+    try:
+        return store.get_user_detail(user_id=user_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="user not found")
+
+
+@app.post("/api/admin/users/{user_id}/credits", dependencies=[Depends(require_admin)])
+def add_admin_user_credits(user_id: str, req: AdminUserCreditRequest) -> dict[str, Any]:
+    try:
+        return store.add_user_credits(user_id=user_id, points=req.points, note=req.note)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="user not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/admin/users/{user_id}", dependencies=[Depends(require_admin)])
+def update_admin_user(user_id: str, req: AdminUserUpdateRequest) -> dict[str, Any]:
+    try:
+        return store.update_user(
+            user_id=user_id,
+            status=req.status,
+            license_status=req.license_status,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="user not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/users/{user_id}/devices/reset", dependencies=[Depends(require_admin)])
+def reset_admin_user_devices(user_id: str) -> dict[str, Any]:
+    try:
+        return store.reset_user_devices(user_id=user_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="user not found")
+
+
+@app.get("/api/admin/jobs", dependencies=[Depends(require_admin)])
+def list_jobs(limit: int = 50) -> dict[str, Any]:
+    return {"items": store.list_jobs(limit=max(1, min(limit, 200)))}
+
+
+@app.get("/api/admin/queue", dependencies=[Depends(require_admin)])
+def queue_status() -> dict[str, Any]:
+    stats = store.queue_stats(worker_stale_seconds=settings.worker_stale_seconds)
+    stats["redis"] = redis_state.queue_snapshot()
+    return stats
+
+
+@app.post("/api/admin/notify-check", dependencies=[Depends(require_admin)])
+def notify_check(force: bool = False) -> dict[str, Any]:
+    return maybe_notify_open_autodl(force=force)
+
+
+@app.post("/api/client/auth/email-code")
+def send_client_email_code(
+    req: ClientEmailCodeRequest,
+    session: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    _enforce_rate_limit(
+        key=f"email-code:{req.email.strip().lower()}",
+        limit=max(1, settings.client_rate_limit_per_minute // 6),
+    )
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    try:
+        item = store.create_email_login_code(
+            email=req.email,
+            code=code,
+            ttl_seconds=settings.email_code_ttl_seconds,
+            resend_seconds=settings.email_code_resend_seconds,
+        )
+        email_sender.send_login_code(
+            email=req.email.strip().lower(),
+            code=code,
+            ttl_minutes=max(1, settings.email_code_ttl_seconds // 60),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+    response = {
+        "sent": True,
+        "email": req.email.strip().lower(),
+        "expires_at": item["expires_at"],
+        "resend_seconds": settings.email_code_resend_seconds,
+    }
+    if settings.email_provider == "console":
+        response["debug_code"] = code
+    return response
+
+
+@app.post("/api/client/auth/login")
+def login_client_with_email(
+    req: ClientEmailLoginRequest,
+    session: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    _enforce_rate_limit(
+        key=f"activate:{req.device_fingerprint}",
+        limit=settings.client_rate_limit_per_minute,
+    )
+    try:
+        return store.bind_email_with_code(
+            user_id=session["user"]["user_id"],
+            device_id=session["device"]["device_id"],
+            device_token=session["device_token"],
+            email=req.email,
+            code=req.code,
+            max_attempts=settings.email_code_max_attempts,
+        )
+    except KeyError:
+        raise HTTPException(status_code=400, detail="invalid or expired email code")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/client/activate")
+def activate_client(req: ClientActivationRequest) -> dict[str, Any]:
+    _enforce_rate_limit(
+        key=f"activate:{req.device_fingerprint}",
+        limit=settings.client_rate_limit_per_minute,
+    )
+    try:
+        return store.activate_license(
+            license_key=req.license_key,
+            device_fingerprint=req.device_fingerprint,
+            device_name=req.device_name,
+            max_devices_per_user=settings.max_devices_per_user,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="license key not found")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/client/license/activate")
+def activate_client_license(
+    req: ClientLicenseActivationRequest,
+    session: dict[str, Any] = Depends(require_client),
+) -> dict[str, Any]:
+    try:
+        return store.activate_user_license(
+            user_id=session["user"]["user_id"],
+            device_id=session["device"]["device_id"],
+            license_key=req.license_key,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="license key not found")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/client/me")
+def client_me(session: dict[str, Any] = Depends(require_client)) -> dict[str, Any]:
+    return session
+
+
+@app.get("/api/client/credits/ledger")
+def client_credit_ledger(
+    limit: int = 50,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    user_id = session["user"]["user_id"]
+    return {
+        "wallet": store.get_wallet(user_id=user_id),
+        "items": store.list_credit_ledger(user_id=user_id, limit=limit),
+    }
+
+
+@app.post("/api/client/credits/redeem")
+def redeem_client_credit_code(
+    req: ClientCreditRedeemRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        return store.redeem_credit_code(
+            user_id=session["user"]["user_id"],
+            code=req.code,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="credit code not found or already redeemed")
+
+
+@app.post("/api/client/jobs/estimate")
+def estimate_client_job(
+    req: ClientRenderEstimateRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    if req.duration_seconds > settings.max_render_duration_seconds:
+        raise HTTPException(status_code=400, detail="single cloud job is limited to 10 minutes")
+    try:
+        points = estimate_render_points(
+            duration_seconds=req.duration_seconds,
+            resolution=req.resolution,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    wallet = store.get_wallet(user_id=session["user"]["user_id"])
+    return {
+        "duration_seconds": req.duration_seconds,
+        "resolution": req.resolution,
+        "estimated_points": points,
+        "wallet": wallet,
+        "enough_credits": wallet["available_points"] >= points,
+    }
+
+
+@app.post("/api/client/jobs")
+def create_client_job(
+    req: ClientJobCreateRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.create_client_job(
+            user_id=session["user"]["user_id"],
+            payload=req.payload,
+            duration_seconds=req.duration_seconds,
+            resolution=req.resolution,
+            max_duration_seconds=settings.max_render_duration_seconds,
+            daily_bonus_limit=settings.bonus_daily_spend_limit,
+            job_type=req.job_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    redis_state.note_job_queued(job)
+    maybe_notify_open_autodl()
+    return job
+
+
+@app.post("/api/client/jobs/upload-session")
+def create_client_upload_session(
+    req: ClientUploadSessionRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.create_upload_session(
+            user_id=session["user"]["user_id"],
+            assets=[asset.model_dump() for asset in req.assets],
+            payload=req.payload,
+            job_type=req.job_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _with_upload_urls(job)
+
+
+@app.get("/api/client/jobs/{job_id}")
+def get_client_job(
+    job_id: str,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        return store.get_client_job_with_assets(
+            user_id=session["user"]["user_id"],
+            job_id=job_id,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+
+
+@app.post("/api/client/jobs/{job_id}/assets/{asset_id}/uploaded")
+def mark_client_asset_uploaded(
+    job_id: str,
+    asset_id: str,
+    req: ClientAssetUploadedRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        return store.mark_asset_uploaded(
+            user_id=session["user"]["user_id"],
+            job_id=job_id,
+            asset_id=asset_id,
+            file_size_bytes=req.file_size_bytes,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="asset not found")
+
+
+@app.post("/api/client/jobs/{job_id}/submit")
+def submit_client_job(
+    job_id: str,
+    req: ClientJobSubmitRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.submit_uploaded_job(
+            job_id=job_id,
+            user_id=session["user"]["user_id"],
+            payload=req.payload,
+            duration_seconds=req.duration_seconds,
+            resolution=req.resolution,
+            max_duration_seconds=settings.max_render_duration_seconds,
+            daily_bonus_limit=settings.bonus_daily_spend_limit,
+            priority=req.priority,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    redis_state.note_job_queued(job)
+    maybe_notify_open_autodl()
+    return job
+
+
+@app.get("/api/client/jobs/{job_id}/download")
+def get_client_job_download_url(
+    job_id: str,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        output_key = store.get_completed_output_key(
+            user_id=session["user"]["user_id"],
+            job_id=job_id,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="output not found")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "download": object_storage.presign_download(cos_key=output_key).as_dict(),
+        "cleanup_after_hours": settings.cos_cleanup_hours,
+    }
+
+
+@app.post("/api/client/jobs/{job_id}/download-confirmed")
+def confirm_client_job_downloaded(
+    job_id: str,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.confirm_output_downloaded(
+            user_id=session["user"]["user_id"],
+            job_id=job_id,
+            delete_delay_hours=settings.cos_download_confirm_delete_delay_hours,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="output not found")
+    deleted_outputs = 0
+    if settings.cos_download_confirm_delete_delay_hours <= 0:
+        deleted_outputs = _delete_job_assets(job, output_only=True)
+        if deleted_outputs:
+            job = store.get_client_job_with_assets(
+                user_id=session["user"]["user_id"],
+                job_id=job_id,
+            )
+    return {
+        "job": job,
+        "delete_delay_hours": settings.cos_download_confirm_delete_delay_hours,
+        "deleted_outputs": deleted_outputs,
+    }
+
+
+@app.post("/api/client/jobs/{job_id}/cancel")
+def cancel_client_job(
+    job_id: str,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.cancel_client_job(job_id=job_id, user_id=session["user"]["user_id"])
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    deleted_assets = _delete_job_assets(job, include_outputs=True)
+    if deleted_assets:
+        job = store.get_client_job_with_assets(
+            user_id=session["user"]["user_id"],
+            job_id=job_id,
+        )
+    redis_state.note_job_finished(job)
+    return job
+
+
+@app.post("/api/client/preprocess/jobs")
+def create_client_preprocess_job(
+    req: ClientPreprocessJobRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    if _is_direct_rewrite_preprocess(req.payload):
+        try:
+            result = _rewrite_result_from_payload(
+                req.payload,
+                user_id=session["user"]["user_id"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        return store.create_completed_preprocess_job(
+            user_id=session["user"]["user_id"],
+            payload=req.payload,
+            result=result,
+            priority=req.priority,
+            progress_message="Direct rewrite completed",
+        )
+    job = store.create_client_preprocess_job(
+        user_id=session["user"]["user_id"],
+        payload=req.payload,
+        priority=req.priority,
+    )
+    redis_state.note_job_queued(job)
+    maybe_notify_open_autodl()
+    return job
+
+
+@app.post("/api/client/rewrite")
+def rewrite_client_script(
+    req: ClientRewriteRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        return _rewrite_result_from_payload(
+            {
+                "operation": "rewrite",
+                "source_script": req.source_script,
+                "style": req.style,
+                "product_info": req.product_info,
+                "target_audience": req.target_audience,
+                "max_chars": req.max_chars,
+            },
+            user_id=session["user"]["user_id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/client/preprocess/upload-session")
+def create_client_preprocess_upload_session(
+    req: ClientUploadSessionRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.create_upload_session(
+            user_id=session["user"]["user_id"],
+            assets=[asset.model_dump() for asset in req.assets],
+            payload=req.payload,
+            job_type="preprocess",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _with_upload_urls(job)
+
+
+@app.post("/api/client/preprocess/jobs/{job_id}/submit")
+def submit_client_preprocess_job(
+    job_id: str,
+    req: ClientPreprocessJobRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        job = store.submit_uploaded_preprocess_job(
+            job_id=job_id,
+            user_id=session["user"]["user_id"],
+            payload=req.payload,
+            priority=req.priority,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    redis_state.note_job_queued(job)
+    maybe_notify_open_autodl()
+    return job
+
+
+@app.post("/api/worker/heartbeat", dependencies=[Depends(require_worker)])
+def worker_heartbeat(req: WorkerHeartbeatRequest) -> dict[str, Any]:
+    _enforce_worker_rate_limit(req.worker_id)
+    return store.heartbeat(
+        worker_id=req.worker_id,
+        status=req.status,
+        current_job_id=req.current_job_id,
+        message=req.message,
+    )
+
+
+@app.post("/api/worker/claim-job", dependencies=[Depends(require_worker)])
+def claim_job(req: WorkerClaimRequest) -> dict[str, Any]:
+    _enforce_worker_rate_limit(req.worker_id)
+    job = store.claim_job(worker_id=req.worker_id)
+    if job is None:
+        return {"job": None, "queue": queue_status()}
+    job = _with_worker_storage_urls(job)
+    redis_state.note_job_running(job, worker_id=req.worker_id)
+    store.heartbeat(
+        worker_id=req.worker_id,
+        status="running",
+        current_job_id=job["job_id"],
+        message="claimed job",
+    )
+    return {"job": job}
+
+
+@app.post("/api/worker/jobs/{job_id}/progress", dependencies=[Depends(require_worker)])
+def job_progress(job_id: str, req: JobProgressRequest) -> dict[str, Any]:
+    _enforce_worker_rate_limit(req.worker_id)
+    try:
+        return store.update_progress(
+            job_id=job_id,
+            worker_id=req.worker_id,
+            percent=req.percent,
+            message=req.message,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="running job not found")
+
+
+@app.post("/api/worker/jobs/{job_id}/complete", dependencies=[Depends(require_worker)])
+def job_complete(job_id: str, req: JobCompleteRequest) -> dict[str, Any]:
+    _enforce_worker_rate_limit(req.worker_id)
+    try:
+        output_expires_at = (
+            datetime.now(timezone.utc) + timedelta(hours=settings.cos_cleanup_hours)
+        ).isoformat()
+        job = store.complete_job(
+            job_id=job_id,
+            worker_id=req.worker_id,
+            result=req.result,
+            output_expires_at=output_expires_at,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="running job not found")
+    deleted_inputs = _delete_job_assets(job, include_outputs=False)
+    if deleted_inputs:
+        job = store.get_job_with_assets(job_id)
+    redis_state.note_job_finished(job)
+    maybe_notify_shutdown_autodl()
+    return job
+
+
+@app.post("/api/worker/jobs/{job_id}/fail", dependencies=[Depends(require_worker)])
+def job_fail(job_id: str, req: JobFailRequest) -> dict[str, Any]:
+    _enforce_worker_rate_limit(req.worker_id)
+    try:
+        job = store.fail_job(
+            job_id=job_id,
+            worker_id=req.worker_id,
+            error_message=req.error_message,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="running job not found")
+    deleted_assets = _delete_job_assets(job, include_outputs=True)
+    if deleted_assets:
+        job = store.get_job_with_assets(job_id)
+    redis_state.note_job_finished(job)
+    maybe_notify_shutdown_autodl()
+    return job
+
+
+@app.get("/api/worker/queue", dependencies=[Depends(require_worker)])
+def worker_queue_status() -> dict[str, Any]:
+    return queue_status()
+
+
+def _delete_job_assets(
+    job: dict[str, Any],
+    *,
+    include_outputs: bool = False,
+    output_only: bool = False,
+) -> int:
+    deleted = 0
+    for asset in job.get("assets", []):
+        kind = str(asset.get("kind") or "")
+        if output_only and kind != "output":
+            continue
+        if not output_only and not include_outputs and kind == "output":
+            continue
+        if asset.get("deleted_at"):
+            continue
+        if str(asset.get("status") or "") not in {"uploaded", "downloaded"}:
+            continue
+        cos_key = str(asset.get("cos_key") or "")
+        if not cos_key:
+            continue
+        try:
+            object_storage.delete_object(cos_key=cos_key)
+            store.mark_asset_deleted(asset_id=str(asset["asset_id"]))
+            deleted += 1
+        except Exception:
+            continue
+    return deleted
+
+
+def _with_upload_urls(job: dict[str, Any]) -> dict[str, Any]:
+    items = []
+    for asset in job.get("assets", []):
+        item = dict(asset)
+        item["upload"] = object_storage.presign_upload(
+            cos_key=asset["cos_key"],
+            content_type=asset.get("content_type") or "application/octet-stream",
+        ).as_dict()
+        items.append(item)
+    result = dict(job)
+    result["assets"] = items
+    return result
+
+
+def _worker_output_metadata(job: dict[str, Any]) -> tuple[str, str]:
+    payload = dict(job.get("payload") or {})
+    operation = str(payload.get("operation") or "").strip().lower()
+    if job.get("job_type") == "preprocess" and operation == "voice":
+        return "result.wav", "audio/wav"
+    return "result.mp4", "video/mp4"
+
+
+def _with_worker_storage_urls(job: dict[str, Any]) -> dict[str, Any]:
+    result = dict(job)
+    assets = store.list_job_assets(job_id=job["job_id"])
+    input_assets = []
+    for asset in assets:
+        if asset["kind"] == "output":
+            continue
+        item = dict(asset)
+        item["download"] = object_storage.presign_download(cos_key=asset["cos_key"]).as_dict()
+        input_assets.append(item)
+    user_id = job.get("user_id") or "admin"
+    output_file_name, output_content_type = _worker_output_metadata(job)
+    output_key = object_storage.output_key(
+        user_id=user_id,
+        job_id=job["job_id"],
+        file_name=output_file_name,
+    )
+    result["input_assets"] = input_assets
+    result["output_upload"] = object_storage.presign_upload(
+        cos_key=output_key,
+        content_type=output_content_type,
+    ).as_dict()
+    payload = dict(result.get("payload") or {})
+    payload["input_assets"] = input_assets
+    payload["output_cos_key"] = output_key
+    payload["output_file_name"] = output_file_name
+    payload["output_content_type"] = output_content_type
+    payload["output_upload"] = result["output_upload"]
+    result["payload"] = payload
+    return result
+
+
+def maybe_notify_open_autodl(*, force: bool = False) -> dict[str, Any]:
+    stats = store.queue_stats(worker_stale_seconds=settings.worker_stale_seconds)
+    should_notify = (
+        stats["queued"] >= settings.notify_queued_threshold
+        or stats["oldest_wait_seconds"] >= settings.notify_wait_minutes_threshold * 60
+    )
+    if not should_notify and not force:
+        return {"sent": False, "reason": "threshold_not_reached", "stats": stats}
+    if not settings.notify_webhook_url:
+        return {"sent": False, "reason": "webhook_not_configured", "stats": stats}
+    if not store.notification_allowed(
+        key="open_autodl",
+        cooldown_seconds=0 if force else settings.notify_cooldown_seconds,
+    ):
+        return {"sent": False, "reason": "cooldown", "stats": stats}
+    minutes = stats["oldest_wait_seconds"] // 60
+    sent = notifier.send_text(
+        "口播云端队列需要 AutoDL 算力\n"
+        f"排队任务：{stats['queued']}\n"
+        f"运行任务：{stats['running']}\n"
+        f"最长等待：{minutes} 分钟\n"
+        "请打开 AutoDL 4090 实例，worker 会自动拉取任务。"
+    )
+    return {"sent": sent, "reason": "notified" if sent else "webhook_not_configured", "stats": stats}
+
+
+def maybe_notify_shutdown_autodl() -> dict[str, Any]:
+    stats = store.queue_stats(worker_stale_seconds=settings.worker_stale_seconds)
+    if stats["queued"] > 0 or stats["running"] > 0:
+        return {"sent": False, "reason": "queue_not_empty", "stats": stats}
+    if not settings.notify_webhook_url:
+        return {"sent": False, "reason": "webhook_not_configured", "stats": stats}
+    if not store.notification_allowed(
+        key="shutdown_autodl",
+        cooldown_seconds=settings.notify_cooldown_seconds,
+    ):
+        return {"sent": False, "reason": "cooldown", "stats": stats}
+    sent = notifier.send_text("口播云端队列已清空，可以关闭 AutoDL 实例。")
+    return {"sent": sent, "reason": "notified" if sent else "webhook_not_configured", "stats": stats}

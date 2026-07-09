@@ -58,8 +58,7 @@ class FasterWhisperAsrProvider:
             str(audio_path),
             language="zh",
             beam_size=5,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
+            vad_filter=False,
         )
         text = post_process_transcript("".join(seg.text for seg in segments).strip())
         return text if text else f"（未识别到语音内容，来源：{source_hint}）"

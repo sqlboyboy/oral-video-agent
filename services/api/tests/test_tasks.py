@@ -5,14 +5,17 @@ import io
 import json
 import subprocess
 import tempfile
+from uuid import uuid4
 import wave
 
 from fastapi.testclient import TestClient
 import imageio_ffmpeg
 
+from app import main as main_module
 from app.main import app
-from app.models import MouthQualitySignals, OralVideoTask, TaskStatus
-from app.providers.video_importer import VideoImportError
+from app.models import Asset, MouthQualitySignals, OralVideoTask, RenderOptions, SubtitleStyle, TaskStatus, VoiceProfile, storage_dir
+from app.pipeline.renderer import Renderer
+from app.providers.video_importer import VideoImportError, extract_douyin_share_url, extract_first_url
 from app.repository import repo
 
 
@@ -85,9 +88,103 @@ def test_bootstrap_catalog_returns_client_startup_data():
     assert res.status_code == 200
     body = res.json()
     assert body["providers"]["rewrite_provider"] == "placeholder"
-    assert any(item["voice_id"] == "classic-female" for item in body["voices"])
-    assert any(item["bgm_id"] == "default-light" for item in body["bgm"])
+    assert body["voices"]
+    assert body["bgm"]
     assert any(item["name"] == "同款口播" for item in body["rewrite_styles"])
+
+
+def test_subtitle_style_defaults_to_douyin_yellow():
+    style = SubtitleStyle()
+
+    assert style.color == "#FFE600"
+    assert style.outline_color == "#000000"
+
+
+def test_task_subtitle_generation_writes_srt():
+    task = _create_task_via_upload()
+
+    generated = client.post(
+        f"/api/tasks/{task['task_id']}/subtitles",
+        json={
+            "script": "第一句字幕。第二句字幕。",
+            "voice_id": "classic-female",
+            "subtitle_style": {
+                "font_size": 42,
+                "color": "#FFE600",
+                "outline_color": "#000000",
+                "position": "bottom",
+                "max_chars_per_line": 8,
+            },
+        },
+    )
+
+    assert generated.status_code == 200
+    body = generated.json()
+    subtitle_path = Path(body["subtitle_path"])
+    assert subtitle_path.exists()
+    assert "第一句字幕" in subtitle_path.read_text(encoding="utf-8")
+    assert body["render_options"]["subtitle_style"]["color"] == "#FFE600"
+
+
+def test_renderer_subtitle_filter_uses_douyin_yellow_style(monkeypatch):
+    monkeypatch.setattr("app.pipeline.renderer._ffmpeg_executable", lambda: "ffmpeg")
+    options = RenderOptions(
+        subtitle_style=SubtitleStyle(
+            font_size=42,
+            color="#FFE600",
+            outline_color="#000000",
+        )
+    )
+
+    command = Renderer().build_ffmpeg_command(
+        Path("source.mp4"),
+        Path("voice.wav"),
+        Path("subtitle.srt"),
+        options,
+        Path("output.mp4"),
+    )
+
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "force_style=" in filter_complex
+    assert "FontName=Microsoft YaHei" in filter_complex
+    assert "PrimaryColour=&H0000E6FF&" in filter_complex
+    assert "OutlineColour=&H00000000&" in filter_complex
+
+
+def test_pip_upload_returns_asset():
+    uploaded = client.post(
+        "/api/pip/upload",
+        files={"file": ("pip.png", b"pip-bytes", "image/png")},
+    )
+
+    assert uploaded.status_code == 200
+    asset = uploaded.json()["asset"]
+    assert asset["kind"] == "pip"
+    assert asset["filename"] == "pip.png"
+
+
+def test_renderer_pip_overlay_command(monkeypatch):
+    monkeypatch.setattr("app.pipeline.renderer._ffmpeg_executable", lambda: "ffmpeg")
+    options = RenderOptions(
+        pip_enabled=True,
+        pip_scale=0.25,
+        pip_position="bottom_left",
+    )
+
+    command = Renderer().build_ffmpeg_command(
+        Path("source.mp4"),
+        Path("voice.wav"),
+        None,
+        options,
+        Path("output.mp4"),
+        pip_asset=Path("pip.png"),
+    )
+
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "-loop" in command
+    assert "[0:v]setpts=PTS-STARTPTS[mainv]" in filter_complex
+    assert "scale=320:-1,setpts=PTS-STARTPTS[pip]" in filter_complex
+    assert "[mainv][pip]overlay=24:main_h-overlay_h-24:eof_action=pass[basev]" in filter_complex
 
 
 def test_rewrite_style_presets_are_available():
@@ -348,6 +445,48 @@ def test_mouth_quality_report_summarizes_internal_scores():
     assert missing_task.task_id not in quality_items
 
 
+def test_extract_douyin_share_url_from_full_share_copy():
+    samples = [
+        (
+            "2026，用智能体日更百条 https://v.douyin.com/q1e71qTpdU0/ 复制此链接，打开【抖音】，直接观看视频！",
+            "https://v.douyin.com/q1e71qTpdU0/",
+        ),
+        (
+            "还在为拍视频头疼吗？这个方法简单又方便～ #短视频创业 #实体商家  #引流拓客 #老板思维 https://v.douyin.com/NKaTns7EBKU/ 复制此链接，打开【抖音】，直接观看视频！",
+            "https://v.douyin.com/NKaTns7EBKU/",
+        ),
+        (
+            "8.97 :5pm 09/29 pdn:/ user@example.com 收入大揭秘，9.2万粉丝月入有多少？ # 自媒体收入  https://v.douyin.com/iLSGU9OilYU/ 复制此链接，打开Dou音搜索，直接观看视频！",
+            "https://v.douyin.com/iLSGU9OilYU/",
+        ),
+    ]
+
+    for share_text, expected_url in samples:
+        assert extract_douyin_share_url(share_text) == expected_url
+        assert extract_first_url(share_text) == expected_url
+
+
+def test_extract_douyin_share_url_prefers_douyin_link_over_other_urls():
+    share_text = "参考 https://example.com/a，再看 https://v.douyin.com/q1e71qTpdU0/ 复制此链接"
+
+    assert extract_douyin_share_url(share_text) == "https://v.douyin.com/q1e71qTpdU0/"
+    assert extract_first_url(share_text) == "https://v.douyin.com/q1e71qTpdU0/"
+
+
+def test_extract_douyin_share_url_accepts_bare_domain_and_wrapped_punctuation():
+    share_text = "爆款视频【v.douyin.com/q1e71qTpdU0/】复制打开抖音"
+
+    assert extract_douyin_share_url(share_text) == "https://v.douyin.com/q1e71qTpdU0/"
+    assert extract_first_url(share_text) == "https://v.douyin.com/q1e71qTpdU0/"
+
+
+def test_extract_first_url_ignores_noisy_non_link_tokens_without_protocol():
+    share_text = "8.97 :5pm 09/29 pdn:/ user@example.com 收入大揭秘"
+
+    assert extract_douyin_share_url(share_text) is None
+    assert extract_first_url(share_text) is None
+
+
 def test_link_task_returns_failed_when_download_fails():
     """Pasting a Douyin share link that cannot be downloaded sets task status to failed."""
     with patch("app.main.video_importer.import_from_share_text",
@@ -387,6 +526,68 @@ def test_link_task_no_url_returns_failed():
 
     assert task["status"] == "failed"
     assert "没有识别到有效视频链接" in task["error_message"]
+
+
+def test_link_task_reports_import_substeps():
+    source_path = storage_dir("uploads") / f"{uuid4()}.mp4"
+    source_path.write_bytes(b"fake-video")
+    asset = Asset(kind="source_video", filename=source_path.name, path=str(source_path))
+    share_url = f"https://v.douyin.com/{uuid4().hex}/"
+
+    def fake_import(share_text, on_stage=None):
+        if on_stage:
+            on_stage("resolve_link", "running")
+            on_stage("resolve_link", "completed")
+            on_stage("download_video", "running")
+            on_stage("download_video", "completed")
+        return asset
+
+    with patch("app.main.video_importer.import_from_share_text", side_effect=fake_import), \
+         patch("app.main.asr_provider.transcribe", return_value="链接识别文案"):
+        res = client.post("/api/tasks", json={"douyin_url": share_url})
+        assert res.status_code == 200
+        task_id = res.json()["task_id"]
+
+        import time
+        for _ in range(20):
+            task = client.get(f"/api/tasks/{task_id}").json()
+            if task["status"] in ("failed", "transcribed"):
+                break
+            time.sleep(0.1)
+
+    progress = {step["key"]: step["status"] for step in task["progress_steps"]}
+    assert task["status"] == "transcribed"
+    assert task["original_script"] == "链接识别文案"
+    assert progress["resolve_link"] == "completed"
+    assert progress["download_video"] == "completed"
+    assert progress["transcribe"] == "completed"
+    assert progress["extract"] == "completed"
+
+
+def test_link_task_reuses_cached_transcript():
+    source_path = storage_dir("uploads") / f"{uuid4()}.mp4"
+    source_path.write_bytes(b"cached-video")
+    share_url = f"https://v.douyin.com/{uuid4().hex}/"
+    cached = OralVideoTask(
+        douyin_url=share_url,
+        status=TaskStatus.transcribed,
+        source_video=Asset(kind="source_video", filename=source_path.name, path=str(source_path)),
+        original_script="缓存文案",
+    )
+    repo.put(cached)
+
+    with patch("app.main.video_importer.import_from_share_text") as importer:
+        res = client.post("/api/tasks", json={"douyin_url": f"复制打开 {share_url} 观看"})
+
+    assert res.status_code == 200
+    body = res.json()
+    progress = {step["key"]: step["status"] for step in body["progress_steps"]}
+    importer.assert_not_called()
+    assert body["status"] == "transcribed"
+    assert body["original_script"] == "缓存文案"
+    assert progress["resolve_link"] == "completed"
+    assert progress["download_video"] == "completed"
+    assert progress["transcribe"] == "completed"
 
 
 def test_upload_rewrite_and_render_flow():
@@ -707,6 +908,98 @@ def test_custom_voice_and_bgm_uploads_are_listed():
     assert any(item["bgm_id"] == uploaded_bgm["bgm_id"] for item in bgm.json()["items"])
 
 
+def test_voice_preview_returns_uploaded_voice_reference():
+    voice_upload = client.post(
+        "/api/voices/upload",
+        files={"file": ("preview-voice.wav", _wav_bytes(), "audio/wav")},
+    )
+    assert voice_upload.status_code == 200
+    voice_id = voice_upload.json()["voice"]["voice_id"]
+
+    preview = client.get("/api/voices/preview", params={"voice_id": voice_id})
+
+    assert preview.status_code == 200
+    assert preview.content.startswith(b"RIFF")
+
+
+def test_clone_voice_preview_returns_template_file(tmp_path, monkeypatch):
+    template = tmp_path / "标准男声.wav"
+    template.write_bytes(_wav_bytes())
+    monkeypatch.setattr(main_module, "clone_voice_templates_dir", lambda: tmp_path)
+
+    preview = client.get(
+        "/api/voices/preview",
+        params={"voice_id": f"clone:{template.name}"},
+    )
+
+    assert preview.status_code == 200
+    assert preview.content.startswith(b"RIFF")
+
+
+def test_clone_folder_voice_templates_are_listed_first(tmp_path, monkeypatch):
+    (tmp_path / "标准男声.m4a").write_bytes(b"voice")
+    (tmp_path / "元气女生.m4a").write_bytes(b"voice")
+    monkeypatch.setattr(main_module, "clone_voice_templates_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_module.asset_store, "list", lambda kind=None: [])
+
+    catalog = main_module.build_voice_catalog()
+
+    assert [item.voice_id for item in catalog["items"][:2]] == [
+        "clone:元气女生.m4a",
+        "clone:标准男声.m4a",
+    ]
+    assert [item.name for item in catalog["items"][:2]] == ["元气女生", "标准男声"]
+
+
+def test_bgm_folder_templates_use_file_names(tmp_path, monkeypatch):
+    (tmp_path / "宣传类口播.mp3").write_bytes(b"bgm")
+    (tmp_path / "通用类口播.mp3").write_bytes(b"bgm")
+    monkeypatch.setattr(main_module, "bgm_templates_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_module.asset_store, "list", lambda kind=None: [])
+
+    catalog = main_module.build_bgm_catalog()
+
+    assert [item.bgm_id for item in catalog["items"]] == [
+        "template:宣传类口播.mp3",
+        "template:通用类口播.mp3",
+    ]
+    assert [item.name for item in catalog["items"]] == ["宣传类口播", "通用类口播"]
+    assert main_module.resolve_bgm_audio("template:宣传类口播.mp3") == tmp_path / "宣传类口播.mp3"
+
+
+def test_recent_custom_items_keeps_ten_recent_unique(monkeypatch):
+    profiles = [
+        VoiceProfile(
+            voice_id=f"custom:voice-{index}",
+            name=f"voice-{index}",
+            description="test voice",
+            built_in=False,
+        )
+        for index in range(12)
+    ]
+    profiles.append(profiles[-1].model_copy())
+    monkeypatch.setattr(
+        main_module,
+        "_load_recent_usage",
+        lambda: {
+            "voice": [
+                {
+                    "id": f"custom:voice-{index}",
+                    "used_at": f"2026-06-28T00:{index:02d}:00+00:00",
+                }
+                for index in range(12)
+            ]
+        },
+    )
+    monkeypatch.setattr(main_module, "_fallback_usage_order", lambda kind: {})
+
+    result = main_module._recent_custom_items("voice", profiles)
+
+    assert [item.voice_id for item in result] == [
+        f"custom:voice-{index}" for index in range(11, 1, -1)
+    ]
+
+
 def test_voice_reference_accepts_video_file():
     voice_upload = client.post(
         "/api/voices/upload",
@@ -721,21 +1014,40 @@ def test_voice_reference_accepts_video_file():
 def test_digital_human_upload_list_and_delete():
     uploaded = client.post(
         "/api/digital-humans/upload",
-        files={"file": ("human-ref.mp4", b"human-video-bytes", "video/mp4")},
+        files={"file": ("human-ref.mp4", b"human-video-bytes" * 128, "video/mp4")},
     )
 
     assert uploaded.status_code == 200
     asset = uploaded.json()["asset"]
     profile = uploaded.json()["digital_human"]
     assert profile["digital_human_id"].startswith("custom:")
+    assert profile["thumbnail_url"].startswith("/api/digital-humans/thumbnail")
 
     listed = client.get("/api/digital-humans")
     assert listed.status_code == 200
-    assert any(item["digital_human_id"] == profile["digital_human_id"] for item in listed.json()["items"])
+    listed_profile = next(
+        item
+        for item in listed.json()["items"]
+        if item["digital_human_id"] == profile["digital_human_id"]
+    )
+    assert listed_profile["thumbnail_url"].startswith("/api/digital-humans/thumbnail")
 
     deleted = client.delete(f"/api/assets/{asset['asset_id']}")
     assert deleted.status_code == 200
     assert not Path(asset["path"]).exists()
+
+
+def test_digital_human_catalog_hides_system_templates_from_client(tmp_path, monkeypatch):
+    for index in range(6):
+        (tmp_path / f"template-{index}.mp4").write_bytes(b"video")
+    monkeypatch.setattr(main_module, "digital_human_templates_dir", lambda: tmp_path)
+    monkeypatch.setattr(main_module.asset_store, "list", lambda kind=None: [])
+    monkeypatch.setattr(main_module, "_load_recent_usage", lambda: {})
+    monkeypatch.setattr(main_module, "_fallback_usage_order", lambda kind: {})
+
+    catalog = main_module.build_digital_human_catalog()
+
+    assert catalog["items"] == []
 
 
 def test_digital_human_atlas_diagnosis_requires_selection():

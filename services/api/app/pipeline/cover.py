@@ -1,72 +1,162 @@
-import struct
+import re
 import subprocess
-import zlib
 from pathlib import Path
-from textwrap import wrap
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
-def _chunk(kind: bytes, data: bytes) -> bytes:
-    return (
-        struct.pack(">I", len(data))
-        + kind
-        + data
-        + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-    )
+COVER_SIZE = (720, 1280)
+TITLE_COLOR = "#FFE600"
+STROKE_COLOR = "#050505"
+ACCENT_COLOR = "#FF4FB8"
 
 
-def _draw_rect(
-    pixels: bytearray,
-    width: int,
-    x: int,
-    y: int,
-    rect_width: int,
-    rect_height: int,
-    color: tuple[int, int, int],
-) -> None:
-    for yy in range(max(0, y), min(y + rect_height, len(pixels) // (width * 3))):
-        for xx in range(max(0, x), min(x + rect_width, width)):
-            offset = (yy * width + xx) * 3
-            pixels[offset : offset + 3] = bytes(color)
+def _font_candidates() -> list[Path]:
+    return [
+        Path("C:/Windows/Fonts/msyhbd.ttc"),
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path("C:/Windows/Fonts/simhei.ttf"),
+        Path("C:/Windows/Fonts/simkai.ttf"),
+        Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ]
 
 
-def generate_cover_png(title: str, script: str, output_path: Path) -> Path:
-    width, height = 720, 1280
-    pixels = bytearray(width * height * 3)
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in _font_candidates():
+        if path.exists():
+            try:
+                return ImageFont.truetype(str(path), size=size)
+            except OSError:
+                continue
+    return ImageFont.load_default()
 
+
+def _clean_text(value: str) -> str:
+    text = re.sub(r"\s+", "", value or "").strip()
+    return text or "爆款口播视频"
+
+
+def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    left, _, right, _ = draw.textbbox((0, 0), text, font=font)
+    return right - left
+
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for char in _clean_text(text):
+        candidate = current + char
+        if current and _text_width(draw, candidate, font) > max_width:
+            lines.append(current)
+            current = char
+        else:
+            current = candidate
+        if len(lines) >= 3:
+            break
+    if current and len(lines) < 3:
+        lines.append(current)
+    return lines or ["爆款口播视频"]
+
+
+def _cover_background(background_image_path: Path | None) -> Image.Image:
+    if background_image_path and background_image_path.exists():
+        try:
+            image = Image.open(background_image_path).convert("RGB")
+            image.thumbnail(COVER_SIZE, Image.Resampling.LANCZOS)
+            canvas = Image.new("RGB", COVER_SIZE, (20, 22, 32))
+            x = (COVER_SIZE[0] - image.width) // 2
+            y = (COVER_SIZE[1] - image.height) // 2
+            canvas.paste(image, (x, y))
+            image = canvas.filter(ImageFilter.GaussianBlur(radius=1.0))
+            overlay = Image.new("RGBA", COVER_SIZE, (0, 0, 0, 92))
+            return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+        except Exception:
+            pass
+
+    width, height = COVER_SIZE
+    image = Image.new("RGB", COVER_SIZE)
+    pixels = image.load()
     for y in range(height):
+        ratio = y / max(1, height - 1)
+        r = int(18 + 34 * ratio)
+        g = int(22 + 10 * ratio)
+        b = int(38 + 38 * ratio)
         for x in range(width):
-            ratio = y / height
-            r = int(24 + 20 * ratio)
-            g = int(132 + 40 * ratio)
-            b = int(145 + 35 * ratio)
-            offset = (y * width + x) * 3
-            pixels[offset : offset + 3] = bytes((r, g, b))
+            glow = max(0, 1 - ((x - width * 0.56) ** 2 + (y - height * 0.22) ** 2) / (width * height * 0.22))
+            pixels[x, y] = (
+                min(255, int(r + 34 * glow)),
+                min(255, int(g + 12 * glow)),
+                min(255, int(b + 42 * glow)),
+            )
+    return image
 
-    _draw_rect(pixels, width, 42, 82, 636, 170, (238, 255, 250))
-    _draw_rect(pixels, width, 64, 302, 592, 520, (255, 255, 255))
-    _draw_rect(pixels, width, 96, 360, 528, 16, (37, 160, 170))
 
-    title_lines = wrap(title or "爆款口播视频", width=12)[:3]
-    body_lines = wrap(script.replace("，", " ").replace("。", " "), width=16)[:6]
+def generate_cover_png(
+    title: str,
+    script: str,
+    output_path: Path,
+    *,
+    background_image_path: Path | None = None,
+) -> Path:
+    image = _cover_background(background_image_path).convert("RGBA")
+    draw = ImageDraw.Draw(image)
+    title_source = _clean_text(title) if title else _clean_text(script)[:32]
+    title_font = _load_font(62)
+    tag_font = _load_font(25)
+    lines = _wrap_text(draw, title_source, title_font, 620)
 
-    # Lightweight bitmap-like text placeholder: bars represent line density.
-    for idx, line in enumerate(title_lines):
-        _draw_rect(pixels, width, 96, 132 + idx * 42, min(500, 28 * len(line)), 22, (18, 92, 98))
-    for idx, line in enumerate(body_lines):
-        _draw_rect(pixels, width, 112, 430 + idx * 52, min(476, 18 * len(line)), 18, (55, 72, 78))
-
-    _draw_rect(pixels, width, 96, 910, 528, 120, (20, 105, 118))
-    _draw_rect(pixels, width, 180, 952, 360, 26, (240, 255, 252))
-
-    raw = b"".join(b"\x00" + pixels[y * width * 3 : (y + 1) * width * 3] for y in range(height))
-    png = (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + _chunk(b"IDAT", zlib.compress(raw, 9))
-        + _chunk(b"IEND", b"")
+    total_height = len(lines) * 74
+    start_y = 168 if len(lines) <= 2 else 136
+    panel_padding_x = 30
+    panel_padding_y = 18
+    widest = max(_text_width(draw, line, title_font) for line in lines)
+    panel_w = min(660, widest + panel_padding_x * 2)
+    panel_h = total_height + panel_padding_y * 2
+    panel_x = (COVER_SIZE[0] - panel_w) // 2
+    panel_y = start_y - panel_padding_y
+    draw.rounded_rectangle(
+        [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
+        radius=30,
+        fill=(0, 0, 0, 142),
+        outline=(255, 79, 184, 190),
+        width=3,
     )
+
+    for index, line in enumerate(lines):
+        line_w = _text_width(draw, line, title_font)
+        x = (COVER_SIZE[0] - line_w) // 2
+        y = start_y + index * 74
+        draw.text(
+            (x, y),
+            line,
+            font=title_font,
+            fill=TITLE_COLOR,
+            stroke_width=7,
+            stroke_fill=STROKE_COLOR,
+        )
+
+    tag = "口播干货"
+    tag_w = _text_width(draw, tag, tag_font) + 42
+    tag_x = (COVER_SIZE[0] - tag_w) // 2
+    tag_y = panel_y - 58
+    draw.rounded_rectangle(
+        [tag_x, tag_y, tag_x + tag_w, tag_y + 40],
+        radius=20,
+        fill=ACCENT_COLOR,
+    )
+    draw.text(
+        (tag_x + 21, tag_y + 6),
+        tag,
+        font=tag_font,
+        fill="white",
+        stroke_width=1,
+        stroke_fill=STROKE_COLOR,
+    )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(png)
+    image.convert("RGB").save(output_path, "PNG", optimize=True)
     return output_path
 
 

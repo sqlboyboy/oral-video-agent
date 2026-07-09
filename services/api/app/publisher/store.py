@@ -87,11 +87,14 @@ class PublisherStore:
         self._save_jobs()
         return job
 
-    def clear_for_tests(self) -> None:
+    def clear_all(self) -> None:
         self._accounts.clear()
         self._jobs.clear()
         self._save_accounts()
         self._save_jobs()
+
+    def clear_for_tests(self) -> None:
+        self.clear_all()
 
 
 publisher_store = PublisherStore()
