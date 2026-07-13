@@ -17,9 +17,21 @@ def _int_env(name: str, default: int) -> int:
     return int(raw)
 
 
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     admin_token: str = os.getenv("ADMIN_TOKEN", "change-admin-token")
+    admin_username: str = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password: str = os.getenv("ADMIN_PASSWORD") or os.getenv(
+        "ADMIN_TOKEN", "change-admin-token"
+    )
+    admin_cookie_secure: bool = _bool_env("ADMIN_COOKIE_SECURE", False)
     worker_token: str = os.getenv("WORKER_TOKEN", "change-worker-token")
     database_path: Path = Path(os.getenv("CLOUD_DATABASE_PATH", "./data/cloud.sqlite3"))
     database_url: str = os.getenv("DATABASE_URL", "").strip()
@@ -38,14 +50,27 @@ class Settings:
     ses_region: str = os.getenv("SES_REGION", "ap-guangzhou")
     ses_from_email: str = os.getenv("SES_FROM_EMAIL", "")
     ses_login_template_id: str = os.getenv("SES_LOGIN_TEMPLATE_ID", "")
+    ses_login_subject: str = os.getenv(
+        "SES_LOGIN_SUBJECT", "杰速口播邮箱验证码"
+    ).strip()
     email_code_ttl_seconds: int = _int_env("EMAIL_CODE_TTL_SECONDS", 600)
     email_code_resend_seconds: int = _int_env("EMAIL_CODE_RESEND_SECONDS", 60)
     email_code_max_attempts: int = _int_env("EMAIL_CODE_MAX_ATTEMPTS", 5)
+    email_code_per_email_per_hour: int = _int_env(
+        "EMAIL_CODE_PER_EMAIL_PER_HOUR", 5
+    )
+    email_code_per_device_per_hour: int = _int_env(
+        "EMAIL_CODE_PER_DEVICE_PER_HOUR", 10
+    )
+    email_code_per_device_per_day: int = _int_env(
+        "EMAIL_CODE_PER_DEVICE_PER_DAY", 30
+    )
     max_devices_per_user: int = _int_env("MAX_DEVICES_PER_USER", 1)
     bonus_daily_spend_limit: int = _int_env("BONUS_DAILY_SPEND_LIMIT", 90)
     max_render_duration_seconds: int = _int_env("MAX_RENDER_DURATION_SECONDS", 600)
     scheduler_interval_seconds: int = _int_env("SCHEDULER_INTERVAL_SECONDS", 60)
     running_job_timeout_seconds: int = _int_env("RUNNING_JOB_TIMEOUT_SECONDS", 7200)
+    queued_job_timeout_seconds: int = _int_env("QUEUED_JOB_TIMEOUT_SECONDS", 86400)
     preprocess_running_job_timeout_seconds: int = _int_env(
         "PREPROCESS_RUNNING_JOB_TIMEOUT_SECONDS",
         300,

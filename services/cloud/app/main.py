@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import secrets
 import mimetypes
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .email_sender import create_email_sender
@@ -15,7 +20,7 @@ from .object_storage import object_storage
 from .redis_state import RedisState
 from .rewrite import RewriteInput, rewrite_script
 from .settings import settings
-from .store import QueueStore, estimate_render_points
+from .store import QueueStore, estimate_render_points, validate_password
 
 
 app = FastAPI(title="Oral Video Agent Cloud", version="0.1.0")
@@ -35,6 +40,11 @@ class AdminLicenseKeyRequest(BaseModel):
     license_key: str | None = None
     max_activations: int = Field(default=1, ge=1, le=20)
     grant_points: int | None = Field(default=None, ge=0)
+    expires_at: datetime | None = None
+
+
+class AdminLicenseKeyUpdateRequest(BaseModel):
+    expires_at: datetime | None
 
 
 class AdminCreditCodeRequest(BaseModel):
@@ -45,6 +55,21 @@ class AdminCreditCodeRequest(BaseModel):
 class AdminUserCreditRequest(BaseModel):
     points: int = Field(ge=1)
     note: str = ""
+
+
+class AdminUserDebitRequest(BaseModel):
+    points: int = Field(ge=1)
+    note: str = ""
+
+
+class AdminLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class AdminUserCreateRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    initial_points: int = Field(default=0, ge=0, le=100_000_000)
 
 
 class AdminUserUpdateRequest(BaseModel):
@@ -60,12 +85,33 @@ class ClientActivationRequest(BaseModel):
 
 class ClientEmailCodeRequest(BaseModel):
     email: str
+    purpose: str = "register"
 
 
 class ClientEmailLoginRequest(BaseModel):
     email: str
     code: str
     device_fingerprint: str
+    device_name: str = ""
+
+
+class ClientPasswordRegisterRequest(BaseModel):
+    email: str
+    code: str
+    password: str
+    device_name: str = ""
+
+
+class ClientPasswordLoginRequest(BaseModel):
+    email: str
+    password: str
+    device_name: str = ""
+
+
+class ClientPasswordResetRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
     device_name: str = ""
 
 
@@ -190,9 +236,45 @@ def _rewrite_result_from_payload(payload: dict[str, Any], *, user_id: str) -> di
     }
 
 
-def require_admin(x_admin_token: str = Header(default="")) -> None:
-    if not settings.admin_token or x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=401, detail="invalid admin token")
+ADMIN_SESSION_COOKIE = "oral_video_admin_session"
+
+
+def _create_admin_session() -> str:
+    expires_at = int(time.time()) + 12 * 60 * 60
+    payload = f"{settings.admin_username}|{expires_at}".encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        settings.admin_token.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _valid_admin_session(value: str) -> bool:
+    try:
+        encoded, supplied_signature = value.rsplit(".", 1)
+        expected_signature = hmac.new(
+            settings.admin_token.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(supplied_signature, expected_signature):
+            return False
+        padded = encoded + "=" * (-len(encoded) % 4)
+        username, expires_text = base64.urlsafe_b64decode(padded).decode("utf-8").rsplit("|", 1)
+        return hmac.compare_digest(username, settings.admin_username) and int(expires_text) > int(
+            time.time()
+        )
+    except (ValueError, UnicodeDecodeError):
+        return False
+
+
+def require_admin(
+    x_admin_token: str = Header(default=""),
+    admin_session: str = Cookie(default="", alias=ADMIN_SESSION_COOKIE),
+) -> None:
+    valid_token = bool(settings.admin_token) and hmac.compare_digest(
+        x_admin_token, settings.admin_token
+    )
+    if not valid_token and not _valid_admin_session(admin_session):
+        raise HTTPException(status_code=401, detail="admin login required")
 
 
 def require_worker(authorization: str = Header(default="")) -> None:
@@ -223,18 +305,36 @@ def require_client(authorization: str = Header(default="")) -> dict[str, Any]:
     return session
 
 
-def require_licensed_client(
-    session: dict[str, Any] = Depends(require_client),
+def require_device_activation(
+    x_device_token: str = Header(default="", alias="X-Device-Token"),
+    authorization: str = Header(default=""),
 ) -> dict[str, Any]:
-    user = session["user"]
-    if user.get("license_status") != "active":
-        raise HTTPException(status_code=403, detail="account license is not active")
-    return session
+    token = x_device_token.strip()
+    if not token and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="missing device activation token")
+    try:
+        activation = store.get_device_activation(access_token=token)
+    except KeyError:
+        raise HTTPException(status_code=401, detail="invalid device activation token")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    activation["activation_token"] = token
+    return activation
+
+
+def require_licensed_client(
+    activation: dict[str, Any] = Depends(require_device_activation),
+) -> dict[str, Any]:
+    return activation
 
 
 def require_cloud_account(
-    session: dict[str, Any] = Depends(require_licensed_client),
+    session: dict[str, Any] = Depends(require_client),
+    activation: dict[str, Any] = Depends(require_device_activation),
 ) -> dict[str, Any]:
+    session["activation"] = activation
     return session
 
 
@@ -245,9 +345,19 @@ def _enforce_worker_rate_limit(worker_id: str) -> None:
     )
 
 
-def _enforce_rate_limit(*, key: str, limit: int) -> None:
-    if not redis_state.allow_rate_limit(key=key, limit=limit):
-        raise HTTPException(status_code=429, detail="rate limit exceeded")
+def _enforce_rate_limit(
+    *,
+    key: str,
+    limit: int,
+    window_seconds: int = 60,
+    detail: str = "rate limit exceeded",
+) -> None:
+    if not redis_state.allow_rate_limit(
+        key=key,
+        limit=limit,
+        window_seconds=window_seconds,
+    ):
+        raise HTTPException(status_code=429, detail=detail)
 
 
 def _require_local_object_storage() -> None:
@@ -282,6 +392,41 @@ def health() -> dict[str, Any]:
         "database_backend": store.backend,
         "redis": redis_state.health(),
     }
+
+
+@app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
+def admin_web() -> HTMLResponse:
+    return HTMLResponse(Path(__file__).with_name("admin_web.html").read_text(encoding="utf-8"))
+
+
+@app.post("/api/admin/session/login")
+def admin_session_login(req: AdminLoginRequest, response: Response) -> dict[str, Any]:
+    valid = hmac.compare_digest(req.username, settings.admin_username) and hmac.compare_digest(
+        req.password, settings.admin_password
+    )
+    if not valid:
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        _create_admin_session(),
+        max_age=12 * 60 * 60,
+        httponly=True,
+        secure=settings.admin_cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+    return {"username": settings.admin_username}
+
+
+@app.get("/api/admin/session", dependencies=[Depends(require_admin)])
+def admin_session() -> dict[str, Any]:
+    return {"username": settings.admin_username}
+
+
+@app.post("/api/admin/session/logout")
+def admin_session_logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
+    return {"ok": True}
 
 
 @app.put("/api/storage/objects/{cos_key:path}")
@@ -348,9 +493,31 @@ def create_license_key(req: AdminLicenseKeyRequest) -> dict[str, Any]:
             grant_points=req.grant_points
             if req.grant_points is not None
             else settings.license_activation_grant_points,
+            expires_at=req.expires_at.isoformat() if req.expires_at else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/admin/license-keys", dependencies=[Depends(require_admin)])
+def list_license_keys(limit: int = 100) -> dict[str, Any]:
+    return {"items": store.list_license_keys(limit=limit)}
+
+
+@app.patch("/api/admin/license-keys/{license_key}", dependencies=[Depends(require_admin)])
+def update_license_key(license_key: str, req: AdminLicenseKeyUpdateRequest) -> dict[str, Any]:
+    try:
+        return store.update_license_key(
+            license_key=license_key,
+            expires_at=req.expires_at.isoformat() if req.expires_at else None,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="license key not found")
+
+
+@app.get("/api/admin/dashboard", dependencies=[Depends(require_admin)])
+def admin_dashboard() -> dict[str, Any]:
+    return store.admin_dashboard()
 
 
 @app.post("/api/admin/credit-codes", dependencies=[Depends(require_admin)])
@@ -366,6 +533,15 @@ def list_users(email: str | None = None, limit: int = 50) -> dict[str, Any]:
     return {"items": store.list_users(email=email, limit=max(1, min(limit, 200)))}
 
 
+@app.post("/api/admin/users", dependencies=[Depends(require_admin)])
+def create_admin_user(req: AdminUserCreateRequest) -> dict[str, Any]:
+    try:
+        return store.create_admin_user(email=req.email, initial_points=req.initial_points)
+    except ValueError as exc:
+        detail = str(exc)
+        raise HTTPException(status_code=409 if "exists" in detail else 400, detail=detail) from exc
+
+
 @app.get("/api/admin/users/{user_id}", dependencies=[Depends(require_admin)])
 def get_admin_user(user_id: str) -> dict[str, Any]:
     try:
@@ -378,6 +554,16 @@ def get_admin_user(user_id: str) -> dict[str, Any]:
 def add_admin_user_credits(user_id: str, req: AdminUserCreditRequest) -> dict[str, Any]:
     try:
         return store.add_user_credits(user_id=user_id, points=req.points, note=req.note)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="user not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/admin/users/{user_id}/debits", dependencies=[Depends(require_admin)])
+def deduct_admin_user_credits(user_id: str, req: AdminUserDebitRequest) -> dict[str, Any]:
+    try:
+        return store.deduct_user_credits(user_id=user_id, points=req.points, note=req.note)
     except KeyError:
         raise HTTPException(status_code=404, detail="user not found")
     except ValueError as exc:
@@ -407,8 +593,30 @@ def reset_admin_user_devices(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/admin/jobs", dependencies=[Depends(require_admin)])
-def list_jobs(limit: int = 50) -> dict[str, Any]:
-    return {"items": store.list_jobs(limit=max(1, min(limit, 200)))}
+def list_jobs(
+    limit: int = 50,
+    job_status: str | None = Query(default=None, alias="status"),
+    q: str | None = None,
+) -> dict[str, Any]:
+    allowed_statuses = {"uploading", "queued", "running", "completed", "failed", "canceled", "timed_out"}
+    if job_status and job_status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="invalid job status")
+    return {
+        "items": store.list_jobs(
+            limit=max(1, min(limit, 500)),
+            job_status=job_status,
+            query=q,
+        ),
+        "summary": store.admin_job_summary(),
+    }
+
+
+@app.get("/api/admin/jobs/{job_id}", dependencies=[Depends(require_admin)])
+def get_admin_job(job_id: str) -> dict[str, Any]:
+    try:
+        return store.get_admin_job_detail(job_id=job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="job not found")
 
 
 @app.get("/api/admin/queue", dependencies=[Depends(require_admin)])
@@ -428,9 +636,36 @@ def send_client_email_code(
     req: ClientEmailCodeRequest,
     session: dict[str, Any] = Depends(require_licensed_client),
 ) -> dict[str, Any]:
+    email = req.email.strip().lower()
+    purpose = req.purpose.strip().lower()
+    if purpose not in {"register", "reset_password"}:
+        raise HTTPException(status_code=400, detail="invalid email code purpose")
+    try:
+        has_password = store.email_account_has_password(email=email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if purpose == "register" and has_password:
+        raise HTTPException(status_code=409, detail="账号已存在，请直接使用密码登录")
+    if purpose == "reset_password" and not has_password:
+        raise HTTPException(status_code=404, detail="该邮箱尚未注册密码账号")
+    device_id = str(session["device"]["device_id"])
     _enforce_rate_limit(
-        key=f"email-code:{req.email.strip().lower()}",
-        limit=max(1, settings.client_rate_limit_per_minute // 6),
+        key=f"email-code:email-hour:{email}",
+        limit=settings.email_code_per_email_per_hour,
+        window_seconds=3600,
+        detail="该邮箱验证码发送次数过多，请一小时后再试",
+    )
+    _enforce_rate_limit(
+        key=f"email-code:device-hour:{device_id}",
+        limit=settings.email_code_per_device_per_hour,
+        window_seconds=3600,
+        detail="当前设备验证码发送次数过多，请一小时后再试",
+    )
+    _enforce_rate_limit(
+        key=f"email-code:device-day:{device_id}",
+        limit=settings.email_code_per_device_per_day,
+        window_seconds=86400,
+        detail="当前设备今日验证码发送次数已达上限，请明天再试",
     )
     code = f"{secrets.randbelow(1_000_000):06d}"
     try:
@@ -452,6 +687,7 @@ def send_client_email_code(
     response = {
         "sent": True,
         "email": req.email.strip().lower(),
+        "purpose": purpose,
         "expires_at": item["expires_at"],
         "resend_seconds": settings.email_code_resend_seconds,
     }
@@ -460,23 +696,116 @@ def send_client_email_code(
     return response
 
 
+@app.post("/api/client/auth/register")
+def register_client_with_password(
+    req: ClientPasswordRegisterRequest,
+    activation: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    try:
+        validate_password(req.password)
+        if store.email_account_has_password(email=req.email):
+            raise HTTPException(status_code=409, detail="账号已存在，请直接登录")
+        session = store.login_with_email_code(
+            email=req.email,
+            code=req.code,
+            device_fingerprint=activation["device"]["device_fingerprint"],
+            device_name=req.device_name,
+            max_attempts=settings.email_code_max_attempts,
+            max_devices=settings.max_devices_per_user,
+        )
+        session["user"] = store.set_user_password(
+            user_id=session["user"]["user_id"],
+            password=req.password,
+        )
+        return session
+    except HTTPException:
+        raise
+    except KeyError:
+        raise HTTPException(status_code=400, detail="验证码无效或已过期")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/client/auth/password-login")
+def login_client_with_password(
+    req: ClientPasswordLoginRequest,
+    activation: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    email_key = hashlib.sha256(req.email.strip().lower().encode("utf-8")).hexdigest()
+    device_id = str(activation["device"]["device_id"])
+    _enforce_rate_limit(
+        key=f"password-login:{device_id}:{email_key}",
+        limit=10,
+        window_seconds=900,
+        detail="登录尝试次数过多，请 15 分钟后再试",
+    )
+    try:
+        return store.login_with_password(
+            email=req.email,
+            password=req.password,
+            device_fingerprint=activation["device"]["device_fingerprint"],
+            device_name=req.device_name,
+            max_devices=settings.max_devices_per_user,
+        )
+    except KeyError:
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/client/auth/password-reset")
+def reset_client_password(
+    req: ClientPasswordResetRequest,
+    activation: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    try:
+        validate_password(req.new_password)
+        if not store.email_account_has_password(email=req.email):
+            raise HTTPException(status_code=404, detail="该邮箱尚未注册密码账号")
+        session = store.login_with_email_code(
+            email=req.email,
+            code=req.code,
+            device_fingerprint=activation["device"]["device_fingerprint"],
+            device_name=req.device_name,
+            max_attempts=settings.email_code_max_attempts,
+            max_devices=settings.max_devices_per_user,
+        )
+        session["user"] = store.set_user_password(
+            user_id=session["user"]["user_id"],
+            password=req.new_password,
+        )
+        return session
+    except HTTPException:
+        raise
+    except KeyError:
+        raise HTTPException(status_code=400, detail="验证码无效或已过期")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/api/client/auth/login")
 def login_client_with_email(
     req: ClientEmailLoginRequest,
-    session: dict[str, Any] = Depends(require_licensed_client),
+    activation: dict[str, Any] = Depends(require_licensed_client),
 ) -> dict[str, Any]:
     _enforce_rate_limit(
         key=f"activate:{req.device_fingerprint}",
         limit=settings.client_rate_limit_per_minute,
     )
     try:
-        return store.bind_email_with_code(
-            user_id=session["user"]["user_id"],
-            device_id=session["device"]["device_id"],
-            device_token=session["device_token"],
+        return store.login_with_email_code(
             email=req.email,
             code=req.code,
+            device_fingerprint=activation["device"]["device_fingerprint"],
+            device_name=req.device_name,
             max_attempts=settings.email_code_max_attempts,
+            max_devices=settings.max_devices_per_user,
         )
     except KeyError:
         raise HTTPException(status_code=400, detail="invalid or expired email code")
@@ -505,6 +834,13 @@ def activate_client(req: ClientActivationRequest) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/client/activation")
+def client_activation(
+    activation: dict[str, Any] = Depends(require_device_activation),
+) -> dict[str, Any]:
+    return activation
 
 
 @app.post("/api/client/license/activate")

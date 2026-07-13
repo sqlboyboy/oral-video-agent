@@ -263,6 +263,7 @@ elseif (Test-Path -LiteralPath $sedPath) {
     }
     if (Test-Path -LiteralPath $installerPath) {
         Copy-Item -LiteralPath $installerPath -Destination $installerBackupPath -Force
+        Remove-Item -LiteralPath $installerPath -Force
     }
     $sedDir = Split-Path -Parent $sedPath
     $sedName = Split-Path -Leaf $sedPath

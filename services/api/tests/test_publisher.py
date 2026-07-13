@@ -2,6 +2,7 @@ import importlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -187,3 +188,168 @@ def test_xiaohongshu_description_combines_body_and_topics():
     )
 
     assert description == "这是前端第二个框的作品简介 #人生感悟 #新人视频"
+
+
+def test_douyin_topic_input_failure_is_not_reported_as_added(monkeypatch):
+    removed = []
+    clicked = []
+    monkeypatch.setattr(
+        publisher_providers_module, "_dismiss_douyin_publish_guides", lambda page: None
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_open_add_topic_entry", lambda page: True
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_type_topic_query", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_remove_douyin_empty_topic_trigger",
+        lambda page: removed.append(True),
+    )
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_click_topic_suggestion",
+        lambda *args: clicked.append(True),
+    )
+    job = SimpleNamespace(logs=[])
+
+    publisher_providers_module._best_effort_add_topics(
+        object(),
+        publisher_providers_module.PublisherPlatform.douyin,
+        ["自动生成视频"],
+        job,
+    )
+
+    assert removed == [True]
+    assert clicked == []
+    assert job.logs == ["topic_query_input_failed:自动生成视频"]
+
+
+def test_douyin_topic_is_logged_only_after_editor_confirmation(monkeypatch):
+    type_options = []
+    monkeypatch.setattr(
+        publisher_providers_module, "_dismiss_douyin_publish_guides", lambda page: None
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_open_add_topic_entry", lambda page: True
+    )
+
+    def type_topic(*args, **kwargs):
+        type_options.append(kwargs)
+        return True
+
+    monkeypatch.setattr(publisher_providers_module, "_type_topic_query", type_topic)
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_click_topic_suggestion",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_douyin_editor_has_topic", lambda *args: True
+    )
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_douyin_editor_has_native_topic",
+        lambda *args: True,
+    )
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_close_douyin_topic_suggestions",
+        lambda page: None,
+    )
+    job = SimpleNamespace(logs=[])
+
+    publisher_providers_module._best_effort_add_topics(
+        object(),
+        publisher_providers_module.PublisherPlatform.douyin,
+        ["自动生成视频"],
+        job,
+    )
+
+    assert type_options == [{"allow_contenteditable": True}]
+    assert job.logs == ["topic_added:自动生成视频:selected"]
+
+
+def test_douyin_topic_without_exact_suggestion_is_kept_as_plain_text(monkeypatch):
+    closed = []
+    monkeypatch.setattr(
+        publisher_providers_module, "_dismiss_douyin_publish_guides", lambda page: None
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_open_add_topic_entry", lambda page: True
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_type_topic_query", lambda *args, **kwargs: True
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_click_topic_suggestion", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        publisher_providers_module, "_douyin_editor_has_topic", lambda *args: True
+    )
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_douyin_editor_has_native_topic",
+        lambda *args: False,
+    )
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_close_douyin_topic_suggestions",
+        lambda page: closed.append(True),
+    )
+    job = SimpleNamespace(logs=[])
+
+    publisher_providers_module._best_effort_add_topics(
+        object(),
+        publisher_providers_module.PublisherPlatform.douyin,
+        ["智能配音"],
+        job,
+    )
+
+    assert closed == [True]
+    assert job.logs == ["topic_added:智能配音:plain"]
+
+
+def test_douyin_preview_transcoding_does_not_block_publish(monkeypatch):
+    monkeypatch.setattr(
+        publisher_providers_module,
+        "_is_text_visible",
+        lambda page, text: text == "转码过程也可以发布作品",
+    )
+    page = SimpleNamespace(
+        wait_for_timeout=lambda milliseconds: pytest.fail("should not wait")
+    )
+    job = SimpleNamespace(logs=[])
+
+    publisher_providers_module._wait_for_upload_ready(
+        page,
+        job,
+        platform=publisher_providers_module.PublisherPlatform.douyin,
+    )
+
+    assert job.logs == ["upload_ready_douyin_transcoding_allowed"]
+
+
+def test_douyin_uses_platform_specific_publish_button(monkeypatch):
+    calls = []
+
+    def click_douyin(page, mode, job):
+        calls.append((page, mode, job))
+        return True
+
+    monkeypatch.setattr(
+        publisher_providers_module, "_click_douyin_action", click_douyin
+    )
+    page = object()
+    job = SimpleNamespace(logs=[])
+
+    clicked = publisher_providers_module._best_effort_click_action(
+        page,
+        "direct",
+        publisher_providers_module.PublisherPlatform.douyin,
+        job,
+    )
+
+    assert clicked is True
+    assert calls == [(page, "direct", job)]

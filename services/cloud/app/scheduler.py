@@ -5,14 +5,23 @@ import time
 
 from .settings import settings
 from .object_storage import object_storage
+from .redis_state import RedisState
 from .store import QueueStore
 
 
 logger = logging.getLogger("oral_video_cloud.scheduler")
 store = QueueStore(settings.database_path, database_url=settings.database_url)
+redis_state = RedisState(settings.redis_url)
 
 
 def run_once() -> dict[str, int]:
+    timed_out_jobs = store.timeout_stale_queued_jobs(
+        timeout_seconds=settings.queued_job_timeout_seconds,
+    )
+    for job in timed_out_jobs:
+        redis_state.note_job_finished(job, status="timed_out")
+    if timed_out_jobs:
+        logger.warning("timed out stale queued jobs: %s", [job["job_id"] for job in timed_out_jobs])
     failed_jobs = store.fail_stale_running_jobs(
         timeout_seconds=settings.running_job_timeout_seconds,
         preprocess_timeout_seconds=settings.preprocess_running_job_timeout_seconds,
@@ -39,6 +48,7 @@ def run_once() -> dict[str, int]:
         except Exception:
             logger.exception("failed to delete stale input asset %s", asset["asset_id"])
     return {
+        "stale_queued_timed_out": len(timed_out_jobs),
         "stale_running_failed": len(failed_jobs),
         "expired_outputs_deleted": deleted_outputs,
         "stale_inputs_deleted": deleted_stale_inputs,

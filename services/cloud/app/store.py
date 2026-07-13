@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import math
 import re
@@ -15,6 +18,51 @@ from uuid import uuid4
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def validate_password(password: str) -> str:
+    value = password
+    if len(value) < 8:
+        raise ValueError("password must contain at least 8 characters")
+    if len(value) > 128:
+        raise ValueError("password must not exceed 128 characters")
+    if not value.strip():
+        raise ValueError("password must not be blank")
+    return value
+
+
+def hash_password(password: str) -> str:
+    value = validate_password(password)
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(
+        value.encode("utf-8"), salt=salt, n=16384, r=8, p=1, dklen=32
+    )
+    return "scrypt$16384$8$1${}${}".format(
+        base64.urlsafe_b64encode(salt).decode("ascii"),
+        base64.urlsafe_b64encode(digest).decode("ascii"),
+    )
+
+
+def verify_password(password: str, encoded: str | None) -> bool:
+    if not encoded:
+        return False
+    try:
+        algorithm, n, r, p, salt_text, digest_text = encoded.split("$", 5)
+        if algorithm != "scrypt":
+            return False
+        salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
+        expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))
+        actual = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=salt,
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=len(expected),
+        )
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -22,7 +70,8 @@ def utc_now() -> str:
 def parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value)
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def estimate_render_points(*, duration_seconds: int, resolution: str = "1080p") -> int:
@@ -160,6 +209,7 @@ class QueueStore:
                     user_id TEXT PRIMARY KEY,
                     email TEXT,
                     email_verified_at TEXT,
+                    password_hash TEXT,
                     license_status TEXT NOT NULL DEFAULT 'inactive',
                     license_key TEXT,
                     license_activated_at TEXT,
@@ -175,6 +225,7 @@ class QueueStore:
                 {
                     "email": "TEXT",
                     "email_verified_at": "TEXT",
+                    "password_hash": "TEXT",
                     "license_status": "TEXT NOT NULL DEFAULT 'inactive'",
                     "license_key": "TEXT",
                     "license_activated_at": "TEXT",
@@ -216,6 +267,7 @@ class QueueStore:
                     status TEXT NOT NULL DEFAULT 'active',
                     max_activations INTEGER NOT NULL DEFAULT 1,
                     grant_points INTEGER NOT NULL DEFAULT 3000,
+                    assigned_user_id TEXT,
                     created_at TEXT NOT NULL,
                     expires_at TEXT
                 )
@@ -226,6 +278,7 @@ class QueueStore:
                 "license_keys",
                 {
                     "grant_points": "INTEGER NOT NULL DEFAULT 3000",
+                    "assigned_user_id": "TEXT",
                 },
             )
             db.execute(
@@ -427,6 +480,7 @@ class QueueStore:
         license_key: str | None = None,
         max_activations: int = 1,
         grant_points: int = 3000,
+        expires_at: str | None = None,
     ) -> dict[str, Any]:
         key = (license_key or secrets.token_urlsafe(12)).strip()
         if not key:
@@ -436,17 +490,47 @@ class QueueStore:
             db.execute(
                 """
                 INSERT INTO license_keys (
-                    license_key, status, max_activations, grant_points, created_at
+                    license_key, status, max_activations, grant_points, created_at, expires_at
                 )
-                VALUES (?, 'active', ?, ?, ?)
+                VALUES (?, 'active', ?, ?, ?, ?)
                 """,
-                (key, max_activations, grant_points, now),
+                (key, max_activations, grant_points, now, expires_at),
             )
             row = db.execute(
                 "SELECT * FROM license_keys WHERE license_key = ?",
                 (key,),
             ).fetchone()
         return dict(row)
+
+    def update_license_key(
+        self,
+        *,
+        license_key: str,
+        expires_at: str | None,
+    ) -> dict[str, Any]:
+        with self.connect() as db:
+            cursor = db.execute(
+                "UPDATE license_keys SET expires_at = ? WHERE license_key = ?",
+                (expires_at, license_key),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(license_key)
+            row = db.execute(
+                "SELECT * FROM license_keys WHERE license_key = ?",
+                (license_key,),
+            ).fetchone()
+        item = dict(row)
+        item["effective_status"] = self._license_effective_status(item)
+        return item
+
+    @staticmethod
+    def _license_effective_status(item: dict[str, Any]) -> str:
+        if item["status"] != "active":
+            return str(item["status"])
+        expires_at = parse_time(item.get("expires_at"))
+        if expires_at and expires_at <= datetime.now(timezone.utc):
+            return "expired"
+        return "active"
 
     def create_credit_code(self, *, code: str | None = None, points: int) -> dict[str, Any]:
         if points <= 0:
@@ -550,8 +634,14 @@ class QueueStore:
             if len(active_activation_rows) >= int(license_row["max_activations"]):
                 raise PermissionError("license activation limit reached")
 
+            assigned_user_id = license_row["assigned_user_id"]
             if activation_rows:
                 user_id = activation_rows[0]["user_id"]
+            elif assigned_user_id:
+                user_id = assigned_user_id
+                assigned_user = self._user_for_id(db, user_id)
+                if assigned_user["status"] != "active":
+                    raise PermissionError("user account is disabled")
             else:
                 user_id = str(uuid4())
                 db.execute(
@@ -573,7 +663,7 @@ class QueueStore:
                     """,
                     (user_id, now),
                 )
-            if activation_rows:
+            if activation_rows or assigned_user_id:
                 db.execute(
                     """
                     UPDATE users
@@ -658,7 +748,9 @@ class QueueStore:
                         (latest["code_id"],),
                     )
                 elif sent_at and (now_dt - sent_at).total_seconds() < resend_seconds:
-                    raise RuntimeError("email code requested too frequently")
+                    elapsed = int((now_dt - sent_at).total_seconds())
+                    remaining = max(1, resend_seconds - elapsed)
+                    raise RuntimeError(f"请等待 {remaining} 秒后重新发送验证码")
                 else:
                     db.execute(
                         "UPDATE email_login_codes SET status = 'superseded' WHERE code_id = ?",
@@ -681,6 +773,113 @@ class QueueStore:
         item = dict(row)
         item.pop("code", None)
         return item
+
+    def email_account_has_password(self, *, email: str) -> bool:
+        address = normalize_email(email)
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT password_hash FROM users WHERE email = ?",
+                (address,),
+            ).fetchone()
+        return bool(row and row["password_hash"])
+
+    def set_user_password(self, *, user_id: str, password: str) -> dict[str, Any]:
+        encoded = hash_password(password)
+        now = utc_now()
+        with self.connect() as db:
+            self._user_for_id(db, user_id)
+            db.execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
+                (encoded, now, user_id),
+            )
+            return self._user_for_id(db, user_id)
+
+    def login_with_password(
+        self,
+        *,
+        email: str,
+        password: str,
+        device_fingerprint: str,
+        device_name: str,
+        max_devices: int,
+    ) -> dict[str, Any]:
+        address = normalize_email(email)
+        fingerprint = device_fingerprint.strip()
+        if not password or not fingerprint:
+            raise ValueError("password and device_fingerprint are required")
+        now = utc_now()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            user = db.execute(
+                "SELECT * FROM users WHERE email = ?",
+                (address,),
+            ).fetchone()
+            if user is None or not verify_password(password, user["password_hash"]):
+                raise KeyError("credentials")
+            if user["status"] != "active":
+                raise PermissionError("user account is disabled")
+
+            existing_device = db.execute(
+                """
+                SELECT * FROM devices
+                WHERE user_id = ? AND device_fingerprint = ?
+                """,
+                (user["user_id"], fingerprint),
+            ).fetchone()
+            active_other_devices = db.execute(
+                """
+                SELECT COUNT(*) AS count FROM devices
+                WHERE user_id = ?
+                  AND revoked_at IS NULL
+                  AND device_fingerprint != ?
+                """,
+                (user["user_id"], fingerprint),
+            ).fetchone()["count"]
+            if (
+                (existing_device is None or existing_device["revoked_at"] is not None)
+                and int(active_other_devices) >= max_devices
+            ):
+                raise PermissionError("device limit reached")
+
+            device_id = existing_device["device_id"] if existing_device else str(uuid4())
+            access_token = secrets.token_urlsafe(32)
+            if existing_device is None:
+                db.execute(
+                    """
+                    INSERT INTO devices (
+                        device_id, user_id, device_fingerprint, device_name,
+                        access_token, activated_at, last_seen_at, revoked_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        device_id,
+                        user["user_id"],
+                        fingerprint,
+                        device_name[:120],
+                        access_token,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE devices
+                    SET device_name = ?,
+                        access_token = ?,
+                        last_seen_at = ?,
+                        revoked_at = NULL
+                    WHERE device_id = ?
+                    """,
+                    (device_name[:120], access_token, now, device_id),
+                )
+            return {
+                "user": self._user_for_id(db, user["user_id"]),
+                "device": self._device_for_id(db, device_id),
+                "device_token": access_token,
+                "wallet": self._wallet_for_user(db, user["user_id"]),
+            }
 
     def login_with_email_code(
         self,
@@ -1028,6 +1227,54 @@ class QueueStore:
                 "user": user,
                 "device": self._device_for_id(db, row["device_id"]),
                 "wallet": self._wallet_for_user(db, row["user_id"]),
+            }
+
+    def get_device_activation(self, *, access_token: str) -> dict[str, Any]:
+        """Resolve software activation by physical device fingerprint.
+
+        Account sessions may change, but any active session created on the same
+        physical device inherits that device's software activation.
+        """
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        with self.connect() as db:
+            current_device = db.execute(
+                "SELECT * FROM devices WHERE access_token = ? AND revoked_at IS NULL",
+                (access_token,),
+            ).fetchone()
+            if current_device is None:
+                raise KeyError("device")
+            activation = db.execute(
+                """
+                SELECT a.activation_id,
+                       a.license_key,
+                       a.activated_at AS license_activated_at,
+                       d.device_id AS activated_device_id,
+                       l.status AS license_status,
+                       l.expires_at AS license_expires_at
+                FROM license_activations a
+                JOIN devices d ON d.device_id = a.device_id
+                JOIN license_keys l ON l.license_key = a.license_key
+                WHERE d.device_fingerprint = ?
+                  AND d.revoked_at IS NULL
+                ORDER BY a.activated_at DESC
+                LIMIT 1
+                """,
+                (current_device["device_fingerprint"],),
+            ).fetchone()
+            if activation is None or activation["license_status"] != "active":
+                raise PermissionError("software is not activated on this device")
+            expires_at = parse_time(activation["license_expires_at"])
+            if expires_at and expires_at < now_dt:
+                raise PermissionError("software activation has expired")
+            db.execute(
+                "UPDATE devices SET last_seen_at = ? WHERE device_id = ?",
+                (now, current_device["device_id"]),
+            )
+            return {
+                "activated": True,
+                "device": self._device_for_id(db, current_device["device_id"]),
+                "activated_at": activation["license_activated_at"],
             }
 
     def get_wallet(self, *, user_id: str) -> dict[str, Any]:
@@ -1565,8 +1812,136 @@ class QueueStore:
             items = []
             for row in rows:
                 item = dict(row)
+                item.pop("password_hash", None)
                 item["wallet"] = self._wallet_for_user(db, row["user_id"])
                 items.append(item)
+        return items
+
+    def create_admin_user(
+        self,
+        *,
+        email: str,
+        initial_points: int = 0,
+    ) -> dict[str, Any]:
+        if initial_points < 0:
+            raise ValueError("initial_points must not be negative")
+        address = normalize_email(email)
+        now = utc_now()
+        user_id = str(uuid4())
+        license_key = secrets.token_urlsafe(12)
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT user_id FROM users WHERE email = ?", (address,)).fetchone()
+            if existing is not None:
+                raise ValueError("email already exists")
+            db.execute(
+                """
+                INSERT INTO users (
+                    user_id, email, email_verified_at, license_status, license_key,
+                    status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'inactive', ?, 'active', ?, ?)
+                """,
+                (user_id, address, now, license_key, now, now),
+            )
+            db.execute(
+                """
+                INSERT INTO credit_wallets (
+                    user_id, bonus_balance, paid_balance, frozen_bonus, frozen_paid, updated_at
+                )
+                VALUES (?, 0, ?, 0, 0, ?)
+                """,
+                (user_id, initial_points, now),
+            )
+            db.execute(
+                """
+                INSERT INTO license_keys (
+                    license_key, status, max_activations, grant_points,
+                    assigned_user_id, created_at
+                )
+                VALUES (?, 'active', 1, 0, ?, ?)
+                """,
+                (license_key, user_id, now),
+            )
+            if initial_points:
+                self._insert_ledger(
+                    db,
+                    user_id=user_id,
+                    event_type="admin_credit",
+                    points=initial_points,
+                    source="paid",
+                    note="initial admin credit",
+                )
+        detail = self.get_user_detail(user_id=user_id)
+        detail["activation_code"] = license_key
+        return detail
+
+    def admin_dashboard(self) -> dict[str, Any]:
+        with self.connect() as db:
+            user_counts = db.execute(
+                """
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active
+                FROM users
+                """
+            ).fetchone()
+            wallet_totals = db.execute(
+                """
+                SELECT COALESCE(SUM(bonus_balance), 0) AS bonus,
+                       COALESCE(SUM(paid_balance), 0) AS paid,
+                       COALESCE(SUM(frozen_bonus + frozen_paid), 0) AS frozen
+                FROM credit_wallets
+                """
+            ).fetchone()
+            license_counts = db.execute(
+                """
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'active'
+                                     AND (expires_at IS NULL OR expires_at > ?)
+                                THEN 1 ELSE 0 END) AS active
+                FROM license_keys
+                """,
+                (utc_now(),),
+            ).fetchone()
+            job_counts = {
+                row["status"]: int(row["count"])
+                for row in db.execute(
+                    "SELECT status, COUNT(*) AS count FROM render_jobs GROUP BY status"
+                ).fetchall()
+            }
+        return {
+            "users": {
+                "total": int(user_counts["total"] or 0),
+                "active": int(user_counts["active"] or 0),
+            },
+            "wallets": {
+                "bonus_points": int(wallet_totals["bonus"] or 0),
+                "paid_points": int(wallet_totals["paid"] or 0),
+                "frozen_points": int(wallet_totals["frozen"] or 0),
+            },
+            "licenses": {
+                "total": int(license_counts["total"] or 0),
+                "active": int(license_counts["active"] or 0),
+            },
+            "jobs": job_counts,
+        }
+
+    def list_license_keys(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT l.*,
+                       (SELECT COUNT(*) FROM license_activations a
+                        WHERE a.license_key = l.license_key) AS activation_count
+                FROM license_keys l
+                ORDER BY l.created_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        items = [dict(row) for row in rows]
+        for item in items:
+            item["effective_status"] = self._license_effective_status(item)
         return items
 
     def get_user_detail(self, *, user_id: str) -> dict[str, Any]:
@@ -1665,6 +2040,51 @@ class QueueStore:
                 source="paid",
                 note=note or "manual admin credit",
             )
+            return {
+                "user": self._user_for_id(db, user_id),
+                "wallet": self._wallet_for_user(db, user_id),
+            }
+
+    def deduct_user_credits(self, *, user_id: str, points: int, note: str = "") -> dict[str, Any]:
+        if points <= 0:
+            raise ValueError("points must be positive")
+        now = utc_now()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._user_for_id(db, user_id)
+            wallet = self._wallet_for_user(db, user_id)
+            if int(wallet["available_points"]) < points:
+                raise ValueError("insufficient available points")
+            paid_points = min(points, int(wallet["paid_balance"]))
+            bonus_points = points - paid_points
+            db.execute(
+                """
+                UPDATE credit_wallets
+                SET paid_balance = paid_balance - ?,
+                    bonus_balance = bonus_balance - ?,
+                    updated_at = ?
+                WHERE user_id = ?
+                """,
+                (paid_points, bonus_points, now, user_id),
+            )
+            if paid_points:
+                self._insert_ledger(
+                    db,
+                    user_id=user_id,
+                    event_type="admin_debit",
+                    points=-paid_points,
+                    source="paid",
+                    note=note or "manual admin debit",
+                )
+            if bonus_points:
+                self._insert_ledger(
+                    db,
+                    user_id=user_id,
+                    event_type="admin_debit",
+                    points=-bonus_points,
+                    source="bonus",
+                    note=note or "manual admin debit",
+                )
             return {
                 "user": self._user_for_id(db, user_id),
                 "wallet": self._wallet_for_user(db, user_id),
@@ -2089,11 +2509,51 @@ class QueueStore:
                 failed_ids.append(row["job_id"])
         return [self.get_job(job_id) for job_id in failed_ids]
 
+    def timeout_stale_queued_jobs(self, *, timeout_seconds: int) -> list[dict[str, Any]]:
+        now_dt = datetime.now(timezone.utc)
+        cutoff = (now_dt - timedelta(seconds=max(1, timeout_seconds))).isoformat()
+        now = now_dt.isoformat()
+        timed_out_ids: list[str] = []
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                """
+                SELECT * FROM render_jobs
+                WHERE status = 'queued' AND updated_at < ?
+                ORDER BY updated_at ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+            for row in rows:
+                db.execute(
+                    """
+                    UPDATE render_jobs
+                    SET status = 'timed_out',
+                        error_message = 'queue timeout: no worker response within 24 hours',
+                        progress_message = 'Queue timed out after 24 hours',
+                        updated_at = ?,
+                        completed_at = ?
+                    WHERE job_id = ? AND status = 'queued'
+                    """,
+                    (now, now, row["job_id"]),
+                )
+                self._release_hold(db, hold_id=row["hold_id"], reason="queue_timeout")
+                self._insert_job_event(
+                    db,
+                    job_id=row["job_id"],
+                    event_type="timed_out",
+                    message="queue timed out after 24 hours; released frozen credits",
+                )
+                timed_out_ids.append(row["job_id"])
+        return [self.get_job(job_id) for job_id in timed_out_ids]
+
     def _user_for_id(self, db: sqlite3.Connection, user_id: str) -> dict[str, Any]:
         row = db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         if row is None:
             raise KeyError(user_id)
-        return dict(row)
+        item = dict(row)
+        item.pop("password_hash", None)
+        return item
 
     def _device_for_id(self, db: sqlite3.Connection, device_id: str) -> dict[str, Any]:
         row = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()
@@ -2468,17 +2928,81 @@ class QueueStore:
             raise KeyError(job_id)
         return self._job_from_row(row)
 
-    def list_jobs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+    def list_jobs(
+        self,
+        *,
+        limit: int = 50,
+        job_status: str | None = None,
+        query: str | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if job_status:
+            conditions.append("j.status = ?")
+            params.append(job_status)
+        if query and query.strip():
+            pattern = f"%{query.strip().lower()}%"
+            conditions.append(
+                "(lower(j.job_id) LIKE ? OR lower(COALESCE(u.email, '')) LIKE ? "
+                "OR lower(COALESCE(j.worker_id, '')) LIKE ?)"
+            )
+            params.extend([pattern, pattern, pattern])
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(max(1, min(limit, 500)))
         with self.connect() as db:
             rows = db.execute(
-                """
-                SELECT * FROM render_jobs
-                ORDER BY created_at DESC
+                f"""
+                SELECT j.*, u.email,
+                       (SELECT COUNT(*) FROM job_assets a WHERE a.job_id = j.job_id)
+                           AS asset_count
+                FROM render_jobs j
+                LEFT JOIN users u ON u.user_id = j.user_id
+                {where_clause}
+                ORDER BY j.created_at DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(params),
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
+
+    def admin_job_summary(self) -> dict[str, int]:
+        with self.connect() as db:
+            counts = {
+                str(row["status"]): int(row["count"])
+                for row in db.execute(
+                    "SELECT status, COUNT(*) AS count FROM render_jobs GROUP BY status"
+                ).fetchall()
+            }
+        counts["total"] = sum(counts.values())
+        counts["pending"] = sum(
+            counts.get(key, 0) for key in ("uploading", "queued", "running")
+        )
+        return counts
+
+    def get_admin_job_detail(self, *, job_id: str) -> dict[str, Any]:
+        job = self.get_job_with_assets(job_id)
+        with self.connect() as db:
+            events = [
+                dict(row)
+                for row in db.execute(
+                    """
+                    SELECT * FROM job_events
+                    WHERE job_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 200
+                    """,
+                    (job_id,),
+                ).fetchall()
+            ]
+            user = None
+            wallet = None
+            if job.get("user_id"):
+                user = self._user_for_id(db, job["user_id"])
+                wallet = self._wallet_for_user(db, job["user_id"])
+        job["events"] = events
+        job["user"] = user
+        job["wallet"] = wallet
+        return job
 
     def claim_job(self, *, worker_id: str) -> dict[str, Any] | None:
         now = utc_now()

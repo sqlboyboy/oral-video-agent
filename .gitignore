@@ -40,6 +40,8 @@ storage/pip/*
 storage/publisher/*
 storage/thumbnails/*
 storage/voice_previews/*
+storage/bgm_previews/*
+storage/generated_voice_previews/*
 storage/models/*
 storage/experiments/*
 storage/logs/*
@@ -47,6 +49,9 @@ storage/releases/*
 storage/temp/*
 storage/tests/*
 storage/douyin_cookies.txt
+
+# Local cloud runtime data
+services/cloud/data/*
 
 !storage/uploads/.gitkeep
 !storage/extracted_audio/.gitkeep

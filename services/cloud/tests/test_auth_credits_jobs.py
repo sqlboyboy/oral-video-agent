@@ -10,8 +10,8 @@ def _client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("ADMIN_TOKEN", "admin-test")
     monkeypatch.setenv("WORKER_TOKEN", "worker-test")
     monkeypatch.setenv("CLOUD_DATABASE_PATH", str(tmp_path / "cloud.sqlite3"))
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("REDIS_URL", "")
     monkeypatch.setenv("NOTIFY_WEBHOOK_URL", "")
     monkeypatch.setenv("LICENSE_ACTIVATION_GRANT_POINTS", "0")
     monkeypatch.setenv("EMAIL_PROVIDER", "console")
@@ -28,10 +28,12 @@ def _client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("COS_DOWNLOAD_CONFIRM_DELETE_DELAY_HOURS", "0")
 
     import app.settings as settings_module
+    import app.email_sender as email_sender_module
     import app.object_storage as object_storage_module
     import app.main as main_module
 
     importlib.reload(settings_module)
+    importlib.reload(email_sender_module)
     importlib.reload(object_storage_module)
     importlib.reload(main_module)
     return TestClient(main_module.app)
@@ -47,6 +49,180 @@ def _worker_headers() -> dict[str, str]:
 
 def _device_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_web_admin_login_and_dashboard(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    page = client.get("/admin")
+    assert page.status_code == 200
+    assert "口播云后台" in page.text
+
+    denied = client.post(
+        "/api/admin/session/login",
+        json={"username": "admin", "password": "wrong-password"},
+    )
+    assert denied.status_code == 401
+
+    logged_in = client.post(
+        "/api/admin/session/login",
+        json={"username": "admin", "password": "admin-test"},
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.json()["username"] == "admin"
+
+    dashboard = client.get("/api/admin/dashboard")
+    assert dashboard.status_code == 200
+    assert dashboard.json()["users"] == {"total": 0, "active": 0}
+    assert dashboard.json()["wallets"]["paid_points"] == 0
+
+    logged_out = client.post("/api/admin/session/logout")
+    assert logged_out.status_code == 200
+    assert client.get("/api/admin/dashboard").status_code == 401
+
+
+def test_admin_creates_user_with_assigned_license_and_initial_points(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    client.post(
+        "/api/admin/session/login",
+        json={"username": "admin", "password": "admin-test"},
+    )
+
+    created = client.post(
+        "/api/admin/users",
+        json={"email": "new-user@example.com", "initial_points": 250},
+    )
+
+    assert created.status_code == 200
+    body = created.json()
+    user_id = body["user"]["user_id"]
+    activation_code = body["activation_code"]
+    assert body["user"]["email"] == "new-user@example.com"
+    assert body["wallet"]["paid_balance"] == 250
+    assert body["ledger"][0]["event_type"] == "admin_credit"
+
+    duplicate = client.post(
+        "/api/admin/users",
+        json={"email": "NEW-USER@example.com", "initial_points": 0},
+    )
+    assert duplicate.status_code == 409
+
+    licenses = client.get("/api/admin/license-keys").json()["items"]
+    assigned = next(item for item in licenses if item["license_key"] == activation_code)
+    assert assigned["assigned_user_id"] == user_id
+    assert assigned["activation_count"] == 0
+
+    activated = client.post(
+        "/api/client/activate",
+        json={
+            "license_key": activation_code,
+            "device_fingerprint": "new-user-device",
+            "device_name": "Windows client",
+        },
+    )
+    assert activated.status_code == 200
+    assert activated.json()["user"]["user_id"] == user_id
+    assert activated.json()["user"]["email"] == "new-user@example.com"
+    assert activated.json()["user"]["license_status"] == "active"
+    assert activated.json()["wallet"]["available_points"] == 250
+
+
+def test_admin_deducts_available_points_and_records_ledger(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/admin/users",
+        headers=_admin_headers(),
+        json={"email": "debit@example.com", "initial_points": 0},
+    )
+    user_id = created.json()["user"]["user_id"]
+
+    import app.main as main_module
+
+    with main_module.store.connect() as db:
+        db.execute(
+            "UPDATE credit_wallets SET paid_balance = 50, bonus_balance = 30 WHERE user_id = ?",
+            (user_id,),
+        )
+
+    deducted = client.post(
+        f"/api/admin/users/{user_id}/debits",
+        headers=_admin_headers(),
+        json={"points": 70, "note": "manual correction"},
+    )
+    assert deducted.status_code == 200
+    assert deducted.json()["wallet"]["paid_balance"] == 0
+    assert deducted.json()["wallet"]["bonus_balance"] == 10
+    assert deducted.json()["wallet"]["available_points"] == 10
+
+    detail = client.get(f"/api/admin/users/{user_id}", headers=_admin_headers()).json()
+    debit_rows = [item for item in detail["ledger"] if item["event_type"] == "admin_debit"]
+    assert sum(item["points"] for item in debit_rows) == -70
+    assert {item["source"] for item in debit_rows} == {"paid", "bonus"}
+
+    insufficient = client.post(
+        f"/api/admin/users/{user_id}/debits",
+        headers=_admin_headers(),
+        json={"points": 11},
+    )
+    assert insufficient.status_code == 400
+    assert client.get(f"/api/admin/users/{user_id}", headers=_admin_headers()).json()[
+        "wallet"
+    ]["available_points"] == 10
+
+
+def test_admin_displays_and_edits_license_expiration(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    created = client.post(
+        "/api/admin/license-keys",
+        headers=_admin_headers(),
+        json={
+            "license_key": "EXPIRY-EDIT",
+            "max_activations": 1,
+            "grant_points": 0,
+            "expires_at": future,
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["expires_at"] == future
+
+    listed = client.get("/api/admin/license-keys", headers=_admin_headers()).json()["items"]
+    license_item = next(item for item in listed if item["license_key"] == "EXPIRY-EDIT")
+    assert license_item["effective_status"] == "active"
+
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    expired = client.patch(
+        "/api/admin/license-keys/EXPIRY-EDIT",
+        headers=_admin_headers(),
+        json={"expires_at": past},
+    )
+    assert expired.status_code == 200
+    assert expired.json()["effective_status"] == "expired"
+    blocked = client.post(
+        "/api/client/activate",
+        json={
+            "license_key": "EXPIRY-EDIT",
+            "device_fingerprint": "expiry-device",
+        },
+    )
+    assert blocked.status_code == 404
+
+    permanent = client.patch(
+        "/api/admin/license-keys/EXPIRY-EDIT",
+        headers=_admin_headers(),
+        json={"expires_at": None},
+    )
+    assert permanent.status_code == 200
+    assert permanent.json()["expires_at"] is None
+    assert permanent.json()["effective_status"] == "active"
+    activated = client.post(
+        "/api/client/activate",
+        json={
+            "license_key": "EXPIRY-EDIT",
+            "device_fingerprint": "expiry-device",
+        },
+    )
+    assert activated.status_code == 200
 
 
 def _activate_software(
@@ -87,7 +263,7 @@ def _bind_email(
         headers=_device_headers(token),
         json={"email": email},
     )
-    assert sent.status_code == 200
+    assert sent.status_code == 200, sent.text
     code = sent.json()["debug_code"]
     logged_in = client.post(
         "/api/client/auth/login",
@@ -293,19 +469,22 @@ def test_license_key_must_activate_software_before_any_account(monkeypatch, tmp_
         fingerprint="device-1",
     )
     assert bound["user"]["email"] == "first@example.com"
-    assert token == first_token
+    assert token != first_token
 
 
 def test_device_limit_and_admin_reset(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
-    token, body = _activate_software(client, license_key="LIC-DEVICE", fingerprint="device-1")
+    activation_token, activated = _activate_software(
+        client, license_key="LIC-DEVICE", fingerprint="device-1"
+    )
     token, body = _bind_email(
         client,
-        token,
+        activation_token,
         email="device@example.com",
         fingerprint="device-1",
     )
-    user_id = body["user"]["user_id"]
+    activation_user_id = activated["user"]["user_id"]
+    account_user_id = body["user"]["user_id"]
 
     blocked = client.post(
         "/api/client/activate",
@@ -319,10 +498,15 @@ def test_device_limit_and_admin_reset(monkeypatch, tmp_path):
     assert "activation limit" in blocked.json()["detail"]
 
     reset = client.post(
-        f"/api/admin/users/{user_id}/devices/reset",
+        f"/api/admin/users/{activation_user_id}/devices/reset",
         headers=_admin_headers(),
     )
     assert reset.status_code == 200
+    account_reset = client.post(
+        f"/api/admin/users/{account_user_id}/devices/reset",
+        headers=_admin_headers(),
+    )
+    assert account_reset.status_code == 200
 
     reactivated = client.post(
         "/api/client/activate",
@@ -333,7 +517,7 @@ def test_device_limit_and_admin_reset(monkeypatch, tmp_path):
         },
     )
     assert reactivated.status_code == 200
-    assert reactivated.json()["user"]["user_id"] == user_id
+    assert reactivated.json()["user"]["user_id"] == activation_user_id
 
     new_token = reactivated.json()["device_token"]
     _, rebound = _bind_email(
@@ -344,8 +528,13 @@ def test_device_limit_and_admin_reset(monkeypatch, tmp_path):
     )
     assert rebound["user"]["email"] == "device@example.com"
 
-    revoked = client.get("/api/client/me", headers=_device_headers(token))
-    assert revoked.status_code == 401
+    revoked_activation = client.get(
+        "/api/client/activation",
+        headers={"X-Device-Token": activation_token},
+    )
+    assert revoked_activation.status_code == 401
+    account_session = client.get("/api/client/me", headers=_device_headers(token))
+    assert account_session.status_code == 401
 
 
 def test_account_device_limit_applies_even_when_license_allows_more(monkeypatch, tmp_path):
@@ -372,7 +561,9 @@ def test_account_device_limit_applies_even_when_license_allows_more(monkeypatch,
 def test_admin_adds_paid_credits_and_lists_user_by_email(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token, _ = _activate_software(client, license_key="LIC-PAID", fingerprint="device-1")
-    _, body = _bind_email(client, token, email="paid@example.com", fingerprint="device-1")
+    account_token, body = _bind_email(
+        client, token, email="paid@example.com", fingerprint="device-1"
+    )
     user_id = body["user"]["user_id"]
 
     credited = client.post(
@@ -389,7 +580,7 @@ def test_admin_adds_paid_credits_and_lists_user_by_email(monkeypatch, tmp_path):
 
     client_ledger = client.get(
         "/api/client/credits/ledger",
-        headers=_device_headers(token),
+        headers=_device_headers(account_token),
     )
     assert client_ledger.status_code == 200
     assert client_ledger.json()["wallet"]["available_points"] == 200
@@ -402,6 +593,144 @@ def test_admin_adds_paid_credits_and_lists_user_by_email(monkeypatch, tmp_path):
     )
     assert listed.status_code == 200
     assert listed.json()["items"][0]["user_id"] == user_id
+
+
+def test_device_activation_survives_account_logout_and_switch(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    activation_token, _ = _activate_software(
+        client,
+        license_key="LIC-SWITCH",
+        fingerprint="device-switch-1",
+    )
+
+    first_token, first = _bind_email(
+        client,
+        activation_token,
+        email="first-switch@example.com",
+        fingerprint="device-switch-1",
+    )
+    second_token, second = _bind_email(
+        client,
+        activation_token,
+        email="second-switch@example.com",
+        fingerprint="device-switch-1",
+    )
+
+    assert first_token != second_token
+    assert first["user"]["user_id"] != second["user"]["user_id"]
+    activation = client.get(
+        "/api/client/activation",
+        headers={"X-Device-Token": activation_token},
+    )
+    assert activation.status_code == 200
+    assert activation.json()["activated"] is True
+
+    second_ledger = client.get(
+        "/api/client/credits/ledger",
+        headers={
+            "Authorization": f"Bearer {second_token}",
+            "X-Device-Token": activation_token,
+        },
+    )
+    assert second_ledger.status_code == 200
+
+
+def test_password_registration_login_and_reset(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    activation_token, _ = _activate_software(
+        client,
+        license_key="LIC-PASSWORD",
+        fingerprint="password-device-1",
+    )
+    activation_headers = {"X-Device-Token": activation_token}
+
+    sent = client.post(
+        "/api/client/auth/email-code",
+        headers=activation_headers,
+        json={"email": "password@example.com", "purpose": "register"},
+    )
+    assert sent.status_code == 200, sent.text
+    registered = client.post(
+        "/api/client/auth/register",
+        headers=activation_headers,
+        json={
+            "email": "password@example.com",
+            "code": sent.json()["debug_code"],
+            "password": "initial-password-123",
+            "device_name": "Windows client",
+        },
+    )
+    assert registered.status_code == 200, registered.text
+    assert registered.json()["device_token"]
+    assert "password_hash" not in registered.json()["user"]
+
+    duplicate_code = client.post(
+        "/api/client/auth/email-code",
+        headers=activation_headers,
+        json={"email": "password@example.com", "purpose": "register"},
+    )
+    assert duplicate_code.status_code == 409
+
+    wrong = client.post(
+        "/api/client/auth/password-login",
+        headers=activation_headers,
+        json={
+            "email": "password@example.com",
+            "password": "wrong-password",
+            "device_name": "Windows client",
+        },
+    )
+    assert wrong.status_code == 401
+
+    logged_in = client.post(
+        "/api/client/auth/password-login",
+        headers=activation_headers,
+        json={
+            "email": "password@example.com",
+            "password": "initial-password-123",
+            "device_name": "Windows client",
+        },
+    )
+    assert logged_in.status_code == 200, logged_in.text
+
+    reset_code = client.post(
+        "/api/client/auth/email-code",
+        headers=activation_headers,
+        json={"email": "password@example.com", "purpose": "reset_password"},
+    )
+    assert reset_code.status_code == 200, reset_code.text
+    reset = client.post(
+        "/api/client/auth/password-reset",
+        headers=activation_headers,
+        json={
+            "email": "password@example.com",
+            "code": reset_code.json()["debug_code"],
+            "new_password": "updated-password-456",
+            "device_name": "Windows client",
+        },
+    )
+    assert reset.status_code == 200, reset.text
+
+    old_password = client.post(
+        "/api/client/auth/password-login",
+        headers=activation_headers,
+        json={
+            "email": "password@example.com",
+            "password": "initial-password-123",
+            "device_name": "Windows client",
+        },
+    )
+    assert old_password.status_code == 401
+    new_password = client.post(
+        "/api/client/auth/password-login",
+        headers=activation_headers,
+        json={
+            "email": "password@example.com",
+            "password": "updated-password-456",
+            "device_name": "Windows client",
+        },
+    )
+    assert new_password.status_code == 200, new_password.text
 
 
 def test_credit_code_redeem_adds_paid_balance(monkeypatch, tmp_path):
@@ -846,4 +1175,34 @@ def test_scheduler_timeout_releases_frozen_credits(monkeypatch, tmp_path):
     assert failed_jobs[0]["status"] == "failed"
     wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
     assert wallet["paid_balance"] == 3000
+    assert wallet["frozen_points"] == 0
+
+
+def test_queued_job_times_out_after_24_hours_and_leaves_queue(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    token = _activate(client)
+    created = client.post(
+        "/api/client/jobs",
+        headers=_device_headers(token),
+        json={"duration_seconds": 600, "resolution": "1080p"},
+    )
+    assert created.status_code == 200
+    job_id = created.json()["job_id"]
+
+    import app.main as main_module
+
+    stale_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    with main_module.store.connect() as db:
+        db.execute(
+            "UPDATE render_jobs SET updated_at = ? WHERE job_id = ?",
+            (stale_time, job_id),
+        )
+
+    timed_out = main_module.store.timeout_stale_queued_jobs(
+        timeout_seconds=24 * 60 * 60,
+    )
+    assert [job["job_id"] for job in timed_out] == [job_id]
+    assert timed_out[0]["status"] == "timed_out"
+    assert main_module.store.queue_stats(worker_stale_seconds=600)["queued"] == 0
+    wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
     assert wallet["frozen_points"] == 0

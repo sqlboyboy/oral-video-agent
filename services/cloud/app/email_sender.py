@@ -34,6 +34,7 @@ class TencentSesEmailSender:
     region: str
     from_email: str
     template_id: str
+    subject: str = "杰速口播邮箱验证码"
 
     service: str = "ses"
     host: str = "ses.tencentcloudapi.com"
@@ -47,12 +48,14 @@ class TencentSesEmailSender:
                 self.region,
                 self.from_email,
                 self.template_id,
+                self.subject,
             ]
         ):
             raise RuntimeError("Tencent SES email provider is not fully configured")
         payload = {
             "FromEmailAddress": self.from_email,
             "Destination": [email],
+            "Subject": self.subject,
             "Template": {
                 "TemplateID": int(self.template_id),
                 "TemplateData": json.dumps(
@@ -94,7 +97,23 @@ class TencentSesEmailSender:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Tencent SES {action} failed: {exc.code} {detail}") from exc
-        return json.loads(raw) if raw else {}
+        result = json.loads(raw) if raw else {}
+        response_body = result.get("Response") if isinstance(result, dict) else None
+        response_body = response_body if isinstance(response_body, dict) else {}
+        error = response_body.get("Error")
+        if isinstance(error, dict):
+            code = str(error.get("Code") or "UnknownError")
+            message = str(error.get("Message") or "Tencent SES request failed")
+            request_id = str(response_body.get("RequestId") or "")
+            suffix = f" (RequestId: {request_id})" if request_id else ""
+            raise RuntimeError(f"Tencent SES {action} failed: {code}: {message}{suffix}")
+        if action == "SendEmail" and not response_body.get("MessageId"):
+            request_id = str(response_body.get("RequestId") or "")
+            suffix = f" (RequestId: {request_id})" if request_id else ""
+            raise RuntimeError(
+                f"Tencent SES SendEmail failed: response has no MessageId{suffix}"
+            )
+        return result
 
     def _authorization(
         self,
@@ -153,5 +172,6 @@ def create_email_sender() -> EmailSender:
             region=settings.ses_region,
             from_email=settings.ses_from_email,
             template_id=settings.ses_login_template_id,
+            subject=settings.ses_login_subject,
         )
     return ConsoleEmailSender()

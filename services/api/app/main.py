@@ -366,8 +366,10 @@ def resolve_voice_preview_audio(voice_id: Optional[str]) -> Path:
 
 
 def ensure_voice_preview_wav(path: Path, voice_id: str) -> Path:
-    if path.suffix.lower() == ".wav":
-        return path
+    return ensure_loudness_preview_wav(path, "voice_previews", voice_id)
+
+
+def ensure_loudness_preview_wav(path: Path, cache_group: str, cache_id: str) -> Path:
     ffmpeg = _ffmpeg_executable()
     if ffmpeg is None:
         return path
@@ -375,7 +377,9 @@ def ensure_voice_preview_wav(path: Path, voice_id: str) -> Path:
         stamp = int(path.stat().st_mtime)
     except OSError:
         stamp = 0
-    output = storage_dir("voice_previews") / f"{_safe_cache_name(voice_id)}_{stamp}.wav"
+    output = storage_dir(cache_group) / (
+        f"{_safe_cache_name(cache_id)}_{stamp}_lufs16.wav"
+    )
     if output.exists() and output.stat().st_size > 44:
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -386,8 +390,8 @@ def ensure_voice_preview_wav(path: Path, voice_id: str) -> Path:
             "-i",
             str(path),
             "-vn",
-            "-ac",
-            "1",
+            "-af",
+            "loudnorm=I=-16:TP=-1.5:LRA=11",
             "-ar",
             "44100",
             str(output),
@@ -793,6 +797,13 @@ def upload_voice_reference(file: UploadFile = File(...)):
         # Keep upload permissive for files that need manual inspection; preview
         # and synthesis will report a clear decode error if the audio is invalid.
         pass
+    duration_seconds = media_duration_seconds(Path(asset.path))
+    if duration_seconds is not None and duration_seconds > 300:
+        try:
+            Path(asset.path).unlink(missing_ok=True)
+        finally:
+            asset_store.delete(asset.asset_id)
+        raise HTTPException(status_code=400, detail="声音参考文件最长不能超过 5 分钟")
     voice_id = f"custom:{asset.asset_id}"
     _record_recent_usage("voice", voice_id)
     return {
@@ -1108,6 +1119,7 @@ def preview_bgm(bgm_id: str):
     path = resolve_bgm_audio(bgm_id)
     if path is None:
         raise HTTPException(status_code=400, detail="请选择背景音乐")
+    path = ensure_loudness_preview_wav(path, "bgm_previews", bgm_id)
     _record_recent_usage("bgm", bgm_id)
     return FileResponse(
         path,
@@ -1886,7 +1898,12 @@ def task_voice_audio(task_id: str):
         raise HTTPException(status_code=404, detail="task not found")
     if not task.extracted_audio_path or not Path(task.extracted_audio_path).exists():
         raise HTTPException(status_code=404, detail="voice audio not generated")
-    return FileResponse(task.extracted_audio_path, media_type="audio/wav")
+    path = ensure_loudness_preview_wav(
+        Path(task.extracted_audio_path),
+        "generated_voice_previews",
+        task_id,
+    )
+    return FileResponse(path, media_type="audio/wav")
 
 
 @app.get("/api/tasks/{task_id}/source", tags=["tasks"])

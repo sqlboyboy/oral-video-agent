@@ -49,6 +49,29 @@ def test_worker_claims_and_completes_job(monkeypatch, tmp_path):
     assert completed.json()["status"] == "completed"
     assert completed.json()["progress_percent"] == 100
 
+    admin_jobs = client.get(
+        "/api/admin/jobs",
+        headers={"X-Admin-Token": "admin-test"},
+        params={"status": "completed", "q": job_id[:8]},
+    )
+    assert admin_jobs.status_code == 200
+    assert admin_jobs.json()["summary"]["completed"] == 1
+    assert admin_jobs.json()["summary"]["pending"] == 0
+    assert admin_jobs.json()["items"][0]["job_id"] == job_id
+    assert admin_jobs.json()["items"][0]["asset_count"] == 0
+
+    admin_detail = client.get(
+        f"/api/admin/jobs/{job_id}",
+        headers={"X-Admin-Token": "admin-test"},
+    )
+    assert admin_detail.status_code == 200
+    assert admin_detail.json()["status"] == "completed"
+    assert {event["event_type"] for event in admin_detail.json()["events"]} >= {
+        "claimed",
+        "completed",
+    }
+    assert admin_detail.json()["assets"] == []
+
     queue = client.get("/api/admin/queue", headers={"X-Admin-Token": "admin-test"})
     assert queue.status_code == 200
     assert queue.json()["queued"] == 0

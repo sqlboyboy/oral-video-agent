@@ -33,6 +33,7 @@ RENDER_OPTION_KEYS = {
     "mouth_aperture_release",
     "motion_mode",
     "expression_mode",
+    "voice_volume",
     "bgm_id",
     "bgm_volume",
     "subtitle_enabled",
@@ -54,13 +55,14 @@ RENDER_OPTION_KEYS = {
 
 MAX_REWRITE_CHARS = 300
 DEFAULT_SUBTITLE_CHARS_PER_LINE = 12
-DEFAULT_OUTPUT_FPS = "25"
+DEFAULT_OUTPUT_FPS = ""
+DEFAULT_HEYGEM_INPUT_FPS = "25"
 DEFAULT_FFMPEG_PRESET = "veryfast"
-DEFAULT_FFMPEG_CRF = "24"
+DEFAULT_FFMPEG_CRF = "18"
 DEFAULT_SUBTITLE_MARGIN_V = 70
 DEFAULT_SUBTITLE_OUTLINE_WIDTH = 2
-OUTPUT_WIDTH = 1080
-OUTPUT_HEIGHT = 1920
+FALLBACK_OUTPUT_WIDTH = 1080
+FALLBACK_OUTPUT_HEIGHT = 1920
 PIP_MEDIA_ASPECT_RATIO = 16 / 9
 PIP_MARGIN_X = 24
 PIP_MARGIN_Y = 24
@@ -248,10 +250,23 @@ def ffmpeg_crf() -> str:
 
 def output_fps() -> str:
     value = os.getenv("OUTPUT_FPS", DEFAULT_OUTPUT_FPS).strip()
+    if not value:
+        return ""
     try:
         fps = float(value)
     except ValueError:
         return DEFAULT_OUTPUT_FPS
+    if fps <= 0:
+        return ""
+    return str(int(fps)) if fps.is_integer() else f"{fps:g}"
+
+
+def heygem_input_fps() -> str:
+    value = os.getenv("HEYGEM_INPUT_FPS", DEFAULT_HEYGEM_INPUT_FPS).strip()
+    try:
+        fps = float(value)
+    except ValueError:
+        return DEFAULT_HEYGEM_INPUT_FPS
     if fps <= 0:
         return ""
     return str(int(fps)) if fps.is_integer() else f"{fps:g}"
@@ -265,39 +280,47 @@ def clamp_float(value: Any, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, numeric))
 
 
-def portrait_main_video_filter() -> str:
+def portrait_main_video_filter(canvas_width: int, canvas_height: int) -> str:
     return (
-        f"[0:v]scale={OUTPUT_WIDTH}:{OUTPUT_HEIGHT}:force_original_aspect_ratio=increase,"
-        f"crop={OUTPUT_WIDTH}:{OUTPUT_HEIGHT},setsar=1,setpts=PTS-STARTPTS[mainv]"
+        f"[0:v]scale={canvas_width}:{canvas_height}:flags=lanczos,"
+        "setsar=1,setpts=PTS-STARTPTS[mainv]"
     )
 
 
-def pip_layout(payload: dict[str, Any]) -> tuple[int, int, int, int]:
+def pip_layout(
+    payload: dict[str, Any],
+    canvas_width: int = FALLBACK_OUTPUT_WIDTH,
+    canvas_height: int = FALLBACK_OUTPUT_HEIGHT,
+) -> tuple[int, int, int, int]:
     position = str(payload.get("pip_position") or "top_right").strip().lower()
     if position == "fullscreen":
-        return OUTPUT_WIDTH, OUTPUT_HEIGHT, 0, 0
+        return canvas_width, canvas_height, 0, 0
 
     width_source = payload["pip_width"] if "pip_width" in payload else payload.get("pip_scale", 0.28)
     width_norm = clamp_float(width_source, 0.05, 0.95)
     if payload.get("pip_height") is not None:
         height_norm = clamp_float(payload.get("pip_height"), 0.03, 0.95)
     else:
-        height_norm = width_norm * OUTPUT_WIDTH / OUTPUT_HEIGHT / PIP_MEDIA_ASPECT_RATIO
+        height_norm = width_norm * canvas_width / canvas_height / PIP_MEDIA_ASPECT_RATIO
         height_norm = clamp_float(height_norm, 0.03, 0.95)
 
-    width = max(54, min(OUTPUT_WIDTH, int(round(OUTPUT_WIDTH * width_norm))))
-    height = max(54, min(OUTPUT_HEIGHT, int(round(OUTPUT_HEIGHT * height_norm))))
-    max_x = max(0, OUTPUT_WIDTH - width)
-    max_y = max(0, OUTPUT_HEIGHT - height)
+    width = max(2, min(canvas_width, int(round(canvas_width * width_norm))))
+    height = max(2, min(canvas_height, int(round(canvas_height * height_norm))))
+    width -= width % 2
+    height -= height % 2
+    max_x = max(0, canvas_width - width)
+    max_y = max(0, canvas_height - height)
+    margin_x = max(8, int(round(PIP_MARGIN_X * canvas_width / FALLBACK_OUTPUT_WIDTH)))
+    margin_y = max(8, int(round(PIP_MARGIN_Y * canvas_height / FALLBACK_OUTPUT_HEIGHT)))
     positions = {
-        "top_left": (PIP_MARGIN_X, PIP_MARGIN_Y),
-        "top_right": (max_x - PIP_MARGIN_X, PIP_MARGIN_Y),
-        "bottom_left": (PIP_MARGIN_X, max_y - PIP_MARGIN_Y),
-        "bottom_right": (max_x - PIP_MARGIN_X, max_y - PIP_MARGIN_Y),
+        "top_left": (margin_x, margin_y),
+        "top_right": (max_x - margin_x, margin_y),
+        "bottom_left": (margin_x, max_y - margin_y),
+        "bottom_right": (max_x - margin_x, max_y - margin_y),
         "center": (max_x / 2, max_y / 2),
         "custom": (
-            clamp_float(payload.get("pip_x", 0), 0, 1) * OUTPUT_WIDTH,
-            clamp_float(payload.get("pip_y", 0), 0, 1) * OUTPUT_HEIGHT,
+            clamp_float(payload.get("pip_x", 0), 0, 1) * canvas_width,
+            clamp_float(payload.get("pip_y", 0), 0, 1) * canvas_height,
         ),
     }
     raw_x, raw_y = positions.get(position, positions["top_right"])
@@ -617,6 +640,7 @@ def run_voice_preprocess_job(
         script=script,
         output_path=output_path,
     )
+    normalize_audio_loudness(output_path)
     result: dict[str, Any] = {
         "mode": "preprocess",
         "operation": "voice",
@@ -931,7 +955,7 @@ def upload_source_video(*, api_base: str, source_asset: dict[str, Any]) -> dict[
 
 
 def prepare_heygem_source_video(source_video: Path, output_path: Path) -> Path:
-    fps = output_fps()
+    fps = heygem_input_fps()
     ffmpeg = ffmpeg_executable()
     if not fps or ffmpeg is None:
         return source_video
@@ -952,6 +976,8 @@ def prepare_heygem_source_video(source_video: Path, output_path: Path) -> Path:
         ffmpeg_crf(),
         "-pix_fmt",
         "yuv420p",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ]
     completed = subprocess.run(
@@ -1096,6 +1122,7 @@ def should_compose_final(
         render_payload.get("subtitle_enabled") is not False
         or bgm_audio is not None
         or (render_payload.get("pip_enabled") is True and pip_asset is not None)
+        or render_payload.get("voice_volume") is not None
     )
 
 
@@ -1135,24 +1162,43 @@ def compose_final_video(
     audio_output = "[aout]"
     pip_input_index = 2
 
+    raw_voice_volume = render_payload.get("voice_volume")
+    voice_volume = 0.45 if raw_voice_volume is None else float(raw_voice_volume)
+    voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={voice_volume}"
     if bgm_audio is not None:
         command.extend(["-i", str(bgm_audio)])
         pip_input_index = 3
-        volume = float(render_payload.get("bgm_volume") or 0.35)
-        filter_parts.append(f"[2:a]volume={volume},aloop=loop=-1:size=2147483647[bgm]")
-        filter_parts.append("[1:a][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]")
+        raw_bgm_volume = render_payload.get("bgm_volume")
+        bgm_volume = 0.35 if raw_bgm_volume is None else float(raw_bgm_volume)
+        bgm_filter = (
+            f"dynaudnorm=f=150:g=15:p=0.9,volume={bgm_volume},"
+            "aloop=loop=-1:size=2147483647"
+        )
+        filter_parts.append(f"[1:a]{voice_filter}[voice]")
+        filter_parts.append(f"[2:a]{bgm_filter}[bgm]")
+        filter_parts.append("[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]")
     else:
-        filter_parts.append("[1:a]anull[aout]")
+        filter_parts.append(f"[1:a]{voice_filter}[aout]")
 
-    video_input = "[mainv]"
-    filter_parts.append(portrait_main_video_filter())
+    has_pip_filter = render_payload.get("pip_enabled") is True and pip_asset is not None
+    has_subtitle_filter = render_payload.get("subtitle_enabled") is not False
+    has_video_filter = has_pip_filter or has_subtitle_filter
+    video_output = "0:v:0"
+    if has_video_filter:
+        canvas_width, canvas_height = canvas_dimensions(source_video)
+        video_input = "[mainv]"
+        filter_parts.append(portrait_main_video_filter(canvas_width, canvas_height))
     pip_composed = False
-    if render_payload.get("pip_enabled") is True and pip_asset is not None:
+    if has_pip_filter:
         if pip_asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
             command.extend(["-loop", "1", "-i", str(pip_asset)])
         else:
             command.extend(["-stream_loop", "-1", "-i", str(pip_asset)])
-        pip_width, pip_height, pip_x, pip_y = pip_layout(render_payload)
+        pip_width, pip_height, pip_x, pip_y = pip_layout(
+            render_payload,
+            canvas_width,
+            canvas_height,
+        )
         filter_parts.append(
             f"[{pip_input_index}:v]scale={pip_width}:{pip_height}:force_original_aspect_ratio=increase,"
             f"crop={pip_width}:{pip_height},setsar=1,setpts=PTS-STARTPTS[pip]"
@@ -1166,7 +1212,7 @@ def compose_final_video(
         pip_composed = True
 
     subtitle_file: Path | None = None
-    if render_payload.get("subtitle_enabled") is not False:
+    if has_subtitle_filter:
         script = str(render_payload.get("script") or "")
         style = dict(render_payload.get("subtitle_style") or {})
         subtitle_file = output_path.with_suffix(".srt")
@@ -1175,30 +1221,41 @@ def compose_final_video(
         filter_parts.append(
             f"{video_input}subtitles='{subtitle_path}':force_style='{subtitle_force_style(style)}'[vout]"
         )
-    else:
+        video_output = "[vout]"
+    elif has_video_filter:
         filter_parts.append(f"{video_input}null[vout]")
+        video_output = "[vout]"
 
     command.extend([
         "-filter_complex",
         ";".join(filter_parts),
         "-map",
-        "[vout]",
+        video_output,
         "-map",
         audio_output,
-        "-c:v",
-        "libx264",
-        "-preset",
-        ffmpeg_preset(),
-        "-crf",
-        ffmpeg_crf(),
     ])
-    fps = output_fps()
-    if fps:
-        command.extend(["-r", fps])
+    if has_video_filter:
+        command.extend([
+            "-c:v",
+            "libx264",
+            "-preset",
+            ffmpeg_preset(),
+            "-crf",
+            ffmpeg_crf(),
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        fps = output_fps() or media_video_frame_rate(source_video)
+        if fps:
+            command.extend(["-r", fps])
+    else:
+        command.extend(["-c:v", "copy"])
     command.extend([
         "-c:a",
         "aac",
         "-shortest",
+        "-movflags",
+        "+faststart",
         str(output_path),
     ])
     completed = subprocess.run(command, check=False)
@@ -1403,6 +1460,189 @@ def validate_wav_output(path: Path) -> None:
 
 def ffmpeg_executable() -> str | None:
     return os.getenv("FFMPEG_BIN") or shutil.which("ffmpeg")
+
+
+def normalize_audio_loudness(path: Path) -> None:
+    ffmpeg = ffmpeg_executable()
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required for voice loudness normalization")
+    normalized_path = path.with_name(f"{path.stem}_normalized.wav")
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(path),
+            "-vn",
+            "-af",
+            "loudnorm=I=-16:TP=-1.5:LRA=11",
+            "-ar",
+            "44100",
+            str(normalized_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if (
+        completed.returncode != 0
+        or not normalized_path.exists()
+        or normalized_path.stat().st_size <= 44
+    ):
+        normalized_path.unlink(missing_ok=True)
+        detail = completed.stderr.decode("utf-8", errors="replace")[-800:]
+        raise RuntimeError(f"voice loudness normalization failed: {detail}")
+    normalized_path.replace(path)
+
+
+def media_video_dimensions(path: Path) -> tuple[int, int] | None:
+    if not path.exists():
+        return None
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            completed = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=width,height",
+                    "-of",
+                    "csv=p=0:s=x",
+                    str(path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                check=False,
+            )
+            output = getattr(completed, "stdout", "") or ""
+            match = re.fullmatch(r"\s*(\d+)x(\d+)\s*", output)
+            if completed.returncode == 0 and match:
+                width, height = int(match.group(1)), int(match.group(2))
+                if width > 0 and height > 0:
+                    return width, height
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    ffmpeg = ffmpeg_executable()
+    if ffmpeg is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = getattr(completed, "stdout", "") or ""
+    for line in output.splitlines():
+        if "Video:" not in line:
+            continue
+        match = re.search(r"\b(\d{2,5})x(\d{2,5})\b", line)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def normalized_frame_rate(value: str) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        if "/" in raw:
+            numerator_text, denominator_text = raw.split("/", 1)
+            denominator = float(denominator_text)
+            if denominator == 0:
+                return None
+            fps = float(numerator_text) / denominator
+        else:
+            fps = float(raw)
+    except ValueError:
+        return None
+    if fps <= 0 or fps > 240:
+        return None
+    return str(int(fps)) if fps.is_integer() else f"{fps:.6f}".rstrip("0").rstrip(".")
+
+
+def media_video_frame_rate(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            completed = subprocess.run(
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=avg_frame_rate",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                check=False,
+            )
+            if completed.returncode == 0:
+                normalized = normalized_frame_rate(getattr(completed, "stdout", "") or "")
+                if normalized:
+                    return normalized
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    ffmpeg = ffmpeg_executable()
+    if ffmpeg is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = getattr(completed, "stdout", "") or ""
+    for line in output.splitlines():
+        if "Video:" not in line:
+            continue
+        match = re.search(r"\b(\d+(?:\.\d+)?)\s+fps\b", line)
+        if match:
+            return normalized_frame_rate(match.group(1))
+    return None
+
+
+def canvas_dimensions(source_video: Path) -> tuple[int, int]:
+    dimensions = media_video_dimensions(source_video)
+    if dimensions is None:
+        return FALLBACK_OUTPUT_WIDTH, FALLBACK_OUTPUT_HEIGHT
+    width, height = dimensions
+    return max(2, width - width % 2), max(2, height - height % 2)
 
 
 def media_duration_seconds(path: Path) -> float | None:

@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -22,6 +23,16 @@ from .store import publisher_store
 
 _login_session_lock = threading.Lock()
 _active_login_sessions: set[str] = set()
+_publish_session_lock = threading.Lock()
+
+
+@dataclass
+class _PublishSession:
+    cancelled: threading.Event
+    finished: threading.Event
+
+
+_active_publish_sessions: dict[str, _PublishSession] = {}
 
 
 class PublisherProvider(Protocol):
@@ -146,7 +157,11 @@ class RpaPublisherProvider:
             job.updated_at = utc_now()
             return publisher_store.put_job(job)
 
-        return _publish_with_playwright(account, job)
+        session = _begin_publish_session(account.account_id)
+        try:
+            return _publish_with_playwright(account, job, session.cancelled)
+        finally:
+            _finish_publish_session(account.account_id, session)
 
     def query_result(self, job: PublishJob) -> PublishJob:
         return job
@@ -177,6 +192,39 @@ def _playwright_disabled() -> bool:
         "yes",
         "on",
     }
+
+
+def _begin_publish_session(account_id: str) -> _PublishSession:
+    """Stop a previous browser session before reusing an account profile."""
+    with _publish_session_lock:
+        previous = _active_publish_sessions.get(account_id)
+        if previous is not None:
+            previous.cancelled.set()
+    if previous is not None:
+        previous.finished.wait(timeout=15)
+    session = _PublishSession(cancelled=threading.Event(), finished=threading.Event())
+    with _publish_session_lock:
+        _active_publish_sessions[account_id] = session
+    return session
+
+
+def _finish_publish_session(account_id: str, session: _PublishSession) -> None:
+    session.finished.set()
+    with _publish_session_lock:
+        if _active_publish_sessions.get(account_id) is session:
+            _active_publish_sessions.pop(account_id, None)
+
+
+def _publish_session_cancelled(cancel_event: threading.Event | None) -> bool:
+    return cancel_event is not None and cancel_event.is_set()
+
+
+def _mark_publish_job_cancelled(job: PublishJob) -> PublishJob:
+    job.status = PublishJobStatus.failed
+    job.error_message = "已取消：同一账号已启动新的发布任务，旧浏览器窗口已关闭。"
+    job.logs.append("publish_session_cancelled_by_newer_job")
+    job.updated_at = utc_now()
+    return publisher_store.put_job(job)
 
 
 def _profile_has_state(account: PublisherAccount) -> bool:
@@ -354,6 +402,21 @@ def _apply_platform_page_zoom(page, platform: PublisherPlatform) -> None:
     # CSS zoom changes DOM coordinates and can make RPA clicks hit nearby
     # controls such as the scheduled-publish switch.
     return
+
+
+def _reset_xiaohongshu_browser_zoom(page) -> None:
+    """Undo the compact login zoom before opening the publish form.
+
+    Login uses the persistent browser profile and intentionally zooms XHS out
+    to keep the QR/login card visible. Chrome stores that zoom per profile, so
+    a later publish context inherits it unless we explicitly restore 100%.
+    """
+    try:
+        page.bring_to_front()
+        page.keyboard.press("Control+0")
+        page.wait_for_timeout(250)
+    except Exception:
+        pass
 
 
 def _prepare_login_page_layout(page, platform: PublisherPlatform) -> None:
@@ -716,7 +779,11 @@ def _extract_xiaohongshu_nickname(page) -> str | None:
         return None
 
 
-def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> PublishJob:
+def _publish_with_playwright(
+    account: PublisherAccount,
+    job: PublishJob,
+    cancel_event: threading.Event | None = None,
+) -> PublishJob:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
@@ -742,6 +809,8 @@ def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> Publ
             _apply_login_context_init_scripts(context, account.platform)
             page = _prepare_single_page(context)
             page.goto(publish_url, wait_until="domcontentloaded", timeout=60000)
+            if account.platform == PublisherPlatform.xiaohongshu:
+                _reset_xiaohongshu_browser_zoom(page)
             _apply_platform_page_zoom(page, account.platform)
             page.wait_for_timeout(3000)
             file_input = page.locator("input[type=file]").first
@@ -756,8 +825,18 @@ def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> Publ
                 _save_browser_state(context, account)
                 job.updated_at = utc_now()
                 publisher_store.put_job(job)
-                if not _wait_for_upload_control(page, context, account, job, account.platform, publish_url):
+                if not _wait_for_upload_control(
+                    page,
+                    context,
+                    account,
+                    job,
+                    account.platform,
+                    publish_url,
+                    cancel_event,
+                ):
                     context.close()
+                    if _publish_session_cancelled(cancel_event):
+                        return _mark_publish_job_cancelled(job)
                     return publisher_store.put_job(job)
                 file_input = page.locator("input[type=file]").first
                 file_input.set_input_files(job.video_path, timeout=15000)
@@ -781,7 +860,14 @@ def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> Publ
             else:
                 _best_effort_fill(page, account.platform, job.title, job.body.strip())
                 _best_effort_add_topics(page, account.platform, job.topics, job)
-            _wait_for_upload_ready(page, job)
+            _wait_for_upload_ready(
+                page,
+                job,
+                cancel_event,
+                platform=account.platform,
+            )
+            if _publish_session_cancelled(cancel_event):
+                return _mark_publish_job_cancelled(job)
             clicked = _best_effort_click_action(page, mode, account.platform, job)
             if clicked:
                 job.logs.append(
@@ -802,7 +888,14 @@ def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> Publ
                 _save_browser_state(context, account)
                 job.updated_at = utc_now()
                 publisher_store.put_job(job)
-                confirmed = _wait_for_manual_action_result(page, context, account, job, mode)
+                confirmed = _wait_for_manual_action_result(
+                    page,
+                    context,
+                    account,
+                    job,
+                    mode,
+                    cancel_event,
+                )
             elif account.platform == PublisherPlatform.xiaohongshu:
                 manual_verification = True
                 job.status = PublishJobStatus.needs_user_action
@@ -812,7 +905,14 @@ def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> Publ
                 _save_browser_state(context, account)
                 job.updated_at = utc_now()
                 publisher_store.put_job(job)
-                confirmed = _wait_for_manual_action_result(page, context, account, job, mode)
+                confirmed = _wait_for_manual_action_result(
+                    page,
+                    context,
+                    account,
+                    job,
+                    mode,
+                    cancel_event,
+                )
                 if confirmed:
                     clicked = True
                     job.logs.append("manual_publish_completed")
@@ -820,6 +920,8 @@ def _publish_with_playwright(account: PublisherAccount, job: PublishJob) -> Publ
             _save_browser_state(context, account)
             context.close()
 
+        if _publish_session_cancelled(cancel_event):
+            return _mark_publish_job_cancelled(job)
         if clicked and confirmed and mode == "draft":
             job.status = PublishJobStatus.drafted
             job.error_message = None
@@ -1289,17 +1391,44 @@ def _best_effort_add_topics(
     if not clean_topics:
         return
 
+    if platform == PublisherPlatform.douyin:
+        _dismiss_douyin_publish_guides(page)
+
     for topic in clean_topics:
         try:
             if not _open_add_topic_entry(page):
                 job.logs.append(f"topic_entry_not_found:{topic}")
                 continue
-            _type_topic_query(page, topic)
-            clicked = _click_topic_suggestion(page, topic)
-            if not clicked:
+            typed = _type_topic_query(
+                page,
+                topic,
+                allow_contenteditable=platform == PublisherPlatform.douyin,
+            )
+            if not typed:
+                if platform == PublisherPlatform.douyin:
+                    _remove_douyin_empty_topic_trigger(page)
+                job.logs.append(f"topic_query_input_failed:{topic}")
+                continue
+            clicked = _click_topic_suggestion(
+                page,
+                topic,
+                require_external=platform == PublisherPlatform.douyin,
+            )
+            if not clicked and platform != PublisherPlatform.douyin:
                 page.keyboard.press("Enter")
                 page.wait_for_timeout(800)
-            job.logs.append(f"topic_added:{topic}")
+            if platform == PublisherPlatform.douyin and not _douyin_editor_has_topic(
+                page, topic
+            ):
+                job.logs.append(f"topic_confirmation_failed:{topic}")
+                continue
+            if platform == PublisherPlatform.douyin:
+                native_topic = _douyin_editor_has_native_topic(page, topic)
+                _close_douyin_topic_suggestions(page)
+                result = "selected" if native_topic else "plain"
+            else:
+                result = "selected" if clicked else "entered"
+            job.logs.append(f"topic_added:{topic}:{result}")
         except Exception:
             job.logs.append(f"topic_add_failed:{topic}")
 
@@ -1344,7 +1473,12 @@ def _open_add_topic_entry(page) -> bool:
     return False
 
 
-def _type_topic_query(page, topic: str) -> bool:
+def _type_topic_query(
+    page,
+    topic: str,
+    *,
+    allow_contenteditable: bool = False,
+) -> bool:
     topic_inputs = [
         "input[placeholder*='话题']",
         "textarea[placeholder*='话题']",
@@ -1358,7 +1492,109 @@ def _type_topic_query(page, topic: str) -> bool:
             return True
         except Exception:
             continue
+    if not allow_contenteditable:
+        return False
+
+    # Douyin inserts the leading '#' into its Slate contenteditable when the
+    # toolbar action is clicked. There is no separate topic search input.
+    try:
+        page.keyboard.type(topic, delay=60)
+        page.wait_for_timeout(900)
+        if _douyin_editor_has_topic(page, topic):
+            return True
+    except Exception:
+        pass
+    try:
+        editor = page.locator("[contenteditable=true]:visible").first
+        editor.click(timeout=1500)
+        page.keyboard.press("End")
+        page.keyboard.type(topic, delay=60)
+        page.wait_for_timeout(900)
+        return _douyin_editor_has_topic(page, topic)
+    except Exception:
+        return False
+
+
+def _douyin_editor_has_topic(page, topic: str) -> bool:
+    expected = f"#{topic}".replace(" ", "")
+    try:
+        editors = page.locator("[contenteditable=true]:visible")
+        for index in range(editors.count()):
+            text = editors.nth(index).inner_text(timeout=800)
+            normalized = text.replace("\u200b", "").replace(" ", "")
+            if expected in normalized:
+                return True
+    except Exception:
+        pass
     return False
+
+
+def _douyin_editor_has_native_topic(page, topic: str) -> bool:
+    try:
+        mentions = page.locator(
+            "[contenteditable=true] [data-mention='#'], "
+            "[contenteditable=true] [data-fake-text]"
+        )
+        expected = f"#{topic}".replace(" ", "")
+        for index in range(mentions.count()):
+            text = mentions.nth(index).inner_text(timeout=800)
+            normalized = text.replace("\u200b", "").replace("\xa0", "").replace(" ", "")
+            if expected in normalized:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _remove_douyin_empty_topic_trigger(page) -> None:
+    try:
+        editor = page.locator("[contenteditable=true]:visible").first
+        text = editor.inner_text(timeout=800).replace("\u200b", "").rstrip()
+        if not text.endswith("#"):
+            return
+        editor.click(timeout=1200)
+        page.keyboard.press("End")
+        page.keyboard.press("Backspace")
+        page.wait_for_timeout(200)
+    except Exception:
+        pass
+
+
+def _close_douyin_topic_suggestions(page) -> None:
+    try:
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(150)
+    except Exception:
+        pass
+    try:
+        title = page.locator("input[type=text]:visible").first
+        title.click(timeout=800)
+        page.wait_for_timeout(150)
+    except Exception:
+        pass
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+
+
+def _dismiss_douyin_publish_guides(page) -> None:
+    for _ in range(4):
+        dismissed = False
+        try:
+            buttons = page.get_by_text("我知道了", exact=True)
+            for index in range(buttons.count() - 1, -1, -1):
+                button = buttons.nth(index)
+                if not button.is_visible(timeout=300):
+                    continue
+                button.click(timeout=1200)
+                page.wait_for_timeout(200)
+                dismissed = True
+                break
+        except Exception:
+            pass
+        if not dismissed:
+            return
 
 
 def _append_xiaohongshu_topic_to_body(page, topic: str) -> bool:
@@ -1383,7 +1619,27 @@ def _append_xiaohongshu_topic_to_body(page, topic: str) -> bool:
     return False
 
 
-def _click_topic_suggestion(page, topic: str) -> bool:
+def _click_topic_suggestion(
+    page,
+    topic: str,
+    *,
+    require_external: bool = False,
+) -> bool:
+    try:
+        suggestions = page.locator("span[class*='tag-hash-view-name']")
+        for index in range(suggestions.count()):
+            suggestion = suggestions.nth(index)
+            if suggestion.inner_text(timeout=500).strip() != topic:
+                continue
+            if not suggestion.is_visible(timeout=500):
+                continue
+            suggestion.click(timeout=1500)
+            page.wait_for_timeout(400)
+            return True
+    except Exception:
+        pass
+    if require_external:
+        return False
     candidates = [
         f"text=#{topic}",
         f"text=# {topic}",
@@ -1401,13 +1657,29 @@ def _click_topic_suggestion(page, topic: str) -> bool:
     return False
 
 
-def _wait_for_upload_ready(page, job: PublishJob) -> None:
-    busy_texts = ["上传中", "处理中", "转码中", "解析中"]
+def _wait_for_upload_ready(
+    page,
+    job: PublishJob,
+    cancel_event: threading.Event | None = None,
+    *,
+    platform: PublisherPlatform | None = None,
+) -> None:
+    busy_texts = ["上传中", "处理中", "解析中"]
+    if platform != PublisherPlatform.douyin:
+        busy_texts.append("转码中")
     deadline_ms = 180000
     elapsed = 0
     while elapsed < deadline_ms:
+        if _publish_session_cancelled(cancel_event):
+            job.logs.append("upload_wait_cancelled")
+            return
         if _is_text_visible(page, "上传失败"):
             job.logs.append("upload_failed_visible")
+            return
+        if platform == PublisherPlatform.douyin and _is_text_visible(
+            page, "转码过程也可以发布作品"
+        ):
+            job.logs.append("upload_ready_douyin_transcoding_allowed")
             return
         busy = any(_is_text_visible(page, text) for text in busy_texts)
         if not busy:
@@ -1428,6 +1700,8 @@ def _best_effort_click_action(
         return _click_xiaohongshu_action(page, mode, job)
     if platform == PublisherPlatform.kuaishou:
         return _click_kuaishou_action(page, mode, job)
+    if platform == PublisherPlatform.douyin:
+        return _click_douyin_action(page, mode, job)
     if mode == "draft":
         candidates = [
             "button:has-text('暂存离开')",
@@ -1458,6 +1732,37 @@ def _best_effort_click_action(
     return False
 
 
+def _click_douyin_action(page, mode: str, job: PublishJob | None = None) -> bool:
+    _close_douyin_topic_suggestions(page)
+    _dismiss_douyin_publish_guides(page)
+    labels = ["暂存离开", "保存草稿", "存草稿"] if mode == "draft" else ["发布"]
+    try:
+        buttons = page.locator("button")
+        for label in labels:
+            for index in range(buttons.count() - 1, -1, -1):
+                button = buttons.nth(index)
+                if not button.is_visible(timeout=500):
+                    continue
+                if button.inner_text(timeout=500).strip() != label:
+                    continue
+                if not button.is_enabled(timeout=500):
+                    if job is not None:
+                        job.logs.append(f"douyin_action_disabled:{label}")
+                    continue
+                button.scroll_into_view_if_needed(timeout=1500)
+                button.click(timeout=5000)
+                page.wait_for_timeout(800)
+                if job is not None:
+                    job.logs.append(f"douyin_action_clicked:{label}")
+                return True
+    except Exception as exc:
+        if job is not None:
+            job.logs.append(f"douyin_action_click_failed:{str(exc)[:120]}")
+    if job is not None:
+        job.logs.append("douyin_action_not_found")
+    return False
+
+
 def _click_xiaohongshu_action(page, mode: str, job: PublishJob | None = None) -> bool:
     _apply_platform_page_zoom(page, PublisherPlatform.xiaohongshu)
     _dismiss_xiaohongshu_overlays(page)
@@ -1468,6 +1773,8 @@ def _click_xiaohongshu_action(page, mode: str, job: PublishJob | None = None) ->
         else ["发布", "立即发布", "发布笔记"]
     )
     if mode != "draft" and _click_xiaohongshu_red_publish_button(page, job):
+        return True
+    if mode != "draft" and _click_xiaohongshu_publish_component(page, job):
         return True
     if _click_xiaohongshu_action_by_dom(page, labels):
         return True
@@ -1508,6 +1815,37 @@ def _click_xiaohongshu_action(page, mode: str, job: PublishJob | None = None) ->
                     return True
             except Exception:
                 continue
+    return False
+
+
+def _click_xiaohongshu_publish_component(
+    page,
+    job: PublishJob | None = None,
+) -> bool:
+    """Click XHS's real custom publish component before using visual fallbacks."""
+    selectors = [
+        "xhs-publish-btn[is-publish='true'][submit-disabled='false']",
+        "xhs-publish-btn[submit-text='发布'][submit-disabled='false']",
+        "xhs-publish-btn[is-publish='true']",
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).last
+            if not locator.is_visible(timeout=1200):
+                continue
+            if locator.get_attribute("submit-disabled") == "true":
+                continue
+            locator.scroll_into_view_if_needed(timeout=1500)
+            locator.click(timeout=5000, force=True)
+            page.wait_for_timeout(1500)
+            if job is not None:
+                job.logs.append("xhs_publish_component_clicked")
+            return True
+        except Exception as exc:
+            if job is not None:
+                job.logs.append(f"xhs_publish_component_click_failed:{str(exc)[:120]}")
+    if job is not None:
+        job.logs.append("xhs_publish_component_not_found")
     return False
 
 
@@ -2000,7 +2338,7 @@ def _click_platform_publish_button_by_screenshot(
         return False
 
     try:
-        screenshot = page.screenshot(full_page=False)
+        screenshot = _viewport_screenshot(page)
         image = cv2.imdecode(np.frombuffer(screenshot, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             if job is not None:
@@ -2057,7 +2395,7 @@ def _click_platform_publish_button_by_screenshot(
                 job.logs.append(f"{prefix}_visual_candidate:not_found;image={width}x{height}")
             return False
         target = candidates[0]
-        viewport = page.viewport_size or {"width": width, "height": height}
+        viewport = _page_layout_viewport(page, width, height)
         click_x = target["center_x"] * viewport["width"] / width
         click_y = target["center_y"] * viewport["height"] / height
         if job is not None:
@@ -2066,15 +2404,7 @@ def _click_platform_publish_button_by_screenshot(
                 f"x={click_x:.1f};y={click_y:.1f};"
                 f"image={width}x{height};viewport={viewport['width']}x{viewport['height']}"
             )
-        page.mouse.move(click_x, click_y)
-        page.wait_for_timeout(120)
-        page.mouse.down()
-        page.wait_for_timeout(120)
-        page.mouse.up()
-        page.wait_for_timeout(500)
-        page.mouse.click(click_x, click_y)
-        page.wait_for_timeout(1500)
-        return True
+        return _click_xiaohongshu_point(page, click_x, click_y, job, prefix)
     except Exception as exc:
         if job is not None:
             job.logs.append(f"{prefix}_visual_click_exception:{str(exc)[:160]}")
@@ -2096,7 +2426,7 @@ def _click_xiaohongshu_publish_button_by_screenshot(
         return False
 
     try:
-        screenshot = page.screenshot(full_page=False)
+        screenshot = _viewport_screenshot(page)
         image = cv2.imdecode(np.frombuffer(screenshot, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             if job is not None:
@@ -2154,7 +2484,7 @@ def _click_xiaohongshu_publish_button_by_screenshot(
             return False
 
         target = candidates[0]
-        viewport = page.viewport_size or {"width": width, "height": height}
+        viewport = _page_layout_viewport(page, width, height)
         click_x = target["center_x"] * viewport["width"] / width
         click_y = target["center_y"] * viewport["height"] / height
         if job is not None:
@@ -2163,19 +2493,152 @@ def _click_xiaohongshu_publish_button_by_screenshot(
                 f"zoom={zoom};x={click_x:.1f};y={click_y:.1f};"
                 f"image={width}x{height};viewport={viewport['width']}x{viewport['height']}"
             )
-        page.mouse.move(click_x, click_y)
-        page.wait_for_timeout(120)
-        page.mouse.down()
-        page.wait_for_timeout(120)
-        page.mouse.up()
-        page.wait_for_timeout(500)
-        page.mouse.click(click_x, click_y)
-        page.wait_for_timeout(1500)
-        return True
+        return _click_xiaohongshu_point(page, click_x, click_y, job, "xhs")
     except Exception as exc:
         if job is not None:
             job.logs.append(f"xhs_visual_click_exception:{str(exc)[:160]}")
         return False
+
+
+def _viewport_screenshot(page):
+    """Capture in CSS pixels so screenshot coordinates match page.mouse."""
+    try:
+        return page.screenshot(full_page=False, scale="css")
+    except TypeError:
+        return page.screenshot(full_page=False)
+
+
+def _page_layout_viewport(page, fallback_width: int, fallback_height: int) -> dict[str, int]:
+    """Return the page's real CSS coordinate space instead of Playwright metadata.
+
+    Persistent Chromium contexts on high-DPI Windows can report a viewport size
+    smaller than window.innerWidth/innerHeight. Mouse input must use the latter
+    when translating a screenshot point back into the live page.
+    """
+    try:
+        layout = page.evaluate(
+            """() => ({ width: window.innerWidth, height: window.innerHeight })"""
+        )
+        width = int(layout.get("width") or 0)
+        height = int(layout.get("height") or 0)
+        if width > 0 and height > 0:
+            return {"width": width, "height": height}
+    except Exception:
+        pass
+    return page.viewport_size or {"width": fallback_width, "height": fallback_height}
+
+
+def _click_xiaohongshu_point(
+    page,
+    x: float,
+    y: float,
+    job: PublishJob | None,
+    prefix: str,
+) -> bool:
+    """Click a visual target through its DOM hit target, then fall back to mouse input."""
+    point = {"x": float(x), "y": float(y)}
+    try:
+        hit = page.evaluate(
+            """
+            ({ x, y }) => {
+              const offsets = [[0, 0], [-4, 0], [4, 0], [0, -4], [0, 4]];
+              const clickableSelector = 'button,[role="button"],a,xhs-publish-btn,[class*="btn"],[class*="button"],[class*="submit"]';
+              for (const [dx, dy] of offsets) {
+                const element = document.elementFromPoint(x + dx, y + dy);
+                if (!element) continue;
+                const clickable = element.closest(clickableSelector);
+                const target = clickable || element;
+                const rect = target.getBoundingClientRect();
+                if (rect.width < 8 || rect.height < 8) continue;
+                const style = window.getComputedStyle(target);
+                return {
+                  tag: target.tagName,
+                  text: (target.innerText || target.textContent || '').replace(/\\s+/g, '').slice(0, 40),
+                  className: String(target.className || '').slice(0, 100),
+                  backgroundColor: style.backgroundColor,
+                  x: rect.left,
+                  y: rect.top,
+                  width: rect.width,
+                  height: rect.height,
+                  isClickable: Boolean(clickable),
+                  hitX: x + dx,
+                  hitY: y + dy,
+                };
+              }
+              return null;
+            }
+            """,
+            point,
+        )
+        if job is not None:
+            if hit:
+                job.logs.append(
+                    f"{prefix}_click_hit:"
+                    f"text={hit.get('text')};tag={hit.get('tag')};"
+                    f"class={str(hit.get('className') or '')[:60]}"
+                )
+            else:
+                job.logs.append(f"{prefix}_click_hit:none")
+        if hit and not hit.get("isClickable") and "发布" not in str(hit.get("text") or ""):
+            if job is not None:
+                job.logs.append(f"{prefix}_click_hit_rejected:non_clickable_container")
+            return False
+        click_point = {
+            "x": float(hit.get("hitX", x)) if hit else float(x),
+            "y": float(hit.get("hitY", y)) if hit else float(y),
+        }
+        if hit and str(hit.get("tag") or "").upper() == "XHS-PUBLISH-BTN":
+            page.mouse.move(click_point["x"], click_point["y"])
+            page.wait_for_timeout(120)
+            page.mouse.down()
+            page.wait_for_timeout(120)
+            page.mouse.up()
+            page.wait_for_timeout(1500)
+            if job is not None:
+                job.logs.append(
+                    f"xhs_publish_visual_point_clicked:"
+                    f"x={click_point['x']:.1f};y={click_point['y']:.1f}"
+                )
+            return True
+        if hit:
+            page.evaluate(
+                """
+                ({ x, y }) => {
+                  const element = document.elementFromPoint(x, y);
+                  if (!element) return false;
+                  const selector = 'button,[role="button"],a,xhs-publish-btn,[class*="btn"],[class*="button"],[class*="submit"]';
+                  const target = element.closest(selector) || element;
+                  const rect = target.getBoundingClientRect();
+                  const options = {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                  };
+                  for (const name of ['pointerover', 'mouseover', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                    const EventClass = name.startsWith('pointer') ? PointerEvent : MouseEvent;
+                    target.dispatchEvent(new EventClass(name, options));
+                  }
+                  if (typeof target.click === 'function') target.click();
+                  return true;
+                }
+                """,
+                click_point,
+            )
+        else:
+            page.mouse.click(float(x), float(y))
+        page.wait_for_timeout(1500)
+        return True
+    except Exception as exc:
+        if job is not None:
+            job.logs.append(f"{prefix}_click_hit_exception:{str(exc)[:160]}")
+        try:
+            page.mouse.click(float(x), float(y))
+            page.wait_for_timeout(1500)
+            return True
+        except Exception:
+            return False
 
 
 def _append_xiaohongshu_publish_candidate_logs(
@@ -2502,10 +2965,15 @@ def _wait_for_manual_action_result(
     account: PublisherAccount,
     job: PublishJob,
     mode: str,
+    cancel_event: threading.Event | None = None,
 ) -> bool:
     deadline = time.monotonic() + _manual_action_timeout_seconds()
     last_saved = 0.0
     while time.monotonic() < deadline:
+        if _publish_session_cancelled(cancel_event):
+            job.logs.append("manual_verification_cancelled")
+            _save_browser_state(context, account)
+            return False
         if page.is_closed():
             job.logs.append("manual_verification_window_closed")
             _save_browser_state(context, account)
@@ -2531,10 +2999,15 @@ def _wait_for_upload_control(
     job: PublishJob,
     platform: PublisherPlatform,
     publish_url: str,
+    cancel_event: threading.Event | None = None,
 ) -> bool:
     deadline = time.monotonic() + _manual_action_timeout_seconds()
     navigated_after_login = False
     while time.monotonic() < deadline:
+        if _publish_session_cancelled(cancel_event):
+            job.logs.append("upload_control_wait_cancelled")
+            _save_browser_state(context, account)
+            return False
         if page.is_closed():
             job.logs.append("upload_control_wait_window_closed")
             _save_browser_state(context, account)

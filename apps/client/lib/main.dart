@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -27,11 +28,28 @@ class OralVideoAgentApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
+        fontFamilyFallback: const [
+          'Microsoft YaHei UI',
+          'Microsoft YaHei',
+          'PingFang SC',
+        ],
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF6B6DFF),
+          seedColor: const Color(0xFF8B5CF6),
           brightness: Brightness.dark,
         ),
-        scaffoldBackgroundColor: const Color(0xFF11131B),
+        scaffoldBackgroundColor: const Color(0xFF0E0F18),
+        dividerColor: const Color(0xFF2B2E42),
+        cardTheme: CardThemeData(
+          color: const Color(0xFF181A27),
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: const BorderSide(color: Color(0xFF2D3044)),
+          ),
+        ),
+        tooltipTheme: const TooltipThemeData(
+          waitDuration: Duration(milliseconds: 350),
+        ),
         useMaterial3: true,
       ),
       home: const WorkbenchPage(),
@@ -65,6 +83,16 @@ class _CloudUploadFile {
   final File file;
   final String fileName;
   final String contentType;
+}
+
+enum _WorkspaceSection {
+  studio,
+  voices,
+  avatars,
+  media,
+  tasks,
+  accounts,
+  cloudAccount,
 }
 
 class _WorkbenchPageState extends State<WorkbenchPage> {
@@ -144,6 +172,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       TextEditingController(text: _configuredCloudApiBase);
   final cloudEmailController = TextEditingController();
   final cloudEmailCodeController = TextEditingController();
+  final cloudPasswordController = TextEditingController();
+  final cloudPasswordConfirmController = TextEditingController();
   final cloudActivationCodeController = TextEditingController();
   final cloudDurationController = TextEditingController(text: '600');
   final pipStartController = TextEditingController(text: '0');
@@ -165,18 +195,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   List<Map<String, dynamic>> bgmTracks = const [];
   List<Map<String, dynamic>> publisherAccounts = const [];
   List<Map<String, dynamic>> publishJobs = const [];
+  List<Map<String, dynamic>> taskHistory = const [];
   bool loading = false;
   bool renderingVideo = false;
   bool diagnosingMouthAtlas = false;
   bool publishing = false;
   bool generatingPublishContent = false;
+  bool loadingTaskHistory = false;
+  bool batchDeletingTasks = false;
+  bool cloudVoiceCancelRequested = false;
+  bool localApiOnline = false;
+  bool cloudAccountSignedOut = false;
+  bool cloudPasswordVisible = false;
+  bool cloudPasswordConfirmVisible = false;
   bool initialized = false;
-  bool activationDialogOpen = false;
   String apiBase = _configuredApiBase;
   String message = '';
   bool messageIsError = false;
   String publishContentGeneratedKey = '';
   String generationMode = 'cloud';
+  String cloudActivationToken = '';
+  bool cloudActivationValid = false;
   String cloudDeviceToken = '';
   String cloudSourceVideoPath = '';
   String cloudSourceVideoName = '';
@@ -195,11 +234,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String selectedPublisherAccount = '';
   String selectedPublishMode = 'direct';
   String selectedMediaSubTab = 'subtitles';
+  _WorkspaceSection selectedSection = _WorkspaceSection.studio;
+  String taskStatusFilter = 'all';
+  String cloudAuthMode = 'login';
+  final Set<String> selectedTaskIds = <String>{};
   bool toothHd = true;
   bool randomMotion = false;
   bool mouthApertureEnabled = true;
   double speechRate = 1.0;
-  double voicePreviewVolume = 1.0;
+  double voicePreviewVolume = 0.45;
   double bgmVolume = 0.35;
   double subtitleSize = 12;
   bool subtitlesEnabled = true;
@@ -225,6 +268,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   int outputRefresh = 0;
   Timer? renderPollTimer;
   Timer? cloudPollTimer;
+  Timer? cloudEmailCodeTimer;
+  int cloudEmailCodeCooldown = 0;
   Process? _localApiProcess;
   Player? _voicePlayer;
   Player? _originalAudioPlayer;
@@ -243,6 +288,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   void dispose() {
     renderPollTimer?.cancel();
     cloudPollTimer?.cancel();
+    cloudEmailCodeTimer?.cancel();
     _localApiProcess?.kill();
     _voicePlayer?.dispose();
     _originalAudioPlayer?.dispose();
@@ -259,6 +305,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     cloudApiController.dispose();
     cloudEmailController.dispose();
     cloudEmailCodeController.dispose();
+    cloudPasswordController.dispose();
+    cloudPasswordConfirmController.dispose();
     cloudActivationCodeController.dispose();
     cloudDurationController.dispose();
     pipStartController.dispose();
@@ -281,6 +329,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           (body['bgm'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       if (!mounted) return;
       setState(() {
+        localApiOnline = true;
         final apiBaseChanged = apiBase != loadedApiBase;
         apiBase = loadedApiBase;
         final loadedProviders = body['providers'] as Map<String, dynamic>?;
@@ -352,6 +401,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        localApiOnline = false;
         message = e.toString();
         messageIsError = true;
       });
@@ -360,9 +410,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _initialize() async {
     await loadBootstrap();
+    await loadTaskHistory(silent: true);
     await _resetReleaseLocalStateIfNeeded();
     await _loadCloudAuth();
-    if (_cloudLicensed) {
+    if (_cloudLicensed && !cloudAccountSignedOut) {
       await loadCloudLedger(silent: true);
     }
     if (mounted && providers != null) {
@@ -370,7 +421,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     if (!mounted) return;
     setState(() => initialized = true);
-    _promptActivationIfNeeded();
   }
 
   Future<File> _releaseResetMarkerFile() async {
@@ -421,17 +471,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   bool get _cloudLoggedIn => cloudDeviceToken.isNotEmpty;
 
-  bool get _cloudLicensed {
-    return _cloudUser?['license_status'] == 'active';
-  }
+  bool get _cloudLicensed =>
+      cloudActivationValid && cloudActivationToken.isNotEmpty;
 
   bool get _cloudAccountBound {
+    if (cloudAccountSignedOut) return false;
     final email = _cloudUser?['email'] as String? ?? '';
     return email.trim().isNotEmpty;
   }
 
   bool _ensureSoftwareActivated() {
-    if (!_cloudLoggedIn || !_cloudLicensed) {
+    if (!_cloudLicensed) {
       showError('请先输入激活码激活软件');
       return false;
     }
@@ -440,12 +490,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   bool _ensureCloudAccountReady() {
     if (!_ensureSoftwareActivated()) return false;
+    if (!_cloudLoggedIn || !_cloudAccountBound) {
+      showError('请先登录云端账号');
+      return false;
+    }
     return true;
   }
 
-  Map<String, String> _cloudHeaders({bool auth = true}) {
+  Map<String, String> _cloudHeaders({
+    bool auth = true,
+    bool activation = true,
+  }) {
     return {
       'Content-Type': 'application/json',
+      if (activation && cloudActivationToken.isNotEmpty)
+        'X-Device-Token': cloudActivationToken,
       if (auth && cloudDeviceToken.isNotEmpty)
         'Authorization': 'Bearer $cloudDeviceToken',
     };
@@ -459,13 +518,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _loadCloudAuth() async {
     try {
-      final file = await _cloudAuthFile();
-      if (!await file.exists()) return;
+      final currentFile = await _cloudAuthFile();
+      var file = currentFile;
+      if (!await file.exists()) {
+        final legacyFile = File(
+          '${currentFile.parent.parent.path}'
+          '${Platform.pathSeparator}oral_video_agent_client'
+          '${Platform.pathSeparator}cloud_auth.json',
+        );
+        if (!await legacyFile.exists()) return;
+        file = legacyFile;
+      }
       final saved =
           jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       final savedBase = saved['cloud_api_base'] as String? ?? '';
       final savedToken = saved['device_token'] as String? ?? '';
+      final hasSeparateActivationToken = saved.containsKey('activation_token');
+      final savedActivationToken =
+          saved['activation_token'] as String? ?? savedToken;
       final savedEmail = saved['email'] as String? ?? '';
+      final savedSignedOut = saved['account_signed_out'] == true;
       if (!mounted) return;
       setState(() {
         if (savedBase.isNotEmpty) {
@@ -474,9 +546,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         if (savedEmail.isNotEmpty) {
           cloudEmailController.text = savedEmail;
         }
-        cloudDeviceToken = savedToken;
+        cloudActivationToken = savedActivationToken;
+        cloudDeviceToken =
+            hasSeparateActivationToken && !savedSignedOut ? savedToken : '';
+        cloudAccountSignedOut = savedSignedOut;
       });
-      if (savedToken.isNotEmpty) {
+      if (savedActivationToken.isNotEmpty) {
+        final activated = await _validateCloudActivation();
+        if (!activated) {
+          await _clearCloudAuth();
+          return;
+        }
+        await _saveCloudAuth();
+      }
+      if (cloudDeviceToken.isNotEmpty) {
         await loadCloudMe(silent: true);
       }
     } catch (_) {
@@ -488,8 +571,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final file = await _cloudAuthFile();
     await file.writeAsString(jsonEncode({
       'cloud_api_base': _cloudApiBase,
+      'activation_token': cloudActivationToken,
       'device_token': cloudDeviceToken,
       'email': cloudEmailController.text.trim(),
+      'account_signed_out': cloudAccountSignedOut,
     }));
   }
 
@@ -504,11 +589,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     if (!mounted) return;
     setState(() {
+      cloudActivationToken = '';
+      cloudActivationValid = false;
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
       cloudLedger = const [];
+      cloudAccountSignedOut = false;
+      cloudAuthMode = 'login';
     });
+  }
+
+  Future<void> _clearCloudAccountSession() async {
+    if (!mounted) return;
+    setState(() {
+      cloudDeviceToken = '';
+      cloudSession = null;
+      cloudWallet = null;
+      cloudLedger = const [];
+      cloudAccountSignedOut = true;
+      cloudAuthMode = 'login';
+    });
+    await _saveCloudAuth();
   }
 
   String _deviceFingerprint() {
@@ -529,6 +631,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Map<String, dynamic> _decodeMap(http.Response res) {
     return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+  }
+
+  Future<bool> _validateCloudActivation() async {
+    if (cloudActivationToken.isEmpty) return false;
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/activation'),
+        headers: _cloudHeaders(auth: false),
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) return false;
+      final body = _decodeMap(res);
+      final activated = body['activated'] == true;
+      if (mounted) setState(() => cloudActivationValid = activated);
+      return activated;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> loadCloudMe({bool silent = false}) async {
@@ -558,7 +677,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await _saveCloudAuth();
     } catch (e) {
       if (silent) {
-        await _clearCloudAuth();
+        await _clearCloudAccountSession();
       } else {
         showError(e.toString());
       }
@@ -566,7 +685,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> loadCloudLedger({bool silent = false}) async {
-    if (!_cloudLicensed) return;
+    if (!_cloudLicensed || !_cloudLoggedIn) return;
     try {
       final res = await http.get(
         Uri.parse('$_cloudApiBase/api/client/credits/ledger'),
@@ -589,7 +708,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
-  Future<void> sendCloudEmailCode() async {
+  Future<void> sendCloudEmailCode({String purpose = 'register'}) async {
     if (!_ensureSoftwareActivated()) return;
     final email = cloudEmailController.text.trim();
     if (email.isEmpty) {
@@ -600,11 +719,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final res = await http.post(
         Uri.parse('$_cloudApiBase/api/client/auth/email-code'),
         headers: _cloudHeaders(),
-        body: jsonEncode({'email': email}),
+        body: jsonEncode({'email': email, 'purpose': purpose}),
       );
+      if (res.statusCode == 401) {
+        await _clearCloudAuth();
+        throw Exception('软件激活状态已失效，请重新输入激活码激活');
+      }
       _check(res);
       final body = _decodeMap(res);
       final debugCode = body['debug_code'] as String? ?? '';
+      final resendSeconds = (body['resend_seconds'] as num?)?.toInt() ?? 60;
       setState(() {
         if (debugCode.isNotEmpty) {
           cloudEmailCodeController.text = debugCode;
@@ -614,46 +738,146 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         }
         messageIsError = false;
       });
+      _startCloudEmailCodeCooldown(resendSeconds);
       await _saveCloudAuth();
     });
   }
 
-  Future<void> loginCloudWithEmail() async {
-    if (!_ensureSoftwareActivated()) return;
+  void _startCloudEmailCodeCooldown(int seconds) {
+    cloudEmailCodeTimer?.cancel();
+    if (!mounted) return;
+    setState(() => cloudEmailCodeCooldown = math.max(0, seconds));
+    if (cloudEmailCodeCooldown == 0) return;
+    cloudEmailCodeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || cloudEmailCodeCooldown <= 1) {
+        timer.cancel();
+        if (mounted) setState(() => cloudEmailCodeCooldown = 0);
+        return;
+      }
+      setState(() => cloudEmailCodeCooldown--);
+    });
+  }
+
+  Future<bool> loginCloudWithPassword() async {
+    if (!_ensureSoftwareActivated()) return false;
     final email = cloudEmailController.text.trim();
-    final code = cloudEmailCodeController.text.trim();
+    final password = cloudPasswordController.text;
     if (email.isEmpty) {
       showError('请输入邮箱');
-      return;
+      return false;
     }
-    if (code.isEmpty) {
-      showError('请输入邮箱验证码');
-      return;
+    if (password.isEmpty) {
+      showError('请输入密码');
+      return false;
     }
+    var succeeded = false;
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/login'),
+        Uri.parse('$_cloudApiBase/api/client/auth/password-login'),
         headers: _cloudHeaders(),
         body: jsonEncode({
           'email': email,
-          'code': code,
-          'device_fingerprint': _deviceFingerprint(),
+          'password': password,
           'device_name': _deviceName(),
         }),
       );
       _check(res);
       final body = _decodeMap(res);
       setState(() {
+        cloudAccountSignedOut = false;
         cloudDeviceToken = body['device_token'] as String? ?? cloudDeviceToken;
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
         cloudEmailCodeController.clear();
-        message = '邮箱账号已绑定，点数余额按该账号管理';
+        cloudPasswordController.clear();
+        cloudPasswordConfirmController.clear();
+        message = '云端账号登录成功';
         messageIsError = false;
       });
       await _saveCloudAuth();
       await loadCloudLedger(silent: true);
+      succeeded = true;
     });
+    return succeeded;
+  }
+
+  Future<bool> registerCloudAccount() async {
+    return _completePasswordCodeAuth(
+      endpoint: 'register',
+      passwordKey: 'password',
+      successMessage: '云端账号注册并登录成功',
+    );
+  }
+
+  Future<bool> resetCloudPassword() async {
+    return _completePasswordCodeAuth(
+      endpoint: 'password-reset',
+      passwordKey: 'new_password',
+      successMessage: '密码已重置并登录',
+    );
+  }
+
+  Future<bool> _completePasswordCodeAuth({
+    required String endpoint,
+    required String passwordKey,
+    required String successMessage,
+  }) async {
+    if (!_ensureSoftwareActivated()) return false;
+    final email = cloudEmailController.text.trim();
+    final code = cloudEmailCodeController.text.trim();
+    final password = cloudPasswordController.text;
+    final confirm = cloudPasswordConfirmController.text;
+    if (email.isEmpty) {
+      showError('请输入邮箱');
+      return false;
+    }
+    if (code.isEmpty) {
+      showError('请输入邮箱验证码');
+      return false;
+    }
+    if (password.length < 8) {
+      showError('密码至少需要 8 个字符');
+      return false;
+    }
+    if (password != confirm) {
+      showError('两次输入的密码不一致');
+      return false;
+    }
+    var succeeded = false;
+    await _runBusy(() async {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/auth/$endpoint'),
+        headers: _cloudHeaders(),
+        body: jsonEncode({
+          'email': email,
+          'code': code,
+          passwordKey: password,
+          'device_name': _deviceName(),
+        }),
+      );
+      if (res.statusCode == 401) {
+        await _clearCloudAuth();
+        throw Exception('软件激活状态已失效，请重新输入激活码激活');
+      }
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      setState(() {
+        cloudAccountSignedOut = false;
+        cloudDeviceToken = body['device_token'] as String? ?? '';
+        cloudSession = body;
+        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudEmailCodeController.clear();
+        cloudPasswordController.clear();
+        cloudPasswordConfirmController.clear();
+        message = successMessage;
+        messageIsError = false;
+      });
+      await _saveCloudAuth();
+      await loadCloudLedger(silent: true);
+      succeeded = true;
+    });
+    return succeeded;
   }
 
   Future<void> activateCloudLicense() async {
@@ -670,7 +894,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     await _runBusy(() async {
       final res = await http.post(
         Uri.parse('$_cloudApiBase/api/client/activate'),
-        headers: _cloudHeaders(auth: false),
+        headers: _cloudHeaders(auth: false, activation: false),
         body: jsonEncode({
           'license_key': code,
           'device_fingerprint': _deviceFingerprint(),
@@ -680,77 +904,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _check(res);
       final body = _decodeMap(res);
       setState(() {
-        cloudDeviceToken = body['device_token'] as String? ?? '';
-        cloudSession = body;
-        cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudActivationToken = body['device_token'] as String? ?? '';
+        cloudActivationValid = cloudActivationToken.isNotEmpty;
+        cloudDeviceToken = '';
+        cloudSession = null;
+        cloudWallet = null;
+        cloudAccountSignedOut = false;
         cloudActivationCodeController.clear();
         message = '软件已激活，请绑定邮箱账号管理点?';
         messageIsError = false;
       });
       await _saveCloudAuth();
-      await loadCloudLedger(silent: true);
       activated = true;
     });
     return activated;
-  }
-
-  void _promptActivationIfNeeded() {
-    if (!mounted || _cloudLicensed || activationDialogOpen) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _cloudLicensed || activationDialogOpen) return;
-      activationDialogOpen = true;
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: _activationDialog,
-      ).whenComplete(() {
-        activationDialogOpen = false;
-        if (mounted && !_cloudLicensed) _promptActivationIfNeeded();
-      });
-    });
-  }
-
-  Widget _activationDialog(BuildContext dialogContext) {
-    return PopScope(
-      canPop: false,
-      child: AlertDialog(
-        backgroundColor: panelBg,
-        title: const Text('软件激活'),
-        content: SizedBox(
-          width: 420,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('请输入激活码后继续使用云端功能。',
-                  style: TextStyle(color: Colors.white70, height: 1.4)),
-              const SizedBox(height: 14),
-              _input(cloudActivationCodeController, '激活码'),
-              const SizedBox(height: 10),
-              if (message.isNotEmpty && messageIsError)
-                Text(
-                  message,
-                  style: const TextStyle(color: Color(0xFFFFB0C2)),
-                ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton.icon(
-            onPressed: loading
-                ? null
-                : () async {
-                    final ok = await _activateSoftwareFromInput();
-                    if (ok && mounted && Navigator.of(dialogContext).canPop()) {
-                      Navigator.of(dialogContext).pop();
-                    }
-                  },
-            icon: const Icon(Icons.verified_user_outlined),
-            label: const Text('激活'),
-          ),
-        ],
-      ),
-    );
   }
 
   Widget _accountModule() {
@@ -759,35 +926,295 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _emailLoginModule() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
-    final available = wallet['available_points'] ?? 0;
-    final frozen = wallet['frozen_points'] ?? 0;
     return Container(
-      constraints: const BoxConstraints(minHeight: 58),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      constraints: const BoxConstraints(minHeight: 58, maxWidth: 520),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: const Color(0xFF202438),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: purpleLine.withValues(alpha: 0.85)),
       ),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.login, size: 18, color: Color(0xFFD4A4FF)),
-          const SizedBox(width: 8),
-          _headerInfo('账号可选', '可用 $available / 冻结 $frozen'),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF368BFF), Color(0xFFE65CD6)],
+              ),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: const Icon(Icons.lock_person_outlined, color: Colors.white),
+          ),
           const SizedBox(width: 12),
-          SizedBox(
-              width: 180, child: _headerInput(cloudEmailController, '邮箱账号')),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('欢迎回来',
+                    style:
+                        TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                SizedBox(height: 2),
+                Text('使用邮箱和密码登录云端账号',
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+              ],
+            ),
+          ),
+          OutlinedButton(
+            onPressed: loading ? null : () => _showCloudAuthDialog('register'),
+            child: const Text('注册'),
+          ),
           const SizedBox(width: 8),
-          SizedBox(
-              width: 96, child: _headerInput(cloudEmailCodeController, '验证码')),
-          const SizedBox(width: 8),
-          _headerButton('发码', sendCloudEmailCode),
-          const SizedBox(width: 8),
-          _headerButton('登录', loginCloudWithEmail, primary: true),
+          FilledButton.icon(
+            onPressed: loading ? null : () => _showCloudAuthDialog('login'),
+            icon: const Icon(Icons.login_rounded, size: 18),
+            label: const Text('登录'),
+          ),
         ],
       ),
+    );
+  }
+
+  Future<void> _showCloudAuthDialog(String initialMode) async {
+    cloudAuthMode = initialMode;
+    cloudEmailCodeController.clear();
+    cloudPasswordController.clear();
+    cloudPasswordConfirmController.clear();
+    cloudPasswordVisible = false;
+    cloudPasswordConfirmVisible = false;
+    Timer? dialogTimer;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setModalState) {
+          dialogTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+            if (dialogContext.mounted) setModalState(() {});
+          });
+          final mode = cloudAuthMode;
+          final isLogin = mode == 'login';
+          final isRegister = mode == 'register';
+          final title = isLogin ? '欢迎回来' : (isRegister ? '创建账号' : '重置密码');
+          final subtitle = isLogin
+              ? '使用邮箱账号和密码登录'
+              : (isRegister ? '验证邮箱并设置首次登录密码' : '验证邮箱后设置新密码');
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            child: Container(
+              width: 500,
+              padding: const EdgeInsets.fromLTRB(30, 24, 30, 28),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1D2132),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: purpleLine.withValues(alpha: 0.75)),
+                boxShadow: const [
+                  BoxShadow(
+                      color: Colors.black54,
+                      blurRadius: 34,
+                      offset: Offset(0, 16)),
+                ],
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: IconButton(
+                        onPressed: () => Navigator.pop(dialogContext),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ),
+                    Container(
+                      width: 62,
+                      height: 62,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF368BFF), Color(0xFFE65CD6)],
+                        ),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: const Icon(Icons.play_arrow_rounded,
+                          size: 38, color: Colors.white),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 28, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 6),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: Colors.white54, fontSize: 14)),
+                    const SizedBox(height: 28),
+                    _cloudAuthField(
+                      controller: cloudEmailController,
+                      label: '邮箱',
+                      hint: '请输入邮箱',
+                      icon: Icons.mail_outline_rounded,
+                    ),
+                    const SizedBox(height: 14),
+                    _cloudAuthField(
+                      controller: cloudPasswordController,
+                      label: isLogin ? '密码' : (isRegister ? '设置密码' : '新密码'),
+                      hint: '至少 8 个字符',
+                      icon: Icons.lock_outline_rounded,
+                      obscureText: !cloudPasswordVisible,
+                      onToggleVisibility: () => setModalState(
+                        () => cloudPasswordVisible = !cloudPasswordVisible,
+                      ),
+                    ),
+                    if (!isLogin) ...[
+                      const SizedBox(height: 14),
+                      _cloudAuthField(
+                        controller: cloudPasswordConfirmController,
+                        label: '确认密码',
+                        hint: '请再次输入密码',
+                        icon: Icons.lock_reset_rounded,
+                        obscureText: !cloudPasswordConfirmVisible,
+                        onToggleVisibility: () => setModalState(
+                          () => cloudPasswordConfirmVisible =
+                              !cloudPasswordConfirmVisible,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Expanded(
+                            child: _cloudAuthField(
+                              controller: cloudEmailCodeController,
+                              label: '邮箱验证码',
+                              hint: '请输入验证码',
+                              icon: Icons.verified_outlined,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          SizedBox(
+                            height: 48,
+                            child: OutlinedButton(
+                              onPressed: loading || cloudEmailCodeCooldown > 0
+                                  ? null
+                                  : () async {
+                                      await sendCloudEmailCode(
+                                        purpose: isRegister
+                                            ? 'register'
+                                            : 'reset_password',
+                                      );
+                                      if (dialogContext.mounted)
+                                        setModalState(() {});
+                                    },
+                              child: Text(cloudEmailCodeCooldown > 0
+                                  ? '${cloudEmailCodeCooldown} 秒'
+                                  : '发送验证码'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (isLogin)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: () => setModalState(() {
+                            cloudAuthMode = 'reset';
+                            cloudEmailCodeController.clear();
+                            cloudPasswordController.clear();
+                          }),
+                          child: const Text('忘记密码？'),
+                        ),
+                      )
+                    else
+                      const SizedBox(height: 18),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: FilledButton.icon(
+                        onPressed: loading
+                            ? null
+                            : () async {
+                                final ok = isLogin
+                                    ? await loginCloudWithPassword()
+                                    : (isRegister
+                                        ? await registerCloudAccount()
+                                        : await resetCloudPassword());
+                                if (ok && dialogContext.mounted) {
+                                  Navigator.pop(dialogContext);
+                                }
+                              },
+                        icon: Icon(isLogin
+                            ? Icons.login_rounded
+                            : Icons.arrow_forward_rounded),
+                        label: Text(isLogin
+                            ? '登录'
+                            : (isRegister ? '注册并登录' : '重置密码并登录')),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextButton(
+                      onPressed: () => setModalState(() {
+                        cloudAuthMode = isRegister ? 'login' : 'register';
+                        cloudEmailCodeController.clear();
+                        cloudPasswordController.clear();
+                        cloudPasswordConfirmController.clear();
+                      }),
+                      child: Text(isRegister ? '已有账号？返回登录' : '还没有账号？立即注册'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    dialogTimer?.cancel();
+  }
+
+  Widget _cloudAuthField({
+    required TextEditingController controller,
+    required String label,
+    required String hint,
+    required IconData icon,
+    bool obscureText = false,
+    VoidCallback? onToggleVisibility,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                fontWeight: FontWeight.w800, color: Colors.white70)),
+        const SizedBox(height: 7),
+        TextField(
+          controller: controller,
+          obscureText: obscureText,
+          decoration: InputDecoration(
+            hintText: hint,
+            prefixIcon: Icon(icon, color: Colors.white38),
+            suffixIcon: onToggleVisibility == null
+                ? null
+                : IconButton(
+                    onPressed: onToggleVisibility,
+                    icon: Icon(
+                      obscureText
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      color: Colors.white38,
+                    ),
+                  ),
+            filled: true,
+            fillColor: const Color(0xFF151827),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.white12),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: Colors.white12),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -796,7 +1223,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final available = wallet['available_points'] ?? 0;
     final frozen = wallet['frozen_points'] ?? 0;
     return Container(
-      constraints: const BoxConstraints(minHeight: 58, maxWidth: 600),
+      constraints: const BoxConstraints(minHeight: 58, maxWidth: 720),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
         color: const Color(0xFF202438),
@@ -827,6 +1254,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             await loadCloudMe(silent: true);
             await loadCloudLedger(silent: true);
           }),
+          const SizedBox(width: 8),
+          _headerButton('退出登录', logoutCloudAccount),
         ],
       ),
     );
@@ -854,43 +1283,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _headerInput(TextEditingController controller, String hint) {
-    return SizedBox(
-      height: 38,
-      child: TextField(
-        controller: controller,
-        style: const TextStyle(fontSize: 13),
-        decoration: InputDecoration(
-          hintText: hint,
-          filled: true,
-          fillColor: const Color(0xFF171A28),
-          isDense: true,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(7)),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(7),
-            borderSide: BorderSide(color: purpleLine.withValues(alpha: 0.45)),
-          ),
-          focusedBorder: const OutlineInputBorder(
-            borderRadius: BorderRadius.all(Radius.circular(7)),
-            borderSide: BorderSide(color: cyan, width: 1.2),
-          ),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
-        ),
-      ),
-    );
-  }
-
   Widget _headerButton(
     String text,
     VoidCallback onPressed, {
     bool primary = false,
+    bool enabled = true,
   }) {
     return SizedBox(
       height: 38,
       child: primary
           ? ElevatedButton(
-              onPressed: loading ? null : onPressed,
+              onPressed: loading || !enabled ? null : onPressed,
               style: ElevatedButton.styleFrom(
                 elevation: 0,
                 foregroundColor: Colors.white,
@@ -903,7 +1306,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   style: const TextStyle(fontWeight: FontWeight.w900)),
             )
           : OutlinedButton(
-              onPressed: loading ? null : onPressed,
+              onPressed: loading || !enabled ? null : onPressed,
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white,
                 side: BorderSide(color: purpleLine.withValues(alpha: 0.8)),
@@ -1031,6 +1434,64 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       unawaited(_localApiProcess!.stderr.drain<void>());
       return true;
     }
+    if (kDebugMode) {
+      return _startDevelopmentLocalApi(appDir);
+    }
+    return false;
+  }
+
+  Future<bool> _startDevelopmentLocalApi(Directory appDir) async {
+    final roots = <Directory>[Directory.current, appDir];
+    final visited = <String>{};
+    for (final start in roots) {
+      var current = start.absolute;
+      for (var depth = 0; depth < 10; depth++) {
+        if (!visited.add(current.path)) break;
+        final apiDir =
+            Directory('${current.path}${Platform.pathSeparator}services'
+                '${Platform.pathSeparator}api');
+        final mainFile = File('${apiDir.path}${Platform.pathSeparator}app'
+            '${Platform.pathSeparator}main.py');
+        if (await mainFile.exists()) {
+          final projectPython = File(
+              '${apiDir.path}${Platform.pathSeparator}.venv'
+              '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe');
+          final rootPython = File(
+              '${current.path}${Platform.pathSeparator}.venv'
+              '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe');
+          final python = await projectPython.exists()
+              ? projectPython.path
+              : await rootPython.exists()
+                  ? rootPython.path
+                  : 'python';
+          try {
+            _localApiProcess = await Process.start(
+              python,
+              const [
+                '-m',
+                'uvicorn',
+                'app.main:app',
+                '--host',
+                '127.0.0.1',
+                '--port',
+                '8000',
+              ],
+              workingDirectory: apiDir.path,
+              environment: {'ORAL_VIDEO_AGENT_HOME': current.path},
+            );
+            unawaited(_localApiProcess!.stdout.drain<void>());
+            unawaited(_localApiProcess!.stderr.drain<void>());
+            return true;
+          } catch (_) {
+            _localApiProcess = null;
+            return false;
+          }
+        }
+        final parent = current.parent;
+        if (parent.path == current.path) break;
+        current = parent;
+      }
+    }
     return false;
   }
 
@@ -1083,6 +1544,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final jobs = (jobsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
           const [];
       setState(() {
+        localApiOnline = true;
         publisherAccounts = visibleAccounts;
         publishJobs = jobs.reversed.take(6).toList();
         final selectedStillValid = visibleAccounts.any((account) {
@@ -1097,6 +1559,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       });
     } catch (e) {
       setState(() {
+        localApiOnline = false;
         message = e.toString();
         messageIsError = true;
       });
@@ -1809,7 +2272,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> cloneVoiceCloud(String taskId, String script) async {
     if (!_ensureCloudAccountReady()) return;
-    await _runBusy(() async {
+    setState(() {
+      loading = true;
+      cloudVoiceCancelRequested = false;
+    });
+    try {
+      final existingJobId = cloudVoiceJobId.trim();
+      if (existingJobId.isNotEmpty &&
+          await _resumeCloudVoiceJob(existingJobId, script)) {
+        return;
+      }
       setState(() {
         message = '正在准备云端克隆声音素材';
         messageIsError = false;
@@ -1887,24 +2359,288 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           messageIsError = false;
         });
       }
-      await _waitCloudPreprocessResult(jobId);
-      final localPath = await _downloadCloudJobOutputToLocal(
-        jobId,
-        fallbackFileName: 'voice.wav',
+      await _finishCloudVoiceJob(jobId, script);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (cloudVoiceCancelRequested || e.toString().contains('已取消')) {
+          message = '声音克隆任务已停止，可以重新提交';
+          messageIsError = false;
+        } else {
+          message = _friendlyError(e);
+          messageIsError = true;
+        }
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+          cloudVoiceCancelRequested = false;
+        });
+      }
+    }
+  }
+
+  Future<void> stopCloudVoiceJob() async {
+    final jobId = cloudVoiceJobId.trim();
+    if (jobId.isEmpty) return;
+    setState(() => cloudVoiceCancelRequested = true);
+    try {
+      final res = await http.post(
+        Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/cancel'),
+        headers: _cloudHeaders(),
       );
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      setState(() {
+        cloudJob = body;
+        cloudVoiceJobId = '';
+        cloudVoiceAudioPath = '';
+        generatedVoiceKey = '';
+        loading = false;
+        message = '声音克隆任务已停止，可以重新提交';
+        messageIsError = false;
+      });
+      await loadCloudMe(silent: true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        cloudVoiceCancelRequested = false;
+        message = _friendlyError(e);
+        messageIsError = true;
+      });
+    }
+  }
+
+  Future<void> loadTaskHistory({bool silent = false}) async {
+    if (!mounted) return;
+    setState(() => loadingTaskHistory = true);
+    try {
+      final res = await http.get(Uri.parse('$apiBase/api/tasks'));
+      _check(res);
+      final body =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final items =
+          (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+      if (!mounted) return;
+      setState(() {
+        taskHistory = items;
+        final availableIds = items
+            .map((item) => item['task_id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        selectedTaskIds.removeWhere((id) => !availableIds.contains(id));
+        localApiOnline = true;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() => localApiOnline = false);
+        if (!silent) showError(_friendlyError(e));
+      }
+    } finally {
+      if (mounted) setState(() => loadingTaskHistory = false);
+    }
+  }
+
+  Future<void> _openTaskFromHistory(String taskId) async {
+    await _runBusy(() async {
+      await _loadTask(taskId);
+      output = null;
+      cloudOutputUrl = '';
+      cloudOutputLocalPath = '';
       try {
-        await confirmCloudDownload(silent: true);
+        await loadOutput();
       } catch (_) {
-        // The local WAV is already saved; scheduled cleanup still protects cloud storage.
+        // A task can be opened before its output exists.
       }
       if (!mounted) return;
       setState(() {
-        cloudVoiceAudioPath = localPath;
-        generatedVoiceKey = _voiceKeyFor(script);
-        outputRefresh++;
-        message = '声音已克隆，可以播放声音或生成成品视频';
+        selectedSection = _WorkspaceSection.studio;
+        message = '已打开任务，可以继续编辑和生成';
         messageIsError = false;
       });
+    });
+  }
+
+  Future<void> _deleteTaskFromHistory(Map<String, dynamic> item) async {
+    final taskId = item['task_id']?.toString() ?? '';
+    if (taskId.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除任务'),
+        content: Text('确定删除“${item['title'] ?? '未命名任务'}”及其本地生成文件吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _runBusy(() async {
+      final res = await http.delete(Uri.parse('$apiBase/api/tasks/$taskId'));
+      _check(res);
+      if (task?['task_id'] == taskId) {
+        task = null;
+        output = null;
+        originalScriptController.clear();
+        rewrittenScriptController.clear();
+      }
+      await loadTaskHistory(silent: true);
+      showInfo('任务已删除');
+    });
+  }
+
+  Future<void> logoutCloudAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('退出云端账号'),
+        content: const Text('退出后不会影响软件激活状态，可重新选择登录或注册。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('退出登录'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      cloudAccountSignedOut = true;
+      cloudAuthMode = 'login';
+      cloudDeviceToken = '';
+      cloudSession = null;
+      cloudWallet = null;
+      cloudLedger = const [];
+      cloudEmailController.clear();
+      cloudEmailCodeController.clear();
+      message = '已退出云端账号，请选择登录或注册';
+      messageIsError = false;
+    });
+    await _saveCloudAuth();
+  }
+
+  Future<void> _deleteSelectedTasks() async {
+    if (selectedTaskIds.isEmpty || batchDeletingTasks) return;
+    final ids = selectedTaskIds.toList(growable: false);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('批量删除任务'),
+        content: Text('确定删除已选中的 ${ids.length} 个任务及其本地生成文件吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('批量删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() {
+      batchDeletingTasks = true;
+      message = '正在批量删除 ${ids.length} 个任务...';
+      messageIsError = false;
+    });
+    var deleted = 0;
+    final failedIds = <String>[];
+    for (final taskId in ids) {
+      try {
+        final res = await http.delete(Uri.parse('$apiBase/api/tasks/$taskId'));
+        _check(res);
+        deleted++;
+        if (task?['task_id'] == taskId) {
+          task = null;
+          output = null;
+          originalScriptController.clear();
+          rewrittenScriptController.clear();
+        }
+      } catch (_) {
+        failedIds.add(taskId);
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      selectedTaskIds.removeAll(ids.where((id) => !failedIds.contains(id)));
+      batchDeletingTasks = false;
+    });
+    await loadTaskHistory(silent: true);
+    if (!mounted) return;
+    setState(() {
+      message = failedIds.isEmpty
+          ? '已批量删除 $deleted 个任务'
+          : '已删除 $deleted 个任务，${failedIds.length} 个任务删除失败';
+      messageIsError = failedIds.isNotEmpty;
+    });
+  }
+
+  Future<bool> _resumeCloudVoiceJob(String jobId, String script) async {
+    final res = await http.get(
+      Uri.parse('$_cloudApiBase/api/client/jobs/$jobId'),
+      headers: _cloudHeaders(),
+    );
+    if (res.statusCode == 404) {
+      if (mounted) setState(() => cloudVoiceJobId = '');
+      return false;
+    }
+    _check(res);
+    final job = _decodeMap(res);
+    final payload = (job['payload'] as Map?)?.cast<String, dynamic>();
+    final operation = payload?['operation']?.toString() ?? '';
+    final status = job['status']?.toString() ?? '';
+    if ((operation.isNotEmpty && operation != 'voice') ||
+        !{'queued', 'running', 'completed'}.contains(status)) {
+      if (mounted) setState(() => cloudVoiceJobId = '');
+      return false;
+    }
+    if (!mounted) return true;
+    setState(() {
+      cloudJob = job;
+      message = status == 'completed' ? '正在下载已完成的克隆声音' : _cloudJobMessage(job);
+      messageIsError = false;
+    });
+    await _finishCloudVoiceJob(jobId, script);
+    return true;
+  }
+
+  Future<void> _finishCloudVoiceJob(String jobId, String script) async {
+    await _waitCloudPreprocessResult(
+      jobId,
+      timeout: const Duration(hours: 4),
+    );
+    final localPath = await _downloadCloudJobOutputToLocal(
+      jobId,
+      fallbackFileName: 'voice.wav',
+    );
+    try {
+      await confirmCloudDownload(silent: true);
+    } catch (_) {
+      // The local WAV is already saved; scheduled cleanup still protects cloud storage.
+    }
+    if (!mounted) return;
+    setState(() {
+      cloudVoiceAudioPath = localPath;
+      generatedVoiceKey = _voiceKeyFor(script);
+      outputRefresh++;
+      message = '声音已克隆，可以播放声音或生成成品视频';
+      messageIsError = false;
     });
   }
 
@@ -1991,6 +2727,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _originalAudioPlayer?.dispose();
       _originalAudioPlayer = null;
     }
+  }
+
+  Future<void> previewVoiceReference(String voiceId) async {
+    final switchingVoice = selectedVoice != voiceId;
+    if (switchingVoice && _isPlayingOriginalAudio) {
+      await _stopOriginalAudioPreview();
+    }
+    if (!mounted) return;
+    setState(() {
+      selectedVoice = voiceId;
+      if (switchingVoice) _invalidateGeneratedVoice();
+    });
+    await playOriginalAudio();
   }
 
   Future<String> _downloadPreviewToTempFile(
@@ -2473,175 +3222,176 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                    SwitchListTile(
-                      value: subtitlesEnabled,
-                      onChanged: (value) =>
-                          updateDialog(() => subtitlesEnabled = value),
-                      title: const Text('字幕 启用'),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _dropdown(
-                            selectedSubtitleFont,
-                            _subtitleFontOptions,
-                            (value) {
-                              if (value == null) return;
-                              updateDialog(() => selectedSubtitleFont = value);
-                            },
-                            labels: _subtitleFontLabels,
+                      SwitchListTile(
+                        value: subtitlesEnabled,
+                        onChanged: (value) =>
+                            updateDialog(() => subtitlesEnabled = value),
+                        title: const Text('字幕 启用'),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _dropdown(
+                              selectedSubtitleFont,
+                              _subtitleFontOptions,
+                              (value) {
+                                if (value == null) return;
+                                updateDialog(
+                                    () => selectedSubtitleFont = value);
+                              },
+                              labels: _subtitleFontLabels,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        _subtitlePresetButton(
-                          '黄字',
-                          const Color(0xFFFFE600),
-                          const Color(0x00000000),
-                          updateDialog,
-                        ),
-                        const SizedBox(width: 8),
-                        _subtitlePresetButton(
-                          '白字',
-                          const Color(0xFFFFFFFF),
-                          const Color(0x00000000),
-                          updateDialog,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _labeledSlider(
-                      '字号',
-                      subtitleSize,
-                      12,
-                      56,
-                      (value) => updateDialog(() => subtitleSize = value),
-                      subtitleSize.round().toString(),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SwitchListTile(
-                            value: pipEnabled,
-                            onChanged: (value) =>
-                                updateDialog(() => pipEnabled = value),
-                            title: const Text('画中画启用'),
-                            contentPadding: EdgeInsets.zero,
+                          const SizedBox(width: 8),
+                          _subtitlePresetButton(
+                            '黄字',
+                            const Color(0xFFFFE600),
+                            const Color(0x00000000),
+                            updateDialog,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        _ghostButton('上传画中画', () async {
-                          await uploadPipAsset();
-                          if (mounted) dialogSetState(() {});
-                        }),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _dropdown(
-                            pipPosition,
-                            _pipPositionOptions,
-                            (value) {
-                              if (value == null) return;
-                              updateDialog(() => _setPipPosition(value));
-                            },
-                            labels: _pipPositionLabels,
+                          const SizedBox(width: 8),
+                          _subtitlePresetButton(
+                            '白字',
+                            const Color(0xFFFFFFFF),
+                            const Color(0x00000000),
+                            updateDialog,
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Opacity(
-                            opacity: pipPosition == 'fullscreen' ? 0.45 : 1,
-                            child: IgnorePointer(
-                              ignoring: pipPosition == 'fullscreen',
-                              child: _labeledSlider(
-                                '画中画大小',
-                                pipScale,
-                                0.1,
-                                0.95,
-                                (value) => updateDialog(() {
-                                  pipScale = value;
-                                  _clampPipCustomPosition();
-                                }),
-                                pipPosition == 'fullscreen'
-                                    ? '100%'
-                                    : '${(pipScale * 100).round()}%',
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _labeledSlider(
+                        '字号',
+                        subtitleSize,
+                        12,
+                        56,
+                        (value) => updateDialog(() => subtitleSize = value),
+                        subtitleSize.round().toString(),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: SwitchListTile(
+                              value: pipEnabled,
+                              onChanged: (value) =>
+                                  updateDialog(() => pipEnabled = value),
+                              title: const Text('画中画启用'),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _ghostButton('上传画中画', () async {
+                            await uploadPipAsset();
+                            if (mounted) dialogSetState(() {});
+                          }),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _dropdown(
+                              pipPosition,
+                              _pipPositionOptions,
+                              (value) {
+                                if (value == null) return;
+                                updateDialog(() => _setPipPosition(value));
+                              },
+                              labels: _pipPositionLabels,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Opacity(
+                              opacity: pipPosition == 'fullscreen' ? 0.45 : 1,
+                              child: IgnorePointer(
+                                ignoring: pipPosition == 'fullscreen',
+                                child: _labeledSlider(
+                                  '画中画大小',
+                                  pipScale,
+                                  0.1,
+                                  0.95,
+                                  (value) => updateDialog(() {
+                                    pipScale = value;
+                                    _clampPipCustomPosition();
+                                  }),
+                                  pipPosition == 'fullscreen'
+                                      ? '100%'
+                                      : '${(pipScale * 100).round()}%',
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _ghostButton(
-                            '画中画全屏',
-                            () => updateDialog(
-                              () => _setPipPosition('fullscreen'),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _ghostButton(
-                            '自定义拖放',
-                            () => updateDialog(
-                              () => _setPipPosition('custom'),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _dropdown(
-                            pipTimingMode,
-                            _pipTimingOptions,
-                            (value) {
-                              if (value == null) return;
-                              updateDialog(() => pipTimingMode = value);
-                            },
-                            labels: _pipTimingLabels,
-                          ),
-                        ),
-                        if (pipTimingMode == 'time') ...[
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            width: 92,
-                            child: _smallTextField(
-                              pipStartController,
-                              '开始秒',
-                              updateDialog,
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _ghostButton(
+                              '画中画全屏',
+                              () => updateDialog(
+                                () => _setPipPosition('fullscreen'),
+                              ),
                             ),
                           ),
                           const SizedBox(width: 8),
-                          SizedBox(
-                            width: 92,
-                            child: _smallTextField(
-                              pipEndController,
-                              '结束秒',
-                              updateDialog,
+                          Expanded(
+                            child: _ghostButton(
+                              '自定义拖放',
+                              () => updateDialog(
+                                () => _setPipPosition('custom'),
+                              ),
                             ),
                           ),
                         ],
-                      ],
-                    ),
-                    if (pipTimingMode == 'sentence') ...[
-                      const SizedBox(height: 8),
-                      _smallTextField(
-                        pipTriggerController,
-                        '触发句子',
-                        updateDialog,
                       ),
-                    ],
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _dropdown(
+                              pipTimingMode,
+                              _pipTimingOptions,
+                              (value) {
+                                if (value == null) return;
+                                updateDialog(() => pipTimingMode = value);
+                              },
+                              labels: _pipTimingLabels,
+                            ),
+                          ),
+                          if (pipTimingMode == 'time') ...[
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 92,
+                              child: _smallTextField(
+                                pipStartController,
+                                '开始秒',
+                                updateDialog,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 92,
+                              child: _smallTextField(
+                                pipEndController,
+                                '结束秒',
+                                updateDialog,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      if (pipTimingMode == 'sentence') ...[
+                        const SizedBox(height: 8),
+                        _smallTextField(
+                          pipTriggerController,
+                          '触发句子',
+                          updateDialog,
+                        ),
+                      ],
+                      const SizedBox(height: 12),
                       _subtitlePreviewBox(updateDialog: updateDialog),
                     ],
                   ),
@@ -3103,8 +3853,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return _waitCloudPreprocessResult(jobId);
   }
 
-  Future<Map<String, dynamic>> _waitCloudPreprocessResult(String jobId) async {
-    final deadline = DateTime.now().add(const Duration(minutes: 20));
+  Future<Map<String, dynamic>> _waitCloudPreprocessResult(
+    String jobId, {
+    Duration timeout = const Duration(minutes: 20),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       await Future.delayed(const Duration(seconds: 2));
       final res = await http.get(
@@ -3133,6 +3886,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       if (status == 'canceled') {
         throw Exception('云端任务已取消');
+      }
+      if (status == 'timed_out') {
+        throw Exception('云端任务排队超过 24 小时，已自动超时并移出队列');
       }
     }
     throw TimeoutException('云端任务等待超时');
@@ -3269,7 +4025,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           message = '云端视频已生成';
           messageIsError = false;
         });
-      } else if (status == 'failed' || status == 'canceled') {
+      } else if (status == 'failed' ||
+          status == 'canceled' ||
+          status == 'timed_out') {
         _stopCloudPolling();
         await loadCloudMe(silent: true);
         if (!mounted) return;
@@ -3714,7 +4472,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String _friendlyError(Object error) {
     final text = error.toString();
     const prefix = 'Exception: ';
-    return text.startsWith(prefix) ? text.substring(prefix.length) : text;
+    const timeoutPrefix = 'TimeoutException: ';
+    if (text.startsWith(prefix)) return text.substring(prefix.length);
+    if (text.startsWith(timeoutPrefix)) {
+      return text.substring(timeoutPrefix.length);
+    }
+    return text;
   }
 
   String get _renderScript {
@@ -3743,6 +4506,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return {
       'script': script,
       'voice_id': selectedVoice,
+      'voice_volume': voicePreviewVolume,
       'digital_human_engine': selectedDigitalHumanEngine,
       'digital_human_id': selectedDigitalHuman.startsWith('custom:') ||
               selectedDigitalHuman.startsWith('template:')
@@ -3830,6 +4594,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final email = _cloudUser?['email'] as String? ?? '';
     if (email.trim().isEmpty) return '未绑定邮箱账?';
     return email;
+  }
+
+  bool get _cloudVoiceJobActive {
+    final jobId = cloudVoiceJobId.trim();
+    if (jobId.isEmpty) return false;
+    final currentJobId = cloudJob?['job_id']?.toString() ?? '';
+    final status = cloudJob?['status']?.toString() ?? '';
+    return currentJobId == jobId &&
+        const {'uploading', 'queued', 'running'}.contains(status);
   }
 
   String get _latestLedgerText {
@@ -3949,6 +4722,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'completed' => '已完成',
       'failed' => '失败',
       'canceled' => '已取消',
+      'timed_out' => '已超时',
       _ => status,
     };
   }
@@ -3985,45 +4759,1660 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return _gateScaffold('正在启动软件');
     }
     if (!_cloudLicensed) {
-      _promptActivationIfNeeded();
-      return _gateScaffold('请先激活软件');
+      return _gateScaffold('请先激活软件', showActivationActions: true);
     }
-    final status = task?['status'] as String? ?? '未开始';
-    final steps =
-        (task?['progress_steps'] as List?)?.cast<Map<String, dynamic>>() ??
-            const [];
     return Scaffold(
-      body: Column(
+      body: Row(
         children: [
-          _banner(),
-          _tabStrip(),
+          _workspaceSidebar(),
           Expanded(
-            child: Row(
+            child: Column(
               children: [
-                Expanded(
-                  flex: 3,
-                  child: _leftPanel(status, steps),
-                ),
-                const VerticalDivider(width: 1, color: Color(0xFF31364A)),
-                Expanded(
-                  flex: 4,
-                  child: _centerPanel(),
-                ),
-                const VerticalDivider(width: 1, color: Color(0xFF31364A)),
-                Expanded(
-                  flex: 3,
-                  child: _rightPanel(),
-                ),
+                _workspaceTopBar(),
+                Expanded(child: _workspaceBody()),
+                if (message.isNotEmpty) _messageBar(),
               ],
             ),
           ),
-          if (message.isNotEmpty) _messageBar(),
         ],
       ),
     );
   }
 
-  Widget _gateScaffold(String title) {
+  Widget _workspaceBody() {
+    return switch (selectedSection) {
+      _WorkspaceSection.studio => _studioPage(),
+      _WorkspaceSection.voices => _voiceManagementPage(),
+      _WorkspaceSection.avatars => _avatarManagementPage(),
+      _WorkspaceSection.media => _mediaManagementPage(),
+      _WorkspaceSection.tasks => _taskCenterPage(),
+      _WorkspaceSection.accounts => _accountManagementPage(),
+      _WorkspaceSection.cloudAccount => _cloudAccountPage(),
+    };
+  }
+
+  Widget _studioPage() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 1050) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                _pageHeading(
+                  '创作中心',
+                  '从素材导入到视频发布，每个模块都可以独立编辑和预览。',
+                  Icons.auto_awesome_rounded,
+                ),
+                const SizedBox(height: 14),
+                SizedBox(height: 860, child: _leftPanel()),
+                SizedBox(height: 1040, child: _centerPanel()),
+                SizedBox(height: 1050, child: _rightPanel()),
+              ],
+            ),
+          );
+        }
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
+              child: _pageHeading(
+                '创作中心',
+                '分步骤处理文案、声音、画面与发布，修改后可在右侧即时预览。',
+                Icons.auto_awesome_rounded,
+              ),
+            ),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 30, child: _leftPanel()),
+                  Expanded(flex: 39, child: _centerPanel()),
+                  Expanded(flex: 31, child: _rightPanel()),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _workspaceSidebar() {
+    final compact = MediaQuery.sizeOf(context).width < 1280;
+    final items = const [
+      (_WorkspaceSection.studio, Icons.home_rounded, '创作中心'),
+      (_WorkspaceSection.voices, Icons.graphic_eq_rounded, '声音管理'),
+      (_WorkspaceSection.avatars, Icons.smart_display_rounded, '形象管理'),
+      (_WorkspaceSection.media, Icons.folder_copy_rounded, '素材管理'),
+      (_WorkspaceSection.tasks, Icons.format_list_bulleted_rounded, '任务中心'),
+      (_WorkspaceSection.accounts, Icons.person_outline_rounded, '账号管理'),
+      (_WorkspaceSection.cloudAccount, Icons.cloud_outlined, '云端账户'),
+    ];
+    return Container(
+      width: compact ? 76 : 184,
+      decoration: const BoxDecoration(
+        color: Color(0xFF151624),
+        border: Border(right: BorderSide(color: Color(0xFF292B3E))),
+      ),
+      child: SafeArea(
+        child: Column(
+          children: [
+            SizedBox(
+              height: 72,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(colors: [cyan, pink]),
+                      borderRadius: BorderRadius.circular(11),
+                      boxShadow: [
+                        BoxShadow(
+                          color: purpleLine.withValues(alpha: 0.28),
+                          blurRadius: 16,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.play_arrow_rounded,
+                        color: Colors.white, size: 26),
+                  ),
+                  if (!compact) ...[
+                    const SizedBox(width: 10),
+                    const Text(
+                      '杰速口播',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            for (final item in items)
+              Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 10 : 12,
+                  vertical: 3,
+                ),
+                child: _sidebarItem(
+                  section: item.$1,
+                  icon: item.$2,
+                  label: item.$3,
+                  compact: compact,
+                ),
+              ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Tooltip(
+                message: localApiOnline ? '本地服务 $apiBase' : '本地服务未连接，点击顶部刷新重试',
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: localApiOnline
+                            ? const Color(0xFF51D8A5)
+                            : const Color(0xFFFF6D8A),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    if (!compact) ...[
+                      const SizedBox(width: 8),
+                      Text(localApiOnline ? '服务已连接' : '服务未连接',
+                          style: const TextStyle(
+                              color: Colors.white60, fontSize: 12)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sidebarItem({
+    required _WorkspaceSection section,
+    required IconData icon,
+    required String label,
+    required bool compact,
+  }) {
+    final active = selectedSection == section;
+    return Tooltip(
+      message: compact ? label : '',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            setState(() => selectedSection = section);
+            if (section == _WorkspaceSection.tasks) {
+              loadTaskHistory(silent: true);
+            } else if (section == _WorkspaceSection.accounts) {
+              loadPublisherAccounts();
+            }
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: 48,
+            padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 13),
+            decoration: BoxDecoration(
+              gradient: active
+                  ? LinearGradient(
+                      colors: [
+                        const Color(0xFF5B3EA8).withValues(alpha: 0.72),
+                        const Color(0xFF39224D).withValues(alpha: 0.82),
+                      ],
+                    )
+                  : null,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: active
+                    ? purpleLine.withValues(alpha: 0.65)
+                    : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment:
+                  compact ? MainAxisAlignment.center : MainAxisAlignment.start,
+              children: [
+                Icon(icon,
+                    size: 20,
+                    color: active ? const Color(0xFFE8D8FF) : Colors.white54),
+                if (!compact) ...[
+                  const SizedBox(width: 12),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: active ? Colors.white : Colors.white70,
+                      fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _workspaceTopBar() {
+    return Container(
+      height: 70,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: const BoxDecoration(
+        color: Color(0xFF171824),
+        border: Border(bottom: BorderSide(color: Color(0xFF292B3E))),
+      ),
+      child: Row(
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: _generationModeSelector(),
+          ),
+          const Spacer(),
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.only(right: 14),
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => setState(
+                () => selectedSection = _WorkspaceSection.cloudAccount),
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: panelBg2,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white12),
+              ),
+              child: Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 13,
+                    backgroundColor: Color(0xFF7046D9),
+                    child: Icon(Icons.person, size: 16, color: Colors.white),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _cloudAccountBound
+                        ? (_cloudUser?['email']?.toString() ?? '云端账户')
+                        : '登录 / 注册',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          _topBarAction(Icons.refresh_rounded, '刷新数据', () async {
+            await loadBootstrap();
+            await loadTaskHistory(silent: true);
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _topBarAction(IconData icon, String tooltip, VoidCallback onPressed) {
+    return IconButton.filledTonal(
+      tooltip: tooltip,
+      onPressed: loading ? null : onPressed,
+      icon: Icon(icon, size: 20),
+      style: IconButton.styleFrom(backgroundColor: panelBg2),
+    );
+  }
+
+  Widget _pageHeading(
+    String title,
+    String subtitle,
+    IconData icon, {
+    Widget? trailing,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
+      decoration: BoxDecoration(
+        color: const Color(0xFF181A27),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0xFF2D3044)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [cyan, pink]),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, color: Colors.white, size: 23),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 22, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 3),
+                Text(subtitle,
+                    style:
+                        const TextStyle(color: Colors.white54, fontSize: 13)),
+              ],
+            ),
+          ),
+          if (trailing != null) trailing,
+        ],
+      ),
+    );
+  }
+
+  Widget _voiceManagementPage() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _pageHeading(
+            '声音管理',
+            '上传授权声音、管理声音模型，并调整试听效果。',
+            Icons.graphic_eq_rounded,
+            trailing: _ghostButton('上传声音', uploadVoice),
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '声音训练',
+            subtitle: '建议上传 15–60 秒清晰人声，支持 MP3、WAV、M4A；最长不超过 5 分钟',
+            icon: Icons.cloud_upload_outlined,
+            child: Column(
+              children: [
+                _dropZone(
+                  icon: Icons.multitrack_audio_rounded,
+                  title: '上传声音参考文件',
+                  subtitle: '建议无背景音乐、无混响、单人说话；15 秒以下也可以上传',
+                  onTap: uploadVoice,
+                ),
+                const SizedBox(height: 12),
+                _stepButton('上传并加入声音库', uploadVoice),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '我的声音库',
+            subtitle: '点击卡片选择声音，系统声音与上传声音统一管理',
+            icon: Icons.library_music_outlined,
+            trailing: IconButton(
+              tooltip: '刷新声音库',
+              onPressed: loadBootstrap,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _labeledSlider(
+                  '试听音量',
+                  voicePreviewVolume,
+                  0,
+                  1,
+                  _updateVoicePreviewVolume,
+                  '${(voicePreviewVolume * 100).round()}%',
+                ),
+                const SizedBox(height: 8),
+                _labeledSlider(
+                  '试听语速',
+                  speechRate,
+                  0.6,
+                  1.4,
+                  (value) => setState(() => speechRate = value),
+                  speechRate.toStringAsFixed(1),
+                ),
+                const SizedBox(height: 12),
+                if (voices.isEmpty)
+                  _emptyState('暂无声音模型', '点击“上传声音”添加第一条声音')
+                else
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      for (final voice in voices) _voiceLibraryCard(voice),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _voiceLibraryCard(Map<String, dynamic> voice) {
+    final id = voice['voice_id']?.toString() ?? '';
+    final selected = id == selectedVoice;
+    final builtIn = voice['built_in'] == true;
+    return SizedBox(
+      width: 250,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(11),
+          onTap: () => setState(() {
+            selectedVoice = id;
+            _invalidateGeneratedVoice();
+          }),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFF292247) : panelBg2,
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(
+                  color: selected ? purpleLine : const Color(0xFF34374D)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [cyan, pink]),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: const Icon(Icons.volume_up_rounded, size: 20),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(voice['name']?.toString() ?? '未命名声音',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 3),
+                      Text(builtIn ? '系统声音' : '我的声音',
+                          style: const TextStyle(
+                              color: Color(0x75FFFFFF), fontSize: 12)),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: selected && _isPlayingOriginalAudio ? '停止试听' : '试听',
+                  onPressed: () => previewVoiceReference(id),
+                  icon: Icon(
+                    selected && _isPlayingOriginalAudio
+                        ? Icons.stop_circle_outlined
+                        : Icons.play_circle_outline_rounded,
+                    size: 21,
+                  ),
+                ),
+                if (!builtIn && voice['asset_id'] != null)
+                  IconButton(
+                    tooltip: '删除',
+                    onPressed: () => _deleteAsset(voice['asset_id'].toString()),
+                    icon: const Icon(Icons.delete_outline_rounded,
+                        size: 20, color: Color(0xFFFF7892)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _avatarManagementPage() {
+    final customHumans =
+        digitalHumans.where((item) => item['built_in'] != true).toList();
+    return Padding(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        children: [
+          _pageHeading(
+            '形象管理',
+            '管理数字人参考视频，选择后可回到创作中心生成口播视频。',
+            Icons.smart_display_rounded,
+            trailing: _ghostButton('上传形象', uploadDigitalHuman),
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: customHumans.isEmpty
+                ? _managementCard(
+                    title: '我的数字人',
+                    subtitle: '尚未上传数字人参考视频',
+                    icon: Icons.person_add_alt_1_rounded,
+                    child: _dropZone(
+                      icon: Icons.video_call_outlined,
+                      title: '上传正面清晰的数字人参考视频',
+                      subtitle: '建议人物面部无遮挡、光线稳定、口型自然',
+                      onTap: uploadDigitalHuman,
+                    ),
+                  )
+                : GridView.builder(
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 320,
+                      childAspectRatio: 0.78,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                    ),
+                    itemCount: customHumans.length + 1,
+                    itemBuilder: (context, index) {
+                      if (index == 0) return _addAvatarCard();
+                      return _avatarCard(customHumans[index - 1]);
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _addAvatarCard() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(13),
+        onTap: uploadDigitalHuman,
+        child: Container(
+          decoration: BoxDecoration(
+            color: panelBg,
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+          ),
+          child: const Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.add_circle_outline_rounded,
+                  size: 48, color: Color(0xFFA98AFF)),
+              SizedBox(height: 12),
+              Text('上传新形象', style: TextStyle(fontWeight: FontWeight.w800)),
+              SizedBox(height: 5),
+              Text('MP4 / MOV / WebM',
+                  style: TextStyle(color: Color(0x75FFFFFF), fontSize: 12)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _avatarCard(Map<String, dynamic> human) {
+    final id = human['digital_human_id']?.toString() ?? '';
+    final selected = id == selectedDigitalHuman;
+    final previewUrl = _digitalHumanThumbnailUrl(id);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(13),
+        onTap: () => setState(() => selectedDigitalHuman = id),
+        child: Container(
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: panelBg,
+            borderRadius: BorderRadius.circular(13),
+            border: Border.all(
+              color: selected ? pink : const Color(0xFF34374D),
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Column(
+            children: [
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.network(
+                      previewUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _previewPlaceholder(),
+                    ),
+                    if (selected)
+                      const Positioned(
+                        top: 10,
+                        right: 10,
+                        child: Chip(
+                          avatar: Icon(Icons.check, size: 16),
+                          label: Text('已选择'),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(11),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        human['name']?.toString() ?? '未命名形象',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: '在创作中心使用',
+                      onPressed: () => setState(() {
+                        selectedDigitalHuman = id;
+                        selectedSection = _WorkspaceSection.studio;
+                      }),
+                      icon: const Icon(Icons.movie_creation_outlined, size: 20),
+                    ),
+                    IconButton(
+                      tooltip: '删除',
+                      onPressed: () async {
+                        setState(() => selectedDigitalHuman = id);
+                        await deleteDigitalHuman();
+                      },
+                      icon: const Icon(Icons.delete_outline_rounded,
+                          size: 20, color: Color(0xFFFF7892)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _mediaManagementPage() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        children: [
+          _pageHeading(
+            '素材管理',
+            '集中管理背景音乐和画中画素材，选择后会自动带入当前创作任务。',
+            Icons.folder_copy_rounded,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ghostButton('上传 BGM', uploadBgm),
+                const SizedBox(width: 8),
+                _ghostButton('上传画中画', uploadPipAsset),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '背景音乐',
+            subtitle: '选择、试听并调节用于视频合成的背景音乐',
+            icon: Icons.music_note_rounded,
+            trailing: SizedBox(
+              width: 220,
+              child: _labeledSlider(
+                '音量',
+                bgmVolume,
+                0,
+                1,
+                _updateBgmVolume,
+                '${(bgmVolume * 100).round()}%',
+              ),
+            ),
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _bgmLibraryCard(
+                  const {'bgm_id': 'none', 'name': '不使用背景音乐'},
+                ),
+                for (final track in bgmTracks) _bgmLibraryCard(track),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '画中画素材',
+            subtitle: '上传图片或视频，在字幕编辑器中拖拽位置、大小和出现时间',
+            icon: Icons.picture_in_picture_alt_rounded,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: _dropZone(
+                        icon: Icons.add_photo_alternate_outlined,
+                        title:
+                            pipAssetName.isEmpty ? '上传画中画图片或视频' : pipAssetName,
+                        subtitle: pipAssetName.isEmpty
+                            ? '支持常见图片与视频格式'
+                            : '素材已关联当前任务，可继续设置显示方式',
+                        onTap: uploadPipAsset,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SwitchListTile.adaptive(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('启用画中画'),
+                            subtitle: Text(_pipSummaryText),
+                            value: pipEnabled,
+                            onChanged: (value) =>
+                                setState(() => pipEnabled = value),
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _dropdown(
+                                  pipPosition,
+                                  _pipPositionOptions,
+                                  (value) =>
+                                      _setPipPosition(value ?? pipPosition),
+                                  labels: _pipPositionLabels,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              _stepButton(
+                                '打开编辑预览',
+                                editSubtitlesAndPip,
+                                compact: true,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bgmLibraryCard(Map<String, dynamic> track) {
+    final id = track['bgm_id']?.toString() ?? '';
+    final selected = id == selectedBgm;
+    final custom = track['built_in'] == false && track['asset_id'] != null;
+    return SizedBox(
+      width: 250,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(11),
+          onTap: () => setState(() => selectedBgm = id),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFF292247) : panelBg2,
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(
+                  color: selected ? purpleLine : const Color(0xFF34374D)),
+            ),
+            child: Row(
+              children: [
+                Icon(id == 'none' ? Icons.music_off : Icons.music_note,
+                    color: selected ? const Color(0xFFD7C4FF) : Colors.white54),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    track['name']?.toString() ?? '未命名音乐',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (id != 'none')
+                  IconButton(
+                    tooltip: '试听',
+                    onPressed: () {
+                      setState(() => selectedBgm = id);
+                      playBgm();
+                    },
+                    icon: const Icon(Icons.play_circle_outline, size: 20),
+                  ),
+                if (custom)
+                  IconButton(
+                    tooltip: '删除',
+                    onPressed: () => _deleteAsset(track['asset_id'].toString()),
+                    icon: const Icon(Icons.delete_outline,
+                        size: 19, color: Color(0xFFFF7892)),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _taskCenterPage() {
+    final total = taskHistory.length;
+    final filteredTasks = _filteredTaskHistory();
+    final running = taskHistory
+        .where((item) => {'created', 'imported', 'rendering'}
+            .contains(item['status']?.toString()))
+        .length;
+    final completed = taskHistory
+        .where((item) => item['status']?.toString() == 'completed')
+        .length;
+    final failed = taskHistory
+        .where((item) => item['status']?.toString() == 'failed')
+        .length;
+    return Padding(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        children: [
+          _pageHeading(
+            '任务中心',
+            '查看历史任务状态，打开任务继续编辑，或清理不再需要的本地文件。',
+            Icons.format_list_bulleted_rounded,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ghostButton('刷新', () => loadTaskHistory()),
+                const SizedBox(width: 8),
+                _stepButton(
+                  '新建任务',
+                  () => setState(
+                      () => selectedSection = _WorkspaceSection.studio),
+                  compact: true,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                  child: _statCard('总任务', total, Icons.article_outlined, cyan)),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: _statCard('进行中', running, Icons.sync_rounded,
+                      const Color(0xFFFFC857))),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: _statCard('已完成', completed, Icons.check_circle_outline,
+                      const Color(0xFF51D8A5))),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: _statCard('失败', failed, Icons.error_outline,
+                      const Color(0xFFFF6D8A))),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: _managementCard(
+              title: '任务列表',
+              subtitle: loadingTaskHistory
+                  ? '正在刷新任务...'
+                  : '筛选结果 ${filteredTasks.length} 条 / 共 $total 条',
+              icon: Icons.list_alt_rounded,
+              expandChild: true,
+              child: Column(
+                children: [
+                  _taskListToolbar(filteredTasks),
+                  const Divider(height: 17),
+                  Expanded(
+                    child: filteredTasks.isEmpty
+                        ? _emptyState(
+                            taskHistory.isEmpty ? '暂无任务' : '没有符合条件的任务',
+                            taskHistory.isEmpty
+                                ? '前往创作中心导入视频，开始第一条口播创作'
+                                : '请切换任务状态筛选条件',
+                          )
+                        : ListView.separated(
+                            itemCount: filteredTasks.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) =>
+                                _taskHistoryRow(filteredTasks[index]),
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> _filteredTaskHistory() {
+    if (taskStatusFilter == 'all') return taskHistory;
+    final statuses = switch (taskStatusFilter) {
+      'in_progress' => {'created', 'imported', 'rendering'},
+      'editable' => {'transcribed', 'rewritten'},
+      _ => {taskStatusFilter},
+    };
+    return taskHistory
+        .where((item) => statuses.contains(item['status']?.toString() ?? ''))
+        .toList(growable: false);
+  }
+
+  Widget _taskListToolbar(List<Map<String, dynamic>> filteredTasks) {
+    const options = [
+      'all',
+      'in_progress',
+      'editable',
+      'created',
+      'imported',
+      'transcribed',
+      'rewritten',
+      'rendering',
+      'completed',
+      'failed',
+    ];
+    const labels = {
+      'all': '全部状态',
+      'in_progress': '进行中',
+      'editable': '待继续编辑',
+      'created': '已创建',
+      'imported': '已导入',
+      'transcribed': '已提取文案',
+      'rewritten': '已完成仿写',
+      'rendering': '视频生成中',
+      'completed': '已完成',
+      'failed': '失败',
+    };
+    final visibleIds = filteredTasks
+        .map((item) => item['task_id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final selectedVisible = visibleIds.where(selectedTaskIds.contains).length;
+    final allSelected =
+        visibleIds.isNotEmpty && selectedVisible == visibleIds.length;
+    final checkboxValue = selectedVisible == 0
+        ? false
+        : allSelected
+            ? true
+            : null;
+    return Row(
+      children: [
+        SizedBox(
+          width: 190,
+          child: _dropdown(
+            taskStatusFilter,
+            options,
+            (value) =>
+                setState(() => taskStatusFilter = value ?? taskStatusFilter),
+            labels: labels,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Checkbox(
+          tristate: true,
+          value: checkboxValue,
+          onChanged: visibleIds.isEmpty
+              ? null
+              : (value) => setState(() {
+                    if (value == true) {
+                      selectedTaskIds.addAll(visibleIds);
+                    } else {
+                      selectedTaskIds.removeAll(visibleIds);
+                    }
+                  }),
+        ),
+        Text(
+          allSelected ? '取消全选' : '全选当前结果',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        const SizedBox(width: 10),
+        Text('已选 ${selectedTaskIds.length} 项',
+            style: const TextStyle(color: Color(0xFFB99AFF))),
+        const Spacer(),
+        OutlinedButton.icon(
+          onPressed: selectedTaskIds.isEmpty || batchDeletingTasks
+              ? null
+              : _deleteSelectedTasks,
+          icon: batchDeletingTasks
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.delete_sweep_outlined),
+          label: Text(batchDeletingTasks ? '删除中...' : '批量删除'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: const Color(0xFFFF7892),
+            side: const BorderSide(color: Color(0xFF7A3C52)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _statCard(String label, int value, IconData icon, Color color) {
+    return Container(
+      height: 88,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: panelBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF303348)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(width: 12),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white54)),
+              Text('$value',
+                  style: TextStyle(
+                      color: color, fontSize: 24, fontWeight: FontWeight.w900)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskHistoryRow(Map<String, dynamic> item) {
+    final status = item['status']?.toString() ?? '';
+    final taskId = item['task_id']?.toString() ?? '';
+    final outputReady = item['output_ready'] == true;
+    return SizedBox(
+      height: 66,
+      child: Row(
+        children: [
+          Checkbox(
+            value: selectedTaskIds.contains(taskId),
+            onChanged: taskId.isEmpty
+                ? null
+                : (value) => setState(() {
+                      if (value == true) {
+                        selectedTaskIds.add(taskId);
+                      } else {
+                        selectedTaskIds.remove(taskId);
+                      }
+                    }),
+          ),
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _taskStatusColor(status).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(_taskStatusIcon(status),
+                size: 19, color: _taskStatusColor(status)),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            flex: 4,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                    item['title']?.toString().isNotEmpty == true
+                        ? item['title'].toString()
+                        : '未命名视频任务',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 3),
+                Text(taskId,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        const TextStyle(color: Colors.white38, fontSize: 11)),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Text(_statusText(status),
+                style: TextStyle(
+                    color: _taskStatusColor(status),
+                    fontWeight: FontWeight.w700)),
+          ),
+          SizedBox(
+            width: 90,
+            child: Text(outputReady ? '成品可用' : '暂无成品',
+                style: TextStyle(
+                    color: outputReady
+                        ? const Color(0xFF51D8A5)
+                        : Colors.white38)),
+          ),
+          _ghostButton('打开', () => _openTaskFromHistory(taskId)),
+          const SizedBox(width: 7),
+          IconButton(
+            tooltip: '删除任务',
+            onPressed: () => _deleteTaskFromHistory(item),
+            icon: const Icon(Icons.delete_outline_rounded,
+                color: Color(0xFFFF7892)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _taskStatusColor(String status) {
+    return switch (status) {
+      'completed' => const Color(0xFF51D8A5),
+      'failed' => const Color(0xFFFF6D8A),
+      'rendering' || 'imported' || 'created' => const Color(0xFFFFC857),
+      _ => cyan,
+    };
+  }
+
+  IconData _taskStatusIcon(String status) {
+    return switch (status) {
+      'completed' => Icons.check_rounded,
+      'failed' => Icons.close_rounded,
+      'rendering' || 'imported' || 'created' => Icons.sync_rounded,
+      _ => Icons.edit_note_rounded,
+    };
+  }
+
+  Widget _accountManagementPage() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        children: [
+          _pageHeading(
+            '账号管理',
+            '管理各平台发布账号的登录状态，发布时可直接选择已登录账号。',
+            Icons.person_outline_rounded,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ghostButton('刷新状态', loadPublisherAccounts),
+                const SizedBox(width: 8),
+                _stepButton('添加账号', _showAddPublisherAccountDialog,
+                    compact: true),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '发布账号',
+            subtitle: '支持抖音、快手、小红书和视频号',
+            icon: Icons.account_circle_outlined,
+            child: publisherAccounts.isEmpty
+                ? _emptyState('还没有发布账号', '点击“添加账号”，再完成平台登录')
+                : Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      for (final account in publisherAccounts)
+                        _publisherAccountCard(account),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cloudAccountPage() {
+    final wallet = cloudWallet ?? const <String, dynamic>{};
+    final available = wallet['available_points'] ?? 0;
+    final frozen = wallet['frozen_points'] ?? 0;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        children: [
+          _pageHeading(
+            '云端账户',
+            '管理云端登录、软件授权、点数余额和任务扣点明细。',
+            Icons.cloud_outlined,
+            trailing: _ghostButton('刷新账户', () async {
+              await loadCloudMe(silent: true);
+              await loadCloudLedger(silent: true);
+            }),
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '账户信息',
+            subtitle: '用于云端文案提取、声音克隆和视频生成',
+            icon: Icons.account_circle_outlined,
+            child: _accountModule(),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: _cloudMetricCard(
+                  '可用点数',
+                  '$available 点',
+                  Icons.toll_rounded,
+                  const Color(0xFF51D8A5),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _cloudMetricCard(
+                  '冻结点数',
+                  '$frozen 点',
+                  Icons.lock_clock_outlined,
+                  const Color(0xFFFFC857),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _cloudMetricCard(
+                  '软件授权',
+                  _cloudLicensed ? '已激活' : '未激活',
+                  Icons.verified_user_outlined,
+                  _cloudLicensed
+                      ? const Color(0xFF51D8A5)
+                      : const Color(0xFFFF6D8A),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _managementCard(
+            title: '最近点数明细',
+            subtitle: cloudLedger.isEmpty ? '暂无扣点记录' : '展示最近的账户变动',
+            icon: Icons.receipt_long_outlined,
+            child: cloudLedger.isEmpty
+                ? _emptyState('暂无点数明细', '完成云端任务后会在这里显示扣点记录')
+                : Column(
+                    children: [
+                      for (final item in cloudLedger.take(12))
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.bolt_rounded,
+                                  size: 18, color: Color(0xFFB99AFF)),
+                              const SizedBox(width: 9),
+                              Expanded(
+                                child: Text(
+                                  _ledgerTitle(item),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700),
+                                ),
+                              ),
+                              Text(
+                                item['points']?.toString() ??
+                                    item['amount']?.toString() ??
+                                    '',
+                                style: const TextStyle(
+                                    color: Color(0xFFFFC857),
+                                    fontWeight: FontWeight.w800),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cloudMetricCard(
+      String label, String value, IconData icon, Color color) {
+    return Container(
+      height: 92,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: panelBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF303348)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(width: 12),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white54)),
+              const SizedBox(height: 3),
+              Text(value,
+                  style: TextStyle(
+                      color: color, fontSize: 21, fontWeight: FontWeight.w900)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _publisherAccountCard(Map<String, dynamic> account) {
+    final id = account['account_id']?.toString() ?? '';
+    final platform = account['platform']?.toString() ?? '';
+    final status = account['status']?.toString() ?? '';
+    final loggedIn = status == 'logged_in';
+    return SizedBox(
+      width: 340,
+      child: Container(
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: panelBg2,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: loggedIn
+                ? const Color(0xFF51D8A5).withValues(alpha: 0.55)
+                : const Color(0xFF3A3D54),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _platformColor(platform).withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(_platformLabel(platform),
+                      style: TextStyle(
+                          color: _platformColor(platform),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12)),
+                ),
+                const Spacer(),
+                Icon(loggedIn ? Icons.check_circle : Icons.info_outline,
+                    size: 18,
+                    color: loggedIn
+                        ? const Color(0xFF51D8A5)
+                        : const Color(0xFFFFC857)),
+              ],
+            ),
+            const SizedBox(height: 13),
+            Text(_accountDisplayName(account),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 5),
+            Text(_accountStatusLabel(status),
+                style: const TextStyle(color: Colors.white54)),
+            const SizedBox(height: 13),
+            Row(
+              children: [
+                Expanded(
+                  child: _ghostButton(
+                    loggedIn ? '重新登录' : '登录',
+                    () => _runPublisherAccountAction(id, loginPublisherAccount),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ghostButton(
+                    '检测状态',
+                    () => _runPublisherAccountAction(id, checkPublisherSession),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: '在创作中心使用',
+                  onPressed: () => setState(() {
+                    selectedPublishPlatform = platform;
+                    selectedPublisherAccount = id;
+                    selectedSection = _WorkspaceSection.studio;
+                  }),
+                  icon: const Icon(Icons.arrow_forward_rounded),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _platformColor(String platform) {
+    return switch (platform) {
+      'douyin' => const Color(0xFFFF5470),
+      'kuaishou' => const Color(0xFFFF8A4C),
+      'xiaohongshu' => const Color(0xFFFF4563),
+      'shipinhao' => const Color(0xFF51D8A5),
+      _ => cyan,
+    };
+  }
+
+  Future<void> _runPublisherAccountAction(
+    String accountId,
+    Future<void> Function() action,
+  ) async {
+    setState(() {
+      selectedPublisherAccount = accountId;
+      final account = publisherAccounts.firstWhere(
+        (item) => item['account_id'] == accountId,
+        orElse: () => const {},
+      );
+      if (account.isNotEmpty) {
+        selectedPublishPlatform = account['platform']?.toString() ?? 'douyin';
+      }
+    });
+    await action();
+  }
+
+  Future<void> _showAddPublisherAccountDialog() async {
+    final nicknameController = TextEditingController();
+    var platform = selectedPublishPlatform;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('添加发布账号'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('平台类型'),
+                const SizedBox(height: 7),
+                DropdownButtonFormField<String>(
+                  initialValue: platform,
+                  decoration: _inputDecoration(''),
+                  items:
+                      const ['douyin', 'kuaishou', 'xiaohongshu', 'shipinhao']
+                          .map((value) => DropdownMenuItem(
+                                value: value,
+                                child: Text(_platformLabel(value)),
+                              ))
+                          .toList(),
+                  onChanged: (value) =>
+                      setDialogState(() => platform = value ?? platform),
+                ),
+                const SizedBox(height: 12),
+                const Text('显示名称（可选）'),
+                const SizedBox(height: 7),
+                TextField(
+                  controller: nicknameController,
+                  decoration: _inputDecoration('登录后可自动识别'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('添加'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) {
+      nicknameController.dispose();
+      return;
+    }
+    setState(() {
+      selectedPublishPlatform = platform;
+      publisherNicknameController.text = nicknameController.text.trim();
+    });
+    nicknameController.dispose();
+    await createPublisherAccount();
+  }
+
+  Widget _managementCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Widget child,
+    Widget? trailing,
+    bool expandChild = false,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: panelBg,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: const Color(0xFF303348)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 21, color: const Color(0xFFB99AFF)),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: Color(0x75FFFFFF), fontSize: 12)),
+                  ],
+                ),
+              ),
+              if (trailing != null) trailing,
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (expandChild) Expanded(child: child) else child,
+        ],
+      ),
+    );
+  }
+
+  Widget _dropZone({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(11),
+        onTap: loading ? null : onTap,
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 160),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF151724),
+            borderRadius: BorderRadius.circular(11),
+            border: Border.all(
+              color: purpleLine.withValues(alpha: 0.65),
+              style: BorderStyle.solid,
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 36, color: const Color(0xFFC4A9FF)),
+              const SizedBox(height: 10),
+              Text(title,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 5),
+              Text(subtitle,
+                  textAlign: TextAlign.center,
+                  style:
+                      const TextStyle(color: Color(0x75FFFFFF), fontSize: 12)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState(String title, String subtitle) {
+    return SizedBox(
+      height: 180,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.inbox_outlined, size: 40, color: Colors.white30),
+            const SizedBox(height: 9),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white38, fontSize: 12)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteAsset(String assetId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('删除素材'),
+        content: const Text('确定删除这个自定义素材吗？已生成的视频不会受影响。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _runBusy(() async {
+      final res = await http.delete(Uri.parse('$apiBase/api/assets/$assetId'));
+      _check(res);
+      await loadBootstrap();
+      showInfo('素材已删除');
+    });
+  }
+
+  Widget _gateScaffold(String title, {bool showActivationActions = false}) {
     return Scaffold(
       body: Column(
         children: [
@@ -4031,7 +6420,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Expanded(
             child: Center(
               child: Container(
-                width: 420,
+                width: showActivationActions ? 520 : 420,
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: panelBg,
@@ -4055,10 +6444,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      '激活完成后才能进入主界面',
-                      style: TextStyle(color: Colors.white70),
+                    Text(
+                      showActivationActions
+                          ? '必须先完成软件激活，激活成功后才能进入主界面登录或注册。'
+                          : '激活完成后才能进入主界面',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
                     ),
+                    if (showActivationActions) ...[
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _input(
+                              cloudActivationCodeController,
+                              '输入软件激活码',
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          FilledButton.icon(
+                            onPressed:
+                                loading ? null : _activateSoftwareFromInput,
+                            icon: const Icon(Icons.verified_user_outlined),
+                            label: const Text('激活软件'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -4109,6 +6521,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _tabStrip() {
     return Container(
       height: 54,
@@ -4239,39 +6652,53 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _leftPanel(String status, List<Map<String, dynamic>> steps) {
+  Widget _leftPanel() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 5, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionTitle('1. 提取视频文案'),
-          Row(
-            children: [
-              Expanded(child: _input(urlController, '粘贴抖音分享链接或完整分享文案')),
-              const SizedBox(width: 8),
-              _ghostButton('选择视频', uploadSourceVideo),
-            ],
+          _panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _sectionTitle('1. 提取视频文案'),
+                _input(urlController, '粘贴抖音分享链接或完整分享文案'),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: _stepButton('提取文案', createTask)),
+                    const SizedBox(width: 8),
+                    _ghostButton('选择视频', uploadSourceVideo),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _textBox(originalScriptController, '提取的原文案', 8),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          _stepButton('1. 提取视频文案', createTask),
-          const SizedBox(height: 8),
-          _textBox(originalScriptController, '提取的原文案', 8),
-          const SizedBox(height: 12),
-          _sectionTitle('2. 一键仿写'),
-          _styleDropdown(),
-          const SizedBox(height: 8),
-          _stepButton('2. 一键仿写', rewrite),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(child: _input(audienceController, '目标人群')),
-              const SizedBox(width: 8),
-              Expanded(child: _input(productController, '产品/服务')),
-            ],
+          const SizedBox(height: 10),
+          _panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _sectionTitle('2. 一键仿写'),
+                _styleDropdown(),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(child: _input(audienceController, '目标人群')),
+                    const SizedBox(width: 8),
+                    Expanded(child: _input(productController, '产品/服务')),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _stepButton('生成改写文案', rewrite),
+                const SizedBox(height: 8),
+                _textBox(rewrittenScriptController, '改写后的文案', 15),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          _textBox(rewrittenScriptController, '改写后的文案', 8),
         ],
       ),
     );
@@ -4387,31 +6814,46 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   '${(voicePreviewVolume * 100).round()}%',
                 ),
                 const SizedBox(height: 10),
-                _formRow('声音', [
-                  Expanded(
-                    child: _dropdown(
-                      selectedVoice,
-                      voiceOptions,
-                      (v) => setState(() {
-                        selectedVoice = v ?? selectedVoice;
-                        _invalidateGeneratedVoice();
-                      }),
-                      labels: voiceLabels,
+                const Text('声音',
+                    style: TextStyle(
+                        color: Colors.white70, fontWeight: FontWeight.w800)),
+                const SizedBox(height: 7),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 180),
+                  child: _dropdown(
+                    selectedVoice,
+                    voiceOptions,
+                    (v) => setState(() {
+                      selectedVoice = v ?? selectedVoice;
+                      _invalidateGeneratedVoice();
+                    }),
+                    labels: voiceLabels,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _ghostButton('上传声音', uploadVoice),
+                    _stepButton(
+                      _cloudVoiceJobActive ? '停止克隆' : '克隆声音',
+                      _cloudVoiceJobActive ? stopCloudVoiceJob : cloneVoice,
+                      compact: true,
+                      allowWhileLoading: _cloudVoiceJobActive,
                     ),
-                  ),
-                  _ghostButton('上传声音', uploadVoice),
-                  _stepButton('克隆声音', cloneVoice, compact: true),
-                  _stepButton(
-                    _isPlayingVoice ? '停止播放' : '播放声音',
-                    playVoice,
-                    compact: true,
-                  ),
-                  _stepButton(
-                    _isPlayingOriginalAudio ? '原音停止' : '原音播放',
-                    playOriginalAudio,
-                    compact: true,
-                  ),
-                ]),
+                    _stepButton(
+                      _isPlayingVoice ? '停止播放' : '播放声音',
+                      playVoice,
+                      compact: true,
+                    ),
+                    _stepButton(
+                      _isPlayingOriginalAudio ? '原音停止' : '原音播放',
+                      playOriginalAudio,
+                      compact: true,
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -4976,23 +7418,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(text,
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-    );
-  }
-
-  Widget _formRow(String label, List<Widget> children) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 88,
-          child: Text(label,
-              style: const TextStyle(
-                  color: Colors.white70, fontWeight: FontWeight.w800)),
-        ),
-        for (var i = 0; i < children.length; i++) ...[
-          children[i],
-          if (i != children.length - 1) const SizedBox(width: 8),
-        ],
-      ],
     );
   }
 
@@ -5800,8 +8225,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   color: const Color(0xFF202334),
-                  borderRadius:
-                      BorderRadius.circular(pipPosition == 'fullscreen' ? 0 : 6),
+                  borderRadius: BorderRadius.circular(
+                      pipPosition == 'fullscreen' ? 0 : 6),
                   border: Border.all(
                     color: cyan.withValues(alpha: 0.8),
                     width: 2,
@@ -5917,14 +8342,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return null;
   }
 
-  double _progressPercent(List<Map<String, dynamic>> steps) {
-    if (steps.isEmpty) return 0;
-    final completed =
-        steps.where((step) => step['status'] == 'completed').length;
-    final running = steps.any((step) => step['status'] == 'running') ? 0.35 : 0;
-    return ((completed + running) / steps.length).clamp(0, 1).toDouble();
-  }
-
   String _statusText(String status) {
     return switch (status) {
       'created' => '已创建',
@@ -5936,85 +8353,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'failed' => '已失败',
       _ => status,
     };
-  }
-
-  String _stepStatusText(String status) {
-    return switch (status) {
-      'completed' => '完成',
-      'running' => '进行中',
-      'failed' => '失败',
-      _ => '等待',
-    };
-  }
-
-  // ignore: unused_element
-  Widget _statusStrip(String status, List<Map<String, dynamic>> steps) {
-    final percent = _progressPercent(steps);
-    final active = _activeProgressStep(task);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF171A28),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.35)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.auto_mode, size: 18, color: Color(0xFFD4A4FF)),
-              const SizedBox(width: 7),
-              Expanded(
-                child: Text('智能体制作进度：${_statusText(status)}',
-                    style: const TextStyle(fontWeight: FontWeight.w900)),
-              ),
-              Text('${(percent * 100).round()}%',
-                  style: const TextStyle(
-                      color: Color(0xFF55E6A5), fontWeight: FontWeight.w900)),
-            ],
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              value: percent == 0 && status == 'rendering' ? null : percent,
-              minHeight: 8,
-              backgroundColor: Colors.white10,
-              color: active == null ? cyan : const Color(0xFF55E6A5),
-            ),
-          ),
-          if (active != null) ...[
-            const SizedBox(height: 8),
-            Text('正在处理：${active['label']}',
-                style: const TextStyle(
-                    color: Color(0xFF55E6A5), fontWeight: FontWeight.w800)),
-          ],
-          const SizedBox(height: 8),
-          for (final step in steps.take(9))
-            Row(
-              children: [
-                Icon(
-                  step['status'] == 'completed'
-                      ? Icons.check_circle
-                      : step['status'] == 'running'
-                          ? Icons.timelapse
-                          : Icons.radio_button_unchecked,
-                  size: 15,
-                  color: step['status'] == 'completed' ? cyan : Colors.white38,
-                ),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                      '${step['label']} · ${_stepStatusText(step['status'] as String? ?? '')}',
-                      style: const TextStyle(fontSize: 12)),
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
   }
 
   Widget _labeledSlider(

@@ -37,6 +37,7 @@ class SubtitlePreviewRequest(BaseModel):
 class RenderOptions(BaseModel):
     script: Optional[str] = None
     voice_id: str = "default-female"
+    voice_volume: float = Field(default=0.45, ge=0, le=1)
     voice_reference_asset_id: Optional[str] = None
     digital_human_id: Optional[str] = None
     digital_human_engine: Optional[str] = None

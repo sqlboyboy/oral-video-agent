@@ -182,9 +182,9 @@ def test_renderer_pip_overlay_command(monkeypatch):
 
     filter_complex = command[command.index("-filter_complex") + 1]
     assert "-loop" in command
-    assert "[0:v]setpts=PTS-STARTPTS[mainv]" in filter_complex
-    assert "scale=320:-1,setpts=PTS-STARTPTS[pip]" in filter_complex
-    assert "[mainv][pip]overlay=24:main_h-overlay_h-24:eof_action=pass[basev]" in filter_complex
+    assert "[0:v]scale=1080:1920:flags=lanczos,setsar=1,setpts=PTS-STARTPTS[mainv]" in filter_complex
+    assert "scale=270:152:force_original_aspect_ratio=increase" in filter_complex
+    assert "[mainv][pip]overlay=24:1744:eof_action=pass[basev]" in filter_complex
 
 
 def test_rewrite_style_presets_are_available():
@@ -908,6 +908,29 @@ def test_custom_voice_and_bgm_uploads_are_listed():
     assert any(item["bgm_id"] == uploaded_bgm["bgm_id"] for item in bgm.json()["items"])
 
 
+def test_voice_reference_only_rejects_files_longer_than_five_minutes(monkeypatch):
+    monkeypatch.setattr(main_module, "media_duration_seconds", lambda _path: 301.0)
+
+    response = client.post(
+        "/api/voices/upload",
+        files={"file": ("too-long.wav", _wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "声音参考文件最长不能超过 5 分钟"
+
+
+def test_voice_reference_shorter_than_fifteen_seconds_is_allowed(monkeypatch):
+    monkeypatch.setattr(main_module, "media_duration_seconds", lambda _path: 5.0)
+
+    response = client.post(
+        "/api/voices/upload",
+        files={"file": ("short.wav", _wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 200
+
+
 def test_voice_preview_returns_uploaded_voice_reference():
     voice_upload = client.post(
         "/api/voices/upload",
@@ -945,10 +968,10 @@ def test_clone_folder_voice_templates_are_listed_first(tmp_path, monkeypatch):
     catalog = main_module.build_voice_catalog()
 
     assert [item.voice_id for item in catalog["items"][:2]] == [
-        "clone:元气女生.m4a",
         "clone:标准男声.m4a",
+        "clone:元气女生.m4a",
     ]
-    assert [item.name for item in catalog["items"][:2]] == ["元气女生", "标准男声"]
+    assert [item.name for item in catalog["items"][:2]] == ["标准男声", "元气女生"]
 
 
 def test_bgm_folder_templates_use_file_names(tmp_path, monkeypatch):
@@ -1064,7 +1087,7 @@ def test_digital_human_atlas_diagnosis_returns_reference_coverage():
     assert uploaded.status_code == 200
     digital_human_id = uploaded.json()["digital_human"]["digital_human_id"]
 
-    with patch("app.main.analyze_atlas_video") as mock_analyze:
+    with patch("tools.diagnose_mouth_naturalness.analyze_atlas_video") as mock_analyze:
         mock_analyze.return_value = {
             "verdict": "needs_better_reference",
             "coverage": {"usable_closed_count": 0},

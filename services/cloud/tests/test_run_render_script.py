@@ -141,6 +141,7 @@ def test_build_render_payload_keeps_composition_options():
     payload = build_render_payload(
         {
             "script": "成片文案",
+            "voice_volume": 0.45,
             "bgm_id": "custom:bgm-1",
             "bgm_volume": 0.22,
             "subtitle_enabled": True,
@@ -159,6 +160,7 @@ def test_build_render_payload_keeps_composition_options():
     )
 
     assert payload["bgm_id"] == "custom:bgm-1"
+    assert payload["voice_volume"] == 0.45
     assert payload["bgm_volume"] == 0.22
     assert payload["pip_enabled"] is True
     assert payload["pip_position"] == "bottom_right"
@@ -282,6 +284,8 @@ def test_compose_final_video_resets_pts_and_reports_pip(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run_render_module, "ffmpeg_executable", lambda: "ffmpeg")
     monkeypatch.setattr(run_render_module, "media_duration_seconds", lambda path: 20.0)
+    monkeypatch.setattr(run_render_module, "media_video_dimensions", lambda path: (720, 1280))
+    monkeypatch.setattr(run_render_module, "media_video_frame_rate", lambda path: "25")
     monkeypatch.setattr(run_render_module.subprocess, "run", fake_run)
 
     compose_final_video(
@@ -303,10 +307,14 @@ def test_compose_final_video_resets_pts_and_reports_pip(monkeypatch, tmp_path):
     )
 
     filter_complex = commands[0][commands[0].index("-filter_complex") + 1]
-    assert "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,setpts=PTS-STARTPTS[mainv]" in filter_complex
-    assert "[2:v]scale=540:304:force_original_aspect_ratio=increase,crop=540:304,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
-    assert "[mainv][pip]overlay=516:24:enable='between(t\\,5.000\\,10.000)':eof_action=pass" in filter_complex
+    assert "dynaudnorm=f=150:g=15:p=0.9,volume=0.45" in filter_complex
+    assert "[0:v]scale=720:1280:flags=lanczos,setsar=1,setpts=PTS-STARTPTS[mainv]" in filter_complex
+    assert "[2:v]scale=360:202:force_original_aspect_ratio=increase,crop=360:202,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
+    assert "[mainv][pip]overlay=344:16:enable='between(t\\,5.000\\,10.000)':eof_action=pass" in filter_complex
     assert "enable='between(t\\,5.000\\,10.000)':eof_action=pass" in filter_complex
+    assert "overlay=344:16" in filter_complex
+    assert commands[0][commands[0].index("-crf") + 1] == "18"
+    assert commands[0][commands[0].index("-r") + 1] == "25"
     assert compose_final_video.last_diagnostics["pip_composed"] is True
 
 
@@ -326,6 +334,8 @@ def test_compose_final_video_uses_custom_pip_rect(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run_render_module, "ffmpeg_executable", lambda: "ffmpeg")
     monkeypatch.setattr(run_render_module, "media_duration_seconds", lambda path: 20.0)
+    monkeypatch.setattr(run_render_module, "media_video_dimensions", lambda path: (720, 1280))
+    monkeypatch.setattr(run_render_module, "media_video_frame_rate", lambda path: "25")
     monkeypatch.setattr(run_render_module.subprocess, "run", fake_run)
 
     compose_final_video(
@@ -347,8 +357,8 @@ def test_compose_final_video_uses_custom_pip_rect(monkeypatch, tmp_path):
     )
 
     filter_complex = commands[0][commands[0].index("-filter_complex") + 1]
-    assert "[2:v]scale=540:384:force_original_aspect_ratio=increase,crop=540:384,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
-    assert "[mainv][pip]overlay=108:384:eof_action=pass" in filter_complex
+    assert "[2:v]scale=360:256:force_original_aspect_ratio=increase,crop=360:256,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
+    assert "[mainv][pip]overlay=72:256:eof_action=pass" in filter_complex
 
 
 def test_preprocess_rewrite_can_return_placeholder_result(monkeypatch, tmp_path):
