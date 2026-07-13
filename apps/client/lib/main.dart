@@ -1000,7 +1000,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudWallet = null;
         cloudAccountSignedOut = false;
         cloudActivationCodeController.clear();
-        message = '软件已激活，请绑定邮箱账号管理点?';
+        message = '软件已激活，请绑定邮箱账号管理点数';
         messageIsError = false;
       });
       await _saveCloudAuth();
@@ -1484,7 +1484,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() {
         cloudEstimate = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
-        message = '云端任务已预?';
+        message = '云端任务已预估';
         messageIsError = false;
       });
     });
@@ -1769,7 +1769,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (existing.isNotEmpty) {
         setState(() =>
             selectedPublisherAccount = existing.first['account_id'] as String);
-        showInfo('该账号已存在，已为你选中?');
+        showInfo('该账号已存在，已为你选中');
         return;
       }
     }
@@ -1788,7 +1788,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await loadPublisherAccounts();
       setState(() {
         selectedPublisherAccount = account['account_id'] as String;
-        message = '账号已添加，请点击登录打弢平台登录窗口，登录成功后会自动识别账号名称?';
+        message = '账号已添加，请点击登录打开平台登录窗口，登录成功后会自动识别账号名称';
         messageIsError = false;
       });
     });
@@ -1796,7 +1796,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> loginPublisherAccount() async {
     if (selectedPublisherAccount.isEmpty) {
-      showError('请先添加或择发布账号?');
+      showError('请先添加或选择发布账号');
       return;
     }
     await _runBusy(() async {
@@ -1808,7 +1808,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       );
       _check(res);
       await loadPublisherAccounts();
-      showInfo('已请求打弢登录窗口，请按平台提示完成扫码或验证?');
+      showInfo('已请求打开登录窗口，请按平台提示完成扫码或验证');
     });
   }
 
@@ -1827,11 +1827,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Future<void> createPublishJobs() async {
     final taskId = _taskId;
     if (taskId == null) {
-      showError('请先创建视频任务?');
+      showError('请先创建视频任务');
       return;
     }
     if (selectedPublisherAccount.isEmpty) {
-      showError('请先选择发布账号?');
+      showError('请先选择发布账号');
       return;
     }
     if (publishTitleController.text.trim().isEmpty ||
@@ -1870,7 +1870,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _check(res);
       await loadPublisherAccounts();
       await _loadTask(taskId);
-      showInfo('发布任务已创建，请在下方查看任务状?');
+      showInfo('发布任务已创建，请在下方查看任务状态');
     });
     setState(() => publishing = false);
   }
@@ -2794,14 +2794,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     final voiceUrl = _generatedVoiceUrl;
     if (voiceUrl == null) {
-      showError('请先点击“克隆声音生成后再播放声?');
+      showError('请先点击“克隆声音”生成后再播放声音');
       return;
     }
     try {
       await _stopOriginalAudioPreview();
       if (_isPlayingVoice) {
         await _stopVoicePreview();
-        showInfo('已停止播放声?');
+        showInfo('已停止播放声音');
         return;
       }
       await _stopVoicePreview();
@@ -2841,7 +2841,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await _stopVoicePreview();
       if (_isPlayingOriginalAudio) {
         await _stopOriginalAudioPreview();
-        showInfo('已停止播放原?');
+        showInfo('已停止播放原音');
         return;
       }
       await _stopOriginalAudioPreview();
@@ -3125,16 +3125,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (!_ensureSoftwareActivated()) return;
     final digitalHumanId = selectedDigitalHuman;
     if (digitalHumanId.isEmpty) {
-      showError('请先选择要删除的数字?');
+      showError('请先选择要删除的数字人');
       return;
     }
     if (!digitalHumanId.startsWith('custom:')) {
-      showError('只能删除你上传的数字?');
+      showError('只能删除你上传的数字人');
       return;
     }
     final assetId = digitalHumanId.substring('custom:'.length);
     if (assetId.isEmpty) {
-      showError('数字人素?ID 无效');
+      showError('数字人素材 ID 无效');
       return;
     }
     await _runBusy(() async {
@@ -4555,7 +4555,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     await loadOutput();
     final url = _outputVideoUrl;
     if (url == null) {
-      setState(() => message = '请先生成视频，生成完成后再预?');
+      setState(() => message = '请先生成视频，生成完成后再预览');
       return;
     }
     if (!mounted) return;
@@ -4608,7 +4608,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         await Process.start('xdg-open', [File(path).parent.path]);
       }
     } catch (e) {
-      setState(() => message = '打开视频失败?e');
+      setState(() => message = '打开视频失败：$e');
     }
   }
 
@@ -4636,7 +4636,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         await Process.start('xdg-open', [url]);
       }
     } catch (e) {
-      showError('打开链接失败?e');
+      showError('打开链接失败：$e');
     }
   }
 
@@ -4778,9 +4778,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String? get _cloudJobId => cloudJob?['job_id'] as String?;
 
   String get _cloudAccountText {
-    if (!_cloudLicensed) return '软件未激?';
+    if (!_cloudLicensed) return '软件未激活';
     final email = _cloudUser?['email'] as String? ?? '';
-    if (email.trim().isEmpty) return '未绑定邮箱账?';
+    if (email.trim().isEmpty) return '未绑定邮箱账号';
     return email;
   }
 
@@ -4929,13 +4929,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String _ledgerTitle(Map<String, dynamic> item) {
     final event = item['event_type'] as String? ?? '';
     final source = item['source'] as String? ?? '';
-    final sourceText = source == 'bonus' ? '赠点' : '付费?';
+    final sourceText = source == 'bonus' ? '赠点' : '付费点数';
     return switch (event) {
       'admin_credit' => '后台加点',
       'credit_redeem' => '兑换加点',
       'hold' => '任务冻结',
       'capture' => '任务扣点',
-      'release' => '任务逢?',
+      'release' => '任务释放',
       'cancel_fee' => '取消扣费',
       _ => '$event $sourceText',
     };
@@ -8536,7 +8536,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _publishModeChip('draft', '草60', Icons.edit_note_outlined),
+          child: _publishModeChip('draft', '保存草稿', Icons.edit_note_outlined),
         ),
       ],
     );
@@ -8605,11 +8605,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String _accountStatusLabel(String status) {
     return switch (status) {
       'created' => '已创建',
-      'login_opened' => '登录?',
+      'login_opened' => '登录窗口已打开',
       'logged_in' => '已登录',
       'needs_login' => '待登录',
-      'needs_user_action' => '霢人工处理',
-      'expired' => '已过?',
+      'needs_user_action' => '需要人工处理',
+      'expired' => '已过期',
       'failed' => '失败',
       _ => status,
     };
@@ -8681,7 +8681,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   String _engineStatusText() {
     final heygemOnline = providers?['heygem_online'] == true;
-    if (heygemOnline) return '云服务：已开?';
+    if (heygemOnline) return '云服务：已开启';
     return '云服务：未开启';
   }
 
@@ -9057,7 +9057,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final light = _studioLightControls;
     final visibleOptions = options.where((id) => id.isNotEmpty).toList();
     if (visibleOptions.isEmpty) {
-      return _readonlyBox('请上传或选择数字人素?');
+      return _readonlyBox('请上传或选择数字人素材');
     }
     final visibleRows = math.min(4, math.max(1, visibleOptions.length));
     final dividerHeight = math.max(0, visibleRows - 1).toDouble();
