@@ -86,6 +86,7 @@ class ClientActivationRequest(BaseModel):
 class ClientEmailCodeRequest(BaseModel):
     email: str
     purpose: str = "register"
+    device_fingerprint: str = ""
 
 
 class ClientEmailLoginRequest(BaseModel):
@@ -100,12 +101,14 @@ class ClientPasswordRegisterRequest(BaseModel):
     code: str
     password: str
     device_name: str = ""
+    device_fingerprint: str = ""
 
 
 class ClientPasswordLoginRequest(BaseModel):
     email: str
     password: str
     device_name: str = ""
+    device_fingerprint: str = ""
 
 
 class ClientPasswordResetRequest(BaseModel):
@@ -113,6 +116,7 @@ class ClientPasswordResetRequest(BaseModel):
     code: str
     new_password: str
     device_name: str = ""
+    device_fingerprint: str = ""
 
 
 class ClientLicenseActivationRequest(BaseModel):
@@ -631,11 +635,7 @@ def notify_check(force: bool = False) -> dict[str, Any]:
     return maybe_notify_open_autodl(force=force)
 
 
-@app.post("/api/client/auth/email-code")
-def send_client_email_code(
-    req: ClientEmailCodeRequest,
-    session: dict[str, Any] = Depends(require_licensed_client),
-) -> dict[str, Any]:
+def _send_email_code(req: ClientEmailCodeRequest, *, device_rate_key: str) -> dict[str, Any]:
     email = req.email.strip().lower()
     purpose = req.purpose.strip().lower()
     if purpose not in {"register", "reset_password"}:
@@ -648,7 +648,6 @@ def send_client_email_code(
         raise HTTPException(status_code=409, detail="账号已存在，请直接使用密码登录")
     if purpose == "reset_password" and not has_password:
         raise HTTPException(status_code=404, detail="该邮箱尚未注册密码账号")
-    device_id = str(session["device"]["device_id"])
     _enforce_rate_limit(
         key=f"email-code:email-hour:{email}",
         limit=settings.email_code_per_email_per_hour,
@@ -656,13 +655,13 @@ def send_client_email_code(
         detail="该邮箱验证码发送次数过多，请一小时后再试",
     )
     _enforce_rate_limit(
-        key=f"email-code:device-hour:{device_id}",
+        key=f"email-code:device-hour:{device_rate_key}",
         limit=settings.email_code_per_device_per_hour,
         window_seconds=3600,
         detail="当前设备验证码发送次数过多，请一小时后再试",
     )
     _enforce_rate_limit(
-        key=f"email-code:device-day:{device_id}",
+        key=f"email-code:device-day:{device_rate_key}",
         limit=settings.email_code_per_device_per_day,
         window_seconds=86400,
         detail="当前设备今日验证码发送次数已达上限，请明天再试",
@@ -694,6 +693,40 @@ def send_client_email_code(
     if settings.email_provider == "console":
         response["debug_code"] = code
     return response
+
+
+def _mobile_fingerprint(value: str) -> str:
+    fingerprint = value.strip()
+    if len(fingerprint) < 16 or len(fingerprint) > 200:
+        raise HTTPException(status_code=400, detail="invalid mobile device fingerprint")
+    return fingerprint
+
+
+def _provision_mobile_session(session: dict[str, Any]) -> dict[str, Any]:
+    store.ensure_mobile_access(
+        user_id=str(session["user"]["user_id"]),
+        device_id=str(session["device"]["device_id"]),
+        max_activations=settings.max_devices_per_user,
+    )
+    return session
+
+
+@app.post("/api/client/auth/email-code")
+def send_client_email_code(
+    req: ClientEmailCodeRequest,
+    session: dict[str, Any] = Depends(require_licensed_client),
+) -> dict[str, Any]:
+    return _send_email_code(
+        req,
+        device_rate_key=str(session["device"]["device_id"]),
+    )
+
+
+@app.post("/api/mobile/auth/email-code")
+def send_mobile_email_code(req: ClientEmailCodeRequest) -> dict[str, Any]:
+    fingerprint = _mobile_fingerprint(req.device_fingerprint)
+    fingerprint_key = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+    return _send_email_code(req, device_rate_key=f"mobile:{fingerprint_key}")
 
 
 @app.post("/api/client/auth/register")
@@ -779,6 +812,100 @@ def reset_client_password(
             password=req.new_password,
         )
         return session
+    except HTTPException:
+        raise
+    except KeyError:
+        raise HTTPException(status_code=400, detail="验证码无效或已过期")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/mobile/auth/register")
+def register_mobile_with_password(
+    req: ClientPasswordRegisterRequest,
+) -> dict[str, Any]:
+    fingerprint = _mobile_fingerprint(req.device_fingerprint)
+    try:
+        validate_password(req.password)
+        if store.email_account_has_password(email=req.email):
+            raise HTTPException(status_code=409, detail="账号已存在，请直接登录")
+        session = store.login_with_email_code(
+            email=req.email,
+            code=req.code,
+            device_fingerprint=fingerprint,
+            device_name=req.device_name,
+            max_attempts=settings.email_code_max_attempts,
+            max_devices=settings.max_devices_per_user,
+        )
+        session["user"] = store.set_user_password(
+            user_id=session["user"]["user_id"],
+            password=req.password,
+        )
+        return _provision_mobile_session(session)
+    except HTTPException:
+        raise
+    except KeyError:
+        raise HTTPException(status_code=400, detail="验证码无效或已过期")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/mobile/auth/password-login")
+def login_mobile_with_password(
+    req: ClientPasswordLoginRequest,
+) -> dict[str, Any]:
+    fingerprint = _mobile_fingerprint(req.device_fingerprint)
+    email_key = hashlib.sha256(req.email.strip().lower().encode("utf-8")).hexdigest()
+    device_key = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+    _enforce_rate_limit(
+        key=f"mobile-password-login:{device_key}:{email_key}",
+        limit=10,
+        window_seconds=900,
+        detail="登录尝试次数过多，请 15 分钟后再试",
+    )
+    try:
+        session = store.login_with_password(
+            email=req.email,
+            password=req.password,
+            device_fingerprint=fingerprint,
+            device_name=req.device_name,
+            max_devices=settings.max_devices_per_user,
+        )
+        return _provision_mobile_session(session)
+    except KeyError:
+        raise HTTPException(status_code=401, detail="邮箱或密码错误")
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/mobile/auth/password-reset")
+def reset_mobile_password(
+    req: ClientPasswordResetRequest,
+) -> dict[str, Any]:
+    fingerprint = _mobile_fingerprint(req.device_fingerprint)
+    try:
+        validate_password(req.new_password)
+        if not store.email_account_has_password(email=req.email):
+            raise HTTPException(status_code=404, detail="该邮箱尚未注册密码账号")
+        session = store.login_with_email_code(
+            email=req.email,
+            code=req.code,
+            device_fingerprint=fingerprint,
+            device_name=req.device_name,
+            max_attempts=settings.email_code_max_attempts,
+            max_devices=settings.max_devices_per_user,
+        )
+        session["user"] = store.set_user_password(
+            user_id=session["user"]["user_id"],
+            password=req.new_password,
+        )
+        return _provision_mobile_session(session)
     except HTTPException:
         raise
     except KeyError:
@@ -914,6 +1041,19 @@ def estimate_client_job(
         "estimated_points": points,
         "wallet": wallet,
         "enough_credits": wallet["available_points"] >= points,
+    }
+
+
+@app.get("/api/client/jobs")
+def list_client_jobs(
+    limit: int = 50,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    return {
+        "items": store.list_client_jobs(
+            user_id=session["user"]["user_id"],
+            limit=limit,
+        )
     }
 
 

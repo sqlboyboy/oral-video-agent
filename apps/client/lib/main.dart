@@ -12,6 +12,8 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
+part 'mobile.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -109,6 +111,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   static const panelBg = Color(0xFF1D2030);
   static const panelBg2 = Color(0xFF24283A);
   static const purpleLine = Color(0xFF7E54E8);
+  static const studioPrimary = Color(0xFF5B5CEB);
+  static const studioPrimaryDark = Color(0xFF4546D7);
+  static const studioCanvas = Color(0xFFF4F6FA);
+  static const studioBorder = Color(0xFFE7EAF0);
+  static const studioInk = Color(0xFF161A2B);
+  static const studioMuted = Color(0xFF7B8194);
+  static const studioSuccess = Color(0xFF2BB673);
   static const _subtitleFontOptions = [
     'Microsoft YaHei',
     'Microsoft YaHei UI',
@@ -196,6 +205,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   List<Map<String, dynamic>> publisherAccounts = const [];
   List<Map<String, dynamic>> publishJobs = const [];
   List<Map<String, dynamic>> taskHistory = const [];
+  List<Map<String, dynamic>> mobileCloudJobs = const [];
   bool loading = false;
   bool renderingVideo = false;
   bool diagnosingMouthAtlas = false;
@@ -222,6 +232,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String cloudOutputUrl = '';
   String cloudOutputLocalPath = '';
   String cloudVoiceAudioPath = '';
+  String mobileVoiceReferencePath = '';
+  String mobileVoiceReferenceName = '';
+  String mobileDigitalHumanPath = '';
+  String mobileDigitalHumanName = '';
   String cloudVoiceJobId = '';
   String generatedVoiceKey = '';
   String coverPath = '';
@@ -237,6 +251,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   _WorkspaceSection selectedSection = _WorkspaceSection.studio;
   String taskStatusFilter = 'all';
   String cloudAuthMode = 'login';
+  int mobileNavigationIndex = 0;
+  int studioStep = 0;
   final Set<String> selectedTaskIds = <String>{};
   bool toothHd = true;
   bool randomMotion = false;
@@ -409,6 +425,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _initialize() async {
+    if (_isAndroidClient) {
+      generationMode = 'cloud';
+      subtitlesEnabled = false;
+      cloudDurationController.text = '60';
+      await _loadCloudAuth();
+      if (_cloudLoggedIn) {
+        await loadCloudMe(silent: true);
+        await loadCloudLedger(silent: true);
+        await loadMobileCloudJobs(silent: true);
+      }
+      if (!mounted) return;
+      setState(() => initialized = true);
+      return;
+    }
     await loadBootstrap();
     await loadTaskHistory(silent: true);
     await _resetReleaseLocalStateIfNeeded();
@@ -463,6 +493,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
   }
 
+  bool get _isAndroidClient => !kIsWeb && Platform.isAndroid;
+
+  bool get _studioLightControls =>
+      !_isAndroidClient && selectedSection == _WorkspaceSection.studio;
+
   Map<String, dynamic>? get _cloudUser {
     final user = cloudSession?['user'];
     if (user is Map) return user.cast<String, dynamic>();
@@ -472,7 +507,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   bool get _cloudLoggedIn => cloudDeviceToken.isNotEmpty;
 
   bool get _cloudLicensed =>
-      cloudActivationValid && cloudActivationToken.isNotEmpty;
+      _isAndroidClient ||
+      (cloudActivationValid && cloudActivationToken.isNotEmpty);
 
   bool get _cloudAccountBound {
     if (cloudAccountSignedOut) return false;
@@ -481,6 +517,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   bool _ensureSoftwareActivated() {
+    if (_isAndroidClient) return true;
     if (!_cloudLicensed) {
       showError('请先输入激活码激活软件');
       return false;
@@ -624,6 +661,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String _deviceName() {
+    if (_isAndroidClient) return 'Android phone';
     final host = Platform.localHostname.trim();
     if (host.isEmpty) return 'Windows client';
     return '${Platform.operatingSystem} $host';
@@ -708,6 +746,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  Future<void> loadMobileCloudJobs({bool silent = false}) async {
+    if (!_cloudLoggedIn) return;
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/jobs?limit=50'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      setState(() {
+        mobileCloudJobs =
+            (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+        if (!silent) {
+          message = '云端任务已刷新';
+          messageIsError = false;
+        }
+      });
+    } catch (e) {
+      if (!silent) showError(_friendlyError(e));
+    }
+  }
+
   Future<void> sendCloudEmailCode({String purpose = 'register'}) async {
     if (!_ensureSoftwareActivated()) return;
     final email = cloudEmailController.text.trim();
@@ -715,13 +776,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入邮箱');
       return;
     }
+    final mobileFingerprint =
+        _isAndroidClient ? await _mobileDeviceFingerprint() : '';
+    final endpoint = _isAndroidClient
+        ? '/api/mobile/auth/email-code'
+        : '/api/client/auth/email-code';
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/email-code'),
-        headers: _cloudHeaders(),
-        body: jsonEncode({'email': email, 'purpose': purpose}),
+        Uri.parse('$_cloudApiBase$endpoint'),
+        headers: _isAndroidClient
+            ? _cloudHeaders(auth: false, activation: false)
+            : _cloudHeaders(),
+        body: jsonEncode({
+          'email': email,
+          'purpose': purpose,
+          if (_isAndroidClient) 'device_fingerprint': mobileFingerprint,
+        }),
       );
-      if (res.statusCode == 401) {
+      if (!_isAndroidClient && res.statusCode == 401) {
         await _clearCloudAuth();
         throw Exception('软件激活状态已失效，请重新输入激活码激活');
       }
@@ -770,15 +842,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入密码');
       return false;
     }
+    final mobileFingerprint =
+        _isAndroidClient ? await _mobileDeviceFingerprint() : '';
+    final endpoint = _isAndroidClient
+        ? '/api/mobile/auth/password-login'
+        : '/api/client/auth/password-login';
     var succeeded = false;
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/password-login'),
-        headers: _cloudHeaders(),
+        Uri.parse('$_cloudApiBase$endpoint'),
+        headers: _isAndroidClient
+            ? _cloudHeaders(auth: false, activation: false)
+            : _cloudHeaders(),
         body: jsonEncode({
           'email': email,
           'password': password,
           'device_name': _deviceName(),
+          if (_isAndroidClient) 'device_fingerprint': mobileFingerprint,
         }),
       );
       _check(res);
@@ -796,6 +876,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       });
       await _saveCloudAuth();
       await loadCloudLedger(silent: true);
+      if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
       succeeded = true;
     });
     return succeeded;
@@ -843,19 +924,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('两次输入的密码不一致');
       return false;
     }
+    final mobileFingerprint =
+        _isAndroidClient ? await _mobileDeviceFingerprint() : '';
+    final endpointPrefix =
+        _isAndroidClient ? '/api/mobile/auth' : '/api/client/auth';
     var succeeded = false;
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/$endpoint'),
-        headers: _cloudHeaders(),
+        Uri.parse('$_cloudApiBase$endpointPrefix/$endpoint'),
+        headers: _isAndroidClient
+            ? _cloudHeaders(auth: false, activation: false)
+            : _cloudHeaders(),
         body: jsonEncode({
           'email': email,
           'code': code,
           passwordKey: password,
           'device_name': _deviceName(),
+          if (_isAndroidClient) 'device_fingerprint': mobileFingerprint,
         }),
       );
-      if (res.statusCode == 401) {
+      if (!_isAndroidClient && res.statusCode == 401) {
         await _clearCloudAuth();
         throw Exception('软件激活状态已失效，请重新输入激活码激活');
       }
@@ -875,6 +963,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       });
       await _saveCloudAuth();
       await loadCloudLedger(silent: true);
+      if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
       succeeded = true;
     });
     return succeeded;
@@ -978,6 +1067,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _showCloudAuthDialog(String initialMode) async {
     cloudAuthMode = initialMode;
+    message = '';
+    messageIsError = false;
     cloudEmailCodeController.clear();
     cloudPasswordController.clear();
     cloudPasswordConfirmController.clear();
@@ -1000,9 +1091,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               : (isRegister ? '验证邮箱并设置首次登录密码' : '验证邮箱后设置新密码');
           return Dialog(
             backgroundColor: Colors.transparent,
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: _isAndroidClient ? 16 : 40,
+              vertical: _isAndroidClient ? 20 : 24,
+            ),
             child: Container(
-              width: 500,
-              padding: const EdgeInsets.fromLTRB(30, 24, 30, 28),
+              width: _isAndroidClient ? double.infinity : 500,
+              padding: EdgeInsets.fromLTRB(
+                _isAndroidClient ? 20 : 30,
+                _isAndroidClient ? 16 : 24,
+                _isAndroidClient ? 20 : 30,
+                _isAndroidClient ? 22 : 28,
+              ),
               decoration: BoxDecoration(
                 color: const Color(0xFF1D2132),
                 borderRadius: BorderRadius.circular(22),
@@ -1045,6 +1145,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     Text(subtitle,
                         style: const TextStyle(
                             color: Colors.white54, fontSize: 14)),
+                    if (messageIsError) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color:
+                              const Color(0xFFFF7892).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        child: Text(
+                          message,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Color(0xFFFF9BAD),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 28),
                     _cloudAuthField(
                       controller: cloudEmailController,
@@ -1631,6 +1751,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       message = text;
       messageIsError = true;
     });
+  }
+
+  void _updateMobile(VoidCallback update) {
+    setState(update);
   }
 
   Future<void> createPublisherAccount() async {
@@ -2239,7 +2363,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> cloneVoice() async {
     if (!_ensureSoftwareActivated()) return;
-    final taskId = task?['task_id'] as String?;
+    var taskId = task?['task_id'] as String?;
+    if (_isAndroidClient && taskId == null && _renderScript.isNotEmpty) {
+      taskId = 'mobile-${DateTime.now().millisecondsSinceEpoch}';
+      setState(() {
+        task = {
+          'task_id': taskId,
+          'status': 'rewritten',
+          'original_script': originalScriptController.text.trim(),
+          'rewritten_script': rewrittenScriptController.text.trim(),
+          'progress_steps': const [],
+        };
+      });
+    }
     if (taskId == null) return;
     final script = _renderScript;
     if (script.isEmpty) {
@@ -2286,10 +2422,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         message = '正在准备云端克隆声音素材';
         messageIsError = false;
       });
-      final referencePath = await _downloadPreviewToTempFile(
-        _selectedVoicePreviewUrl,
-        'voice_reference',
-      );
+      final referencePath = _isAndroidClient
+          ? mobileVoiceReferencePath
+          : await _downloadPreviewToTempFile(
+              _selectedVoicePreviewUrl,
+              'voice_reference',
+            );
+      if (referencePath.isEmpty) {
+        throw Exception('请先选择声音参考文件');
+      }
       final referenceFile = File(referencePath);
       if (!await referenceFile.exists()) {
         throw Exception('声音参考文件下载失败，请重新选择或上传声音');
@@ -2503,7 +2644,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('退出云端账号'),
-        content: const Text('退出后不会影响软件激活状态，可重新选择登录或注册。'),
+        content: Text(_isAndroidClient
+            ? '退出后可使用邮箱和密码重新登录。'
+            : '退出后不会影响软件激活状态，可重新选择登录或注册。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -2938,6 +3081,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
     final path = picked?.files.single.path;
     if (path == null) return;
+    if (_isAndroidClient) {
+      setState(() {
+        mobileDigitalHumanPath = path;
+        mobileDigitalHumanName =
+            picked?.files.single.name ?? _fileNameFromPath(path);
+        selectedDigitalHuman = 'mobile:reference';
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        outputRefresh++;
+        message = '已选择数字人形象视频';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request = http.MultipartRequest(
         'POST',
@@ -3054,6 +3211,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
     final path = picked?.files.single.path;
     if (path == null) return;
+    if (_isAndroidClient) {
+      setState(() {
+        mobileVoiceReferencePath = path;
+        mobileVoiceReferenceName =
+            picked?.files.single.name ?? _fileNameFromPath(path);
+        selectedVoice = 'mobile:reference';
+        _invalidateGeneratedVoice();
+        message = '已选择声音参考文件';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request = http.MultipartRequest(
         'POST',
@@ -3563,6 +3732,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<_CloudUploadFile> _digitalHumanSourceUploadFile() async {
+    if (_isAndroidClient) {
+      final path = mobileDigitalHumanPath.trim();
+      if (path.isEmpty) throw Exception('请先选择数字人形象视频');
+      final file = File(path);
+      if (!await file.exists()) throw Exception('数字人形象视频不存在，请重新选择');
+      final fileName = mobileDigitalHumanName.trim().isEmpty
+          ? _fileNameFromPath(path)
+          : mobileDigitalHumanName.trim();
+      return _CloudUploadFile(
+        kind: 'source_video',
+        file: file,
+        fileName: fileName,
+        contentType: _contentTypeForPath(fileName),
+      );
+    }
     final digitalHumanId = selectedDigitalHuman.trim();
     if (digitalHumanId.isEmpty) {
       throw Exception('请先上传或选择数字人形象');
@@ -4018,6 +4202,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _stopCloudPolling();
         await _loadCloudDownload(jobId);
         await loadCloudMe(silent: true);
+        if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
         if (!mounted) return;
         setState(() {
           loading = false;
@@ -4030,6 +4215,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           status == 'timed_out') {
         _stopCloudPolling();
         await loadCloudMe(silent: true);
+        if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
         if (!mounted) return;
         setState(() {
           loading = false;
@@ -4087,6 +4273,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   bool get _needsLocalCloudPostprocess {
+    if (_isAndroidClient) return false;
     return subtitlesEnabled || selectedBgm != 'none' || pipEnabled;
   }
 
@@ -4284,6 +4471,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         messageIsError = false;
       });
       await loadCloudMe(silent: true);
+      if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
     } catch (e) {
       _stopCloudPolling();
       if (!mounted) return;
@@ -4758,6 +4946,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (!initialized) {
       return _gateScaffold('正在启动软件');
     }
+    if (_isAndroidClient) {
+      if (!_cloudLoggedIn || !_cloudAccountBound) {
+        return _mobileAuthScaffold();
+      }
+      return _mobileWorkbenchScaffold();
+    }
     if (!_cloudLicensed) {
       return _gateScaffold('请先激活软件', showActivationActions: true);
     }
@@ -4792,49 +4986,1136 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _studioPage() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < 1050) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                _pageHeading(
-                  '创作中心',
-                  '从素材导入到视频发布，每个模块都可以独立编辑和预览。',
-                  Icons.auto_awesome_rounded,
-                ),
-                const SizedBox(height: 14),
-                SizedBox(height: 860, child: _leftPanel()),
-                SizedBox(height: 1040, child: _centerPanel()),
-                SizedBox(height: 1050, child: _rightPanel()),
-              ],
-            ),
-          );
-        }
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
-              child: _pageHeading(
-                '创作中心',
-                '分步骤处理文案、声音、画面与发布，修改后可在右侧即时预览。',
-                Icons.auto_awesome_rounded,
-              ),
-            ),
-            Expanded(
-              child: Row(
+    final studioTheme = ThemeData(
+      brightness: Brightness.light,
+      useMaterial3: true,
+      fontFamilyFallback: const [
+        'Microsoft YaHei UI',
+        'Microsoft YaHei',
+        'PingFang SC',
+      ],
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: studioPrimary,
+        brightness: Brightness.light,
+        primary: studioPrimary,
+        surface: Colors.white,
+      ),
+      dividerColor: studioBorder,
+      textTheme: ThemeData.light().textTheme.apply(
+            bodyColor: studioInk,
+            displayColor: studioInk,
+          ),
+      sliderTheme: const SliderThemeData(
+        activeTrackColor: studioPrimary,
+        thumbColor: studioPrimary,
+        inactiveTrackColor: Color(0xFFE7E9F2),
+      ),
+    );
+    return Theme(
+      data: studioTheme,
+      child: DefaultTextStyle(
+        style: studioTheme.textTheme.bodyMedium!.copyWith(color: studioInk),
+        child: ColoredBox(
+          color: studioCanvas,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 1180;
+              if (compact) {
+                return Column(
+                  children: [
+                    _studioCompactSteps(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                        child: Column(
+                          children: [
+                            _studioStepCard(compact: true),
+                            const SizedBox(height: 14),
+                            SizedBox(
+                              height: 620,
+                              child: _studioPreviewPanel(),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(flex: 30, child: _leftPanel()),
-                  Expanded(flex: 39, child: _centerPanel()),
-                  Expanded(flex: 31, child: _rightPanel()),
+                  SizedBox(width: 228, child: _studioWorkflowRail()),
+                  Expanded(child: _studioStepCard()),
+                  SizedBox(width: 326, child: _studioPreviewPanel()),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<({String title, String subtitle, IconData icon})> get _studioSteps =>
+      const [
+        (
+          title: '文案生成',
+          subtitle: '导入链接并智能改写',
+          icon: Icons.edit_note_rounded,
+        ),
+        (
+          title: '声音生成',
+          subtitle: '选择音色与克隆声音',
+          icon: Icons.graphic_eq_rounded,
+        ),
+        (
+          title: '数字人生成',
+          subtitle: '选择形象并生成视频',
+          icon: Icons.face_retouching_natural_rounded,
+        ),
+        (
+          title: '视频封面',
+          subtitle: '生成或上传竖版封面',
+          icon: Icons.image_outlined,
+        ),
+        (
+          title: 'BGM 与字幕',
+          subtitle: '完善声音和字幕样式',
+          icon: Icons.subtitles_rounded,
+        ),
+        (
+          title: '一键发布',
+          subtitle: '编辑文案并选择平台',
+          icon: Icons.rocket_launch_rounded,
+        ),
+      ];
+
+  Widget _studioWorkflowRail() {
+    final steps = _studioSteps;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 8, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: studioBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A111827),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEEF0FF),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.auto_awesome_rounded,
+                        color: studioPrimary,
+                        size: 19,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'AI 创作工作流',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Text(
+                      '整体进度',
+                      style: TextStyle(
+                        color: studioMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${studioStep + 1}/${steps.length}',
+                      style: const TextStyle(
+                        color: studioPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(99),
+                  child: LinearProgressIndicator(
+                    minHeight: 6,
+                    value: (studioStep + 1) / steps.length,
+                    backgroundColor: const Color(0xFFEEF0F4),
+                    color: studioPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              itemCount: steps.length,
+              itemBuilder: (context, index) =>
+                  _studioStepNavItem(index, steps[index]),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF7F8FC),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: localApiOnline
+                          ? studioSuccess
+                          : const Color(0xFFFF6B7B),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      localApiOnline ? '创作服务运行正常' : '等待本地服务连接',
+                      style: const TextStyle(
+                        color: studioMuted,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ],
-        );
-      },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioStepNavItem(
+    int index,
+    ({String title, String subtitle, IconData icon}) step,
+  ) {
+    final active = studioStep == index;
+    final completed = index < studioStep;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => studioStep = index),
+          borderRadius: BorderRadius.circular(12),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+            decoration: BoxDecoration(
+              color: active ? const Color(0xFFF0F1FF) : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: active ? const Color(0xFFD8DAFF) : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 31,
+                  height: 31,
+                  decoration: BoxDecoration(
+                    color: completed
+                        ? const Color(0xFFE8F8F0)
+                        : active
+                            ? studioPrimary
+                            : const Color(0xFFF0F2F6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    completed ? Icons.check_rounded : step.icon,
+                    size: 17,
+                    color: completed
+                        ? studioSuccess
+                        : active
+                            ? Colors.white
+                            : const Color(0xFF9AA0B2),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        step.title,
+                        style: TextStyle(
+                          color: active ? studioPrimaryDark : studioInk,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        step.subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _studioCompactSteps() {
+    final steps = _studioSteps;
+    return Container(
+      height: 86,
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: steps.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final active = studioStep == index;
+          final completed = index < studioStep;
+          return InkWell(
+            onTap: () => setState(() => studioStep = index),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: 138,
+              padding: const EdgeInsets.symmetric(horizontal: 11),
+              decoration: BoxDecoration(
+                color: active ? const Color(0xFFF0F1FF) : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: active ? const Color(0xFFD8DAFF) : studioBorder,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    completed ? Icons.check_circle : steps[index].icon,
+                    color: completed
+                        ? studioSuccess
+                        : active
+                            ? studioPrimary
+                            : studioMuted,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      steps[index].title,
+                      style: TextStyle(
+                        color: active ? studioPrimaryDark : studioInk,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _studioStepCard({bool compact = false}) {
+    final step = _studioSteps[studioStep];
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 26),
+      child: _studioCurrentStep(),
+    );
+    return Container(
+      margin: EdgeInsets.fromLTRB(8, 16, compact ? 8 : 8, compact ? 0 : 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: studioBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A111827),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 20, 17),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEEF0FF),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(step.icon, color: studioPrimary, size: 23),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        step.title,
+                        style: const TextStyle(
+                          color: studioInk,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        step.subtitle,
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF4F5F8),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    '步骤 ${studioStep + 1} / ${_studioSteps.length}',
+                    style: const TextStyle(
+                      color: studioMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (compact)
+            content
+          else
+            Expanded(child: SingleChildScrollView(child: content)),
+          const Divider(height: 1),
+          _studioStepFooter(),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioStepFooter() {
+    final lastStep = studioStep == _studioSteps.length - 1;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+      child: Row(
+        children: [
+          TextButton.icon(
+            onPressed:
+                studioStep == 0 ? null : () => setState(() => studioStep -= 1),
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('上一步'),
+          ),
+          const Spacer(),
+          FilledButton.icon(
+            onPressed: loading
+                ? null
+                : lastStep
+                    ? createPublishJobs
+                    : () => setState(() => studioStep += 1),
+            style: FilledButton.styleFrom(
+              backgroundColor: studioPrimary,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(132, 44),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            icon: Icon(
+              lastStep
+                  ? Icons.rocket_launch_rounded
+                  : Icons.arrow_forward_rounded,
+              size: 18,
+            ),
+            label: Text(lastStep ? '创建发布任务' : '保存并继续'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioCurrentStep() {
+    return switch (studioStep) {
+      0 => _studioScriptStep(),
+      1 => _studioVoiceStep(),
+      2 => _studioAvatarStep(),
+      3 => _studioCoverStep(),
+      4 => _studioMediaStep(),
+      _ => _studioPublishStep(),
+    };
+  }
+
+  Widget _studioScriptStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip(
+          '从同行视频链接提取口播文案，也可以直接上传本地视频。AI 会保留核心卖点并重写表达。',
+        ),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '导入对标视频',
+          subtitle: '支持抖音分享链接、完整分享文案或本地视频',
+          icon: Icons.link_rounded,
+          child: Column(
+            children: [
+              _input(urlController, '粘贴抖音分享链接或完整分享文案'),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(child: _stepButton('提取视频文案', createTask)),
+                  const SizedBox(width: 10),
+                  _ghostButton('上传本地视频', uploadSourceVideo),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 720;
+            final original = _studioFieldCard(
+              title: '原始文案',
+              subtitle: '提取后仍可手动校正内容',
+              icon: Icons.article_outlined,
+              child: _textBox(originalScriptController, '等待提取原文案', 10),
+            );
+            final rewritten = _studioFieldCard(
+              title: 'AI 改写',
+              subtitle: '选择表达风格并补充受众与产品',
+              icon: Icons.auto_fix_high_rounded,
+              child: Column(
+                children: [
+                  _styleDropdown(),
+                  const SizedBox(height: 9),
+                  Row(
+                    children: [
+                      Expanded(child: _input(audienceController, '目标人群')),
+                      const SizedBox(width: 8),
+                      Expanded(child: _input(productController, '产品 / 服务')),
+                    ],
+                  ),
+                  const SizedBox(height: 9),
+                  _stepButton('生成改写文案', rewrite),
+                  const SizedBox(height: 9),
+                  _textBox(rewrittenScriptController, 'AI 改写结果', 8),
+                ],
+              ),
+            );
+            if (stacked) {
+              return Column(
+                children: [original, const SizedBox(height: 14), rewritten],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: original),
+                const SizedBox(width: 14),
+                Expanded(child: rewritten),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _studioVoiceStep() {
+    final voiceOptions = _limitedProfileOptions(
+      voices,
+      'voice_id',
+      preferredSystemPrefix: 'clone:',
+    );
+    final voiceLabels = {
+      for (final voice in voices)
+        voice['voice_id'] as String: voice['name'] as String,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('选择已有音色直接合成，或上传 15–60 秒清晰人声创建专属声音。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '声音模型',
+          subtitle: '当前服务：$_voiceServiceText',
+          icon: Icons.record_voice_over_rounded,
+          trailing: _studioStatusPill(
+            _cloudVoiceJobActive ? '克隆中' : '服务可用',
+            _cloudVoiceJobActive ? const Color(0xFFFFA726) : studioSuccess,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '选择声音',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 7),
+              _dropdown(
+                selectedVoice,
+                voiceOptions,
+                (value) => setState(() {
+                  selectedVoice = value ?? selectedVoice;
+                  _invalidateGeneratedVoice();
+                }),
+                labels: voiceLabels,
+              ),
+              const SizedBox(height: 16),
+              _studioSlider(
+                '语速',
+                '调节口播节奏',
+                speechRate,
+                0.6,
+                1.4,
+                (value) => setState(() => speechRate = value),
+                '${speechRate.toStringAsFixed(1)}x',
+              ),
+              const SizedBox(height: 10),
+              _studioSlider(
+                '试听音量',
+                '仅影响本地试听',
+                voicePreviewVolume,
+                0,
+                1,
+                _updateVoicePreviewVolume,
+                '${(voicePreviewVolume * 100).round()}%',
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 9,
+                runSpacing: 9,
+                children: [
+                  _ghostButton('上传声音', uploadVoice),
+                  _stepButton(
+                    _cloudVoiceJobActive ? '停止克隆' : '克隆声音',
+                    _cloudVoiceJobActive ? stopCloudVoiceJob : cloneVoice,
+                    compact: true,
+                    allowWhileLoading: _cloudVoiceJobActive,
+                  ),
+                  _ghostButton(
+                    _isPlayingVoice ? '停止试听' : '试听声音',
+                    playVoice,
+                  ),
+                  _ghostButton(
+                    _isPlayingOriginalAudio ? '停止原音' : '试听原音',
+                    playOriginalAudio,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioAvatarStep() {
+    final userDigitalHumans =
+        digitalHumans.where((item) => item['built_in'] != true).toList();
+    final options = _limitedProfileOptions(
+      userDigitalHumans,
+      'digital_human_id',
+      preferredSystemPrefix: 'custom:',
+    );
+    final labels = {
+      for (final human in userDigitalHumans)
+        human['digital_human_id'] as String: human['name'] as String,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('选择已授权的数字人形象，系统会将改写文案、声音和画面合成为竖版视频。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '数字人形象',
+          subtitle: options.isEmpty ? '还没有可用形象，请先上传素材' : '点击列表选择本次出镜形象',
+          icon: Icons.face_rounded,
+          trailing: Wrap(
+            spacing: 8,
+            children: [
+              _ghostButton('上传形象', uploadDigitalHuman),
+              _ghostButton('删除', deleteDigitalHuman),
+            ],
+          ),
+          child: _digitalHumanPicker(options, labels),
+        ),
+        const SizedBox(height: 14),
+        _studioFieldCard(
+          title: '合成设置',
+          subtitle: _engineStatusText(),
+          icon: Icons.movie_creation_outlined,
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: _studioChoiceTile('单形象', '稳定生成，适合口播', true)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _studioChoiceTile('多镜头', '即将开放', false)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _stepButton(
+                renderingVideo ? '停止生成' : '生成数字人成品视频',
+                renderingVideo ? stopRender : render,
+                allowWhileLoading: renderingVideo,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioCoverStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('根据文案智能生成竖版封面，也可以上传已经设计好的 9:16 图片。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '视频封面',
+          subtitle: '建议尺寸 1080 × 1920，主体和标题保持在安全区域内',
+          icon: Icons.image_outlined,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _coverTools(),
+              const SizedBox(height: 14),
+              _coverPreview(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioMediaStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('统一配置背景音乐、字幕样式和画中画素材，所有设置会在最终合成时生效。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '声音与字幕',
+          subtitle: '在背景音乐和字幕设置之间切换',
+          icon: Icons.library_music_outlined,
+          child: Column(
+            children: [
+              _subTabs(),
+              const SizedBox(height: 18),
+              _mediaSubTabPanel(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioPublishStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('选择发布平台与账号，补充标题、正文和话题后创建发布任务。'),
+        const SizedBox(height: 18),
+        _publisherPanel(),
+      ],
+    );
+  }
+
+  Widget _studioPreviewPanel() {
+    final sourceUrl = _sourceVideoUrl;
+    final outputUrl = _outputVideoUrl;
+    final avatarUrl = selectedDigitalHuman.isEmpty
+        ? null
+        : _digitalHumanThumbnailUrl(selectedDigitalHuman);
+    final status = task?['status']?.toString() ?? '';
+    return Container(
+      margin: const EdgeInsets.fromLTRB(8, 16, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: studioBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A111827),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '实时预览',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                ),
+              ),
+              _studioStatusPill(
+                status.isEmpty ? '待生成' : _statusText(status),
+                status == 'completed'
+                    ? studioSuccess
+                    : status == 'failed'
+                        ? const Color(0xFFFF5D73)
+                        : studioPrimary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '所有步骤的修改都会汇总到最终成片',
+            style: TextStyle(color: studioMuted, fontSize: 11),
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: 9 / 16,
+                child: Container(
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF171925),
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: const Color(0xFF24283B)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x26000000),
+                        blurRadius: 20,
+                        offset: Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: outputUrl != null
+                      ? _OutputVideoPreview(url: outputUrl)
+                      : avatarUrl != null
+                          ? _digitalHumanPreviewImage(avatarUrl)
+                          : sourceUrl != null
+                              ? _OutputVideoPreview(url: sourceUrl)
+                              : _previewPlaceholder(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7F8FC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: studioBorder),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.smart_display_outlined,
+                  color: studioPrimary,
+                  size: 20,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        outputUrl != null ? '成品视频已就绪' : '竖版视频 · 9:16',
+                        style: const TextStyle(
+                          color: studioInk,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        outputUrl != null ? _cloudOutputLabel : '等待生成后可预览与下载',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(color: studioMuted, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '预览成品',
+                  onPressed: outputUrl == null ? null : previewOutputVideo,
+                  icon: const Icon(Icons.play_circle_outline_rounded),
+                  color: studioPrimary,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioTip(String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4F5FF),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: const Color(0xFFE1E2FF)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.lightbulb_outline_rounded,
+              color: studioPrimary, size: 18),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: Color(0xFF5C6380),
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioFieldCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Widget child,
+    Widget? trailing,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: studioBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F2F7),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, color: const Color(0xFF626A80), size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: studioInk,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: studioMuted, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) trailing,
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _studioStatusPill(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioSlider(
+    String label,
+    String subtitle,
+    double value,
+    double min,
+    double max,
+    ValueChanged<double> onChanged,
+    String valueText,
+  ) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 90,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w900)),
+              Text(subtitle,
+                  style: const TextStyle(color: studioMuted, fontSize: 9)),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
+        ),
+        Container(
+          width: 54,
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F5F8),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            valueText,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioChoiceTile(String title, String subtitle, bool active) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+      decoration: BoxDecoration(
+        color: active ? const Color(0xFFF2F3FF) : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(
+          color: active ? const Color(0xFFC9CCFF) : studioBorder,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            active ? Icons.radio_button_checked : Icons.lock_outline_rounded,
+            color: active ? studioPrimary : studioMuted,
+            size: 19,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w900)),
+                Text(subtitle,
+                    style: const TextStyle(color: studioMuted, fontSize: 9)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -4852,8 +6133,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Container(
       width: compact ? 76 : 184,
       decoration: const BoxDecoration(
-        color: Color(0xFF151624),
-        border: Border(right: BorderSide(color: Color(0xFF292B3E))),
+        color: Colors.white,
+        border: Border(right: BorderSide(color: studioBorder)),
       ),
       child: SafeArea(
         child: Column(
@@ -4867,11 +6148,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     width: 38,
                     height: 38,
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [cyan, pink]),
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [studioPrimary, Color(0xFF7C5CFC)],
+                      ),
                       borderRadius: BorderRadius.circular(11),
                       boxShadow: [
                         BoxShadow(
-                          color: purpleLine.withValues(alpha: 0.28),
+                          color: studioPrimary.withValues(alpha: 0.18),
                           blurRadius: 16,
                         ),
                       ],
@@ -4883,8 +6168,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     const SizedBox(width: 10),
                     const Text(
                       '杰速口播',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                      style: TextStyle(
+                        color: studioInk,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ],
                 ],
@@ -4927,7 +6215,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       const SizedBox(width: 8),
                       Text(localApiOnline ? '服务已连接' : '服务未连接',
                           style: const TextStyle(
-                              color: Colors.white60, fontSize: 12)),
+                              color: studioMuted, fontSize: 12)),
                     ],
                   ],
                 ),
@@ -4965,19 +6253,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             height: 48,
             padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 13),
             decoration: BoxDecoration(
-              gradient: active
-                  ? LinearGradient(
-                      colors: [
-                        const Color(0xFF5B3EA8).withValues(alpha: 0.72),
-                        const Color(0xFF39224D).withValues(alpha: 0.82),
-                      ],
-                    )
-                  : null,
+              color: active ? const Color(0xFFF0F1FF) : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: active
-                    ? purpleLine.withValues(alpha: 0.65)
-                    : Colors.transparent,
+                color: active ? const Color(0xFFD8DAFF) : Colors.transparent,
               ),
             ),
             child: Row(
@@ -4985,14 +6264,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   compact ? MainAxisAlignment.center : MainAxisAlignment.start,
               children: [
                 Icon(icon,
-                    size: 20,
-                    color: active ? const Color(0xFFE8D8FF) : Colors.white54),
+                    size: 20, color: active ? studioPrimary : studioMuted),
                 if (!compact) ...[
                   const SizedBox(width: 12),
                   Text(
                     label,
                     style: TextStyle(
-                      color: active ? Colors.white : Colors.white70,
+                      color: active ? studioPrimaryDark : studioInk,
                       fontWeight: active ? FontWeight.w800 : FontWeight.w600,
                     ),
                   ),
@@ -5007,11 +6285,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Widget _workspaceTopBar() {
     return Container(
-      height: 70,
+      height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 20),
       decoration: const BoxDecoration(
-        color: Color(0xFF171824),
-        border: Border(bottom: BorderSide(color: Color(0xFF292B3E))),
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: studioBorder)),
       ),
       child: Row(
         children: [
@@ -5037,15 +6315,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               height: 40,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: panelBg2,
+                color: const Color(0xFFF7F8FC),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: studioBorder),
               ),
               child: Row(
                 children: [
                   const CircleAvatar(
                     radius: 13,
-                    backgroundColor: Color(0xFF7046D9),
+                    backgroundColor: studioPrimary,
                     child: Icon(Icons.person, size: 16, color: Colors.white),
                   ),
                   const SizedBox(width: 8),
@@ -5053,7 +6331,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     _cloudAccountBound
                         ? (_cloudUser?['email']?.toString() ?? '云端账户')
                         : '登录 / 注册',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                      color: studioInk,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
               ),
@@ -5074,7 +6355,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       tooltip: tooltip,
       onPressed: loading ? null : onPressed,
       icon: Icon(icon, size: 20),
-      style: IconButton.styleFrom(backgroundColor: panelBg2),
+      style: IconButton.styleFrom(
+        backgroundColor: const Color(0xFFF1F2F7),
+        foregroundColor: const Color(0xFF626A80),
+      ),
     );
   }
 
@@ -5088,9 +6372,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
       decoration: BoxDecoration(
-        color: const Color(0xFF181A27),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: const Color(0xFF2D3044)),
+        border: Border.all(color: studioBorder),
       ),
       child: Row(
         children: [
@@ -5098,7 +6382,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [cyan, pink]),
+              gradient: const LinearGradient(
+                colors: [studioPrimary, Color(0xFF7C5CFC)],
+              ),
               borderRadius: BorderRadius.circular(11),
             ),
             child: Icon(icon, color: Colors.white, size: 23),
@@ -5110,11 +6396,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               children: [
                 Text(title,
                     style: const TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.w900)),
+                      color: studioInk,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                    )),
                 const SizedBox(height: 3),
                 Text(subtitle,
-                    style:
-                        const TextStyle(color: Colors.white54, fontSize: 13)),
+                    style: const TextStyle(color: studioMuted, fontSize: 13)),
               ],
             ),
           ),
@@ -6548,19 +7836,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _generationModeSelector() {
     final isCloud = generationMode == 'cloud';
     return Container(
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      height: 50,
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: panelBg2,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+        color: const Color(0xFFF7F8FC),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: studioBorder),
       ),
       child: Row(
         children: [
           const Text(
             '运行模式',
             style: TextStyle(
-              color: Colors.white70,
+              color: studioInk,
               fontWeight: FontWeight.w900,
             ),
           ),
@@ -6586,7 +7874,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Colors.white70,
+                color: studioMuted,
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -6608,21 +7896,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       borderRadius: BorderRadius.circular(8),
       onTap: canTap ? onTap : null,
       child: Container(
-        height: 40,
+        height: 36,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: active
-              ? const Color(0xFF34254A)
+              ? const Color(0xFFEEF0FF)
               : enabled
-                  ? panelBg
-                  : const Color(0xFF252735),
+                  ? Colors.white
+                  : const Color(0xFFF0F1F4),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: active
-                ? pink
+                ? const Color(0xFFC9CCFF)
                 : enabled
-                    ? Colors.white24
-                    : Colors.white12,
+                    ? studioBorder
+                    : const Color(0xFFE4E6EB),
             width: active ? 1.4 : 1,
           ),
         ),
@@ -6633,16 +7921,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               icon,
               size: 16,
               color: active
-                  ? pink
+                  ? studioPrimary
                   : enabled
-                      ? Colors.white54
-                      : Colors.white30,
+                      ? studioMuted
+                      : const Color(0xFFB4B8C3),
             ),
             const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
-                color: enabled ? Colors.white : Colors.white38,
+                color: enabled ? studioInk : const Color(0xFFA7ABB6),
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -6652,6 +7940,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // Legacy three-column layout kept as a fallback while the new workflow UI
+  // reuses its lower-level controls.
+  // ignore: unused_element
   Widget _leftPanel() {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(10, 10, 5, 14),
@@ -6779,6 +8070,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _centerPanel() {
     final voiceOptions = _limitedProfileOptions(voices, 'voice_id',
         preferredSystemPrefix: 'clone:');
@@ -6877,6 +8169,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _rightPanel() {
     final sourceUrl = _sourceVideoUrl;
     final outputUrl = _outputVideoUrl;
@@ -6994,6 +8287,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _coverPreview() {
+    final light = _studioLightControls;
     final path = _currentCoverPath;
     final label = path == null ? '封面将自动生成' : _fileNameFromPath(path);
     return Column(
@@ -7007,21 +8301,30 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               child: Container(
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF25283A),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+                  color:
+                      light ? const Color(0xFFF0F2F6) : const Color(0xFF25283A),
+                  borderRadius: BorderRadius.circular(light ? 12 : 8),
+                  border: Border.all(
+                    color: light
+                        ? studioBorder
+                        : purpleLine.withValues(alpha: 0.5),
+                  ),
                 ),
                 child: path == null
-                    ? const Center(
-                        child:
-                            Icon(Icons.image_outlined, color: Colors.white54),
+                    ? Center(
+                        child: Icon(
+                          Icons.image_outlined,
+                          color: light ? studioMuted : Colors.white54,
+                        ),
                       )
                     : Image.file(
                         File(path),
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Center(
-                          child:
-                              Icon(Icons.broken_image, color: Colors.white70),
+                        errorBuilder: (_, __, ___) => Center(
+                          child: Icon(
+                            Icons.broken_image,
+                            color: light ? studioMuted : Colors.white70,
+                          ),
                         ),
                       ),
               ),
@@ -7046,6 +8349,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _publisherPanel() {
+    final light = _studioLightControls;
     const platformOptions = ['douyin', 'kuaishou', 'xiaohongshu', 'shipinhao'];
     final visibleAccounts = publisherAccounts
         .where((account) => account['platform'] == selectedPublishPlatform)
@@ -7073,7 +8377,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             children: [
               const Expanded(
                 child: Text(
-                  '7. 视频发布',
+                  '发布设置',
                   style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                 ),
               ),
@@ -7151,9 +8455,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: const Color(0xFF34223C),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: pink.withValues(alpha: 0.55)),
+              color: light ? const Color(0xFFF8F7FF) : const Color(0xFF34223C),
+              borderRadius: BorderRadius.circular(light ? 12 : 8),
+              border: Border.all(
+                color: light
+                    ? const Color(0xFFE2E0FF)
+                    : pink.withValues(alpha: 0.55),
+              ),
             ),
             child: Column(
               children: [
@@ -7235,6 +8543,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _publishModeChip(String value, String label, IconData icon) {
+    final light = _studioLightControls;
     final active = selectedPublishMode == value;
     return InkWell(
       onTap: () => setState(() => selectedPublishMode = value),
@@ -7243,16 +8552,38 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         height: 42,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: active ? const Color(0xFF25315A) : panelBg2,
-          borderRadius: BorderRadius.circular(8),
+          color: active
+              ? light
+                  ? const Color(0xFFEEF0FF)
+                  : const Color(0xFF25315A)
+              : light
+                  ? Colors.white
+                  : panelBg2,
+          borderRadius: BorderRadius.circular(light ? 10 : 8),
           border: Border.all(
-            color: active ? cyan : purpleLine.withValues(alpha: 0.45),
+            color: active
+                ? light
+                    ? studioPrimary
+                    : cyan
+                : light
+                    ? studioBorder
+                    : purpleLine.withValues(alpha: 0.45),
           ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 17, color: active ? cyan : Colors.white54),
+            Icon(
+              icon,
+              size: 17,
+              color: active
+                  ? light
+                      ? studioPrimary
+                      : cyan
+                  : light
+                      ? studioMuted
+                      : Colors.white54,
+            ),
             const SizedBox(width: 6),
             Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
           ],
@@ -7386,12 +8717,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _panel({required Widget child}) {
+    final light = _studioLightControls;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: panelBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.35)),
+        color: light ? Colors.white : panelBg,
+        borderRadius: BorderRadius.circular(light ? 14 : 10),
+        border: Border.all(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.35),
+        ),
       ),
       child: child,
     );
@@ -7540,19 +8874,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   InputDecoration _inputDecoration(String hint) {
+    final light = _studioLightControls;
     return InputDecoration(
       hintText: hint.isEmpty ? null : hint,
       filled: true,
-      fillColor: panelBg2,
+      fillColor: light ? const Color(0xFFF8F9FC) : panelBg2,
+      hintStyle: light ? const TextStyle(color: Color(0xFFA1A7B7)) : null,
       isDense: true,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(7)),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+      ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(7),
-        borderSide: BorderSide(color: purpleLine.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+        borderSide: BorderSide(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.45),
+        ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(7),
-        borderSide: const BorderSide(color: cyan, width: 1.2),
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+        borderSide: BorderSide(
+          color: light ? studioPrimary : cyan,
+          width: 1.2,
+        ),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     );
@@ -7565,11 +8908,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     bool allowWhileLoading = false,
   }) {
     final disabled = loading && !allowWhileLoading;
+    final light = _studioLightControls;
     final child = DecoratedBox(
       decoration: BoxDecoration(
-        gradient: disabled ? null : const LinearGradient(colors: [cyan, pink]),
-        color: disabled ? Colors.white12 : null,
-        borderRadius: BorderRadius.circular(8),
+        gradient: disabled || light
+            ? null
+            : const LinearGradient(colors: [cyan, pink]),
+        color: disabled
+            ? (light ? const Color(0xFFE3E5EB) : Colors.white12)
+            : light
+                ? studioPrimary
+                : null,
+        borderRadius: BorderRadius.circular(light ? 10 : 8),
       ),
       child: ElevatedButton(
         onPressed: disabled ? null : onPressed,
@@ -7582,7 +8932,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           disabledForegroundColor: Colors.white54,
           minimumSize: Size(compact ? 96 : 0, 42),
           padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 18),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(light ? 10 : 8),
+          ),
         ),
         child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
       ),
@@ -7591,15 +8943,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _ghostButton(String text, VoidCallback onPressed) {
+    final light = _studioLightControls;
     return OutlinedButton(
       onPressed: loading ? null : onPressed,
       style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        side: BorderSide(color: purpleLine.withValues(alpha: 0.8)),
-        backgroundColor: panelBg2,
+        foregroundColor: light ? studioInk : Colors.white,
+        side: BorderSide(
+          color: light
+              ? const Color(0xFFD9DCE5)
+              : purpleLine.withValues(alpha: 0.8),
+        ),
+        backgroundColor: light ? Colors.white : panelBg2,
         minimumSize: const Size(72, 40),
         padding: const EdgeInsets.symmetric(horizontal: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(light ? 10 : 8),
+        ),
       ),
       child: Text(text, style: const TextStyle(fontWeight: FontWeight.w800)),
     );
@@ -7643,16 +9002,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _readonlyBox(String text) {
+    final light = _studioLightControls;
     return Container(
       height: 42,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: panelBg2,
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.4)),
+        color: light ? const Color(0xFFF8F9FC) : panelBg2,
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+        border: Border.all(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.4),
+        ),
       ),
-      child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: light ? const TextStyle(color: studioMuted) : null,
+      ),
     );
   }
 
@@ -7687,6 +9054,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     List<String> options,
     Map<String, String> labels,
   ) {
+    final light = _studioLightControls;
     final visibleOptions = options.where((id) => id.isNotEmpty).toList();
     if (visibleOptions.isEmpty) {
       return _readonlyBox('请上传或选择数字人素?');
@@ -7696,9 +9064,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Container(
       height: 72.0 * visibleRows + dividerHeight,
       decoration: BoxDecoration(
-        color: const Color(0xFF171A28),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.45)),
+        color: light ? const Color(0xFFF8F9FC) : const Color(0xFF171A28),
+        borderRadius: BorderRadius.circular(light ? 11 : 8),
+        border: Border.all(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.45),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: ListView.separated(
@@ -7710,13 +9080,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         },
         separatorBuilder: (_, __) => Divider(
           height: 1,
-          color: Colors.white.withValues(alpha: 0.08),
+          color: light ? studioBorder : Colors.white.withValues(alpha: 0.08),
         ),
       ),
     );
   }
 
   Widget _digitalHumanRow(String digitalHumanId, String name) {
+    final light = _studioLightControls;
     final active = selectedDigitalHuman == digitalHumanId;
     final profile = _digitalHumanProfile(digitalHumanId);
     final builtIn = profile?['built_in'] == true;
@@ -7726,10 +9097,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         height: 72,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? const Color(0xFF262B47) : Colors.transparent,
+          color: active
+              ? light
+                  ? const Color(0xFFEEF0FF)
+                  : const Color(0xFF262B47)
+              : Colors.transparent,
           border: Border(
             left: BorderSide(
-              color: active ? cyan : Colors.transparent,
+              color: active
+                  ? light
+                      ? studioPrimary
+                      : cyan
+                  : Colors.transparent,
               width: 3,
             ),
           ),
@@ -7746,10 +9125,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   key: ValueKey(_digitalHumanThumbnailUrl(digitalHumanId)),
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => Container(
-                    color: const Color(0xFF24283A),
-                    child: const Icon(
+                    color: light
+                        ? const Color(0xFFEDEFF4)
+                        : const Color(0xFF24283A),
+                    child: Icon(
                       Icons.person,
-                      color: Colors.white54,
+                      color: light ? studioMuted : Colors.white54,
                       size: 24,
                     ),
                   ),
@@ -7773,8 +9154,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     builtIn ? '系统模板' : '已上传形象',
                     style: TextStyle(
                       color: builtIn
-                          ? const Color(0xFFBFA8FF)
-                          : const Color(0xFF55E6A5),
+                          ? light
+                              ? studioPrimary
+                              : const Color(0xFFBFA8FF)
+                          : light
+                              ? studioSuccess
+                              : const Color(0xFF55E6A5),
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                     ),
@@ -7783,8 +9168,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               ),
             ),
             if (active)
-              const Icon(Icons.check_circle,
-                  size: 18, color: Color(0xFF55E6A5)),
+              Icon(
+                Icons.check_circle,
+                size: 18,
+                color: light ? studioPrimary : const Color(0xFF55E6A5),
+              ),
           ],
         ),
       ),
@@ -7864,7 +9252,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               : selectedBgm.startsWith('custom:')
                   ? '将使用你上传的背景音乐，并按音量混入最终视频。'
                   : '将使用模板背景音乐，并按音量混入最终视频。',
-          style: const TextStyle(color: Colors.white60, fontSize: 12),
+          style: TextStyle(
+            color: _studioLightControls ? studioMuted : Colors.white60,
+            fontSize: 12,
+          ),
         ),
       ],
     );
@@ -7913,16 +9304,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ],
         ),
         const SizedBox(height: 10),
-        Row(
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Checkbox(
-              value: subtitlesEnabled,
-              onChanged: (value) =>
-                  setState(() => subtitlesEnabled = value ?? subtitlesEnabled),
+            SizedBox(
+              width: 116,
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: subtitlesEnabled,
+                    onChanged: (value) => setState(
+                      () => subtitlesEnabled = value ?? subtitlesEnabled,
+                    ),
+                  ),
+                  const Text('启用字幕'),
+                ],
+              ),
             ),
-            const Text('字幕 启用'),
-            const SizedBox(width: 12),
-            Expanded(
+            SizedBox(
+              width: 210,
               child: _dropdown(
                 selectedSubtitleFont,
                 _subtitleFontOptions,
@@ -7933,16 +9335,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 labels: _subtitleFontLabels,
               ),
             ),
-            const SizedBox(width: 8),
             _ghostButton('刷新', refreshSubtitlePreview),
-            const SizedBox(width: 8),
-            const Text('字幕颜色'),
-            const SizedBox(width: 8),
-            _colorSquare(subtitleColor),
-            const SizedBox(width: 8),
-            const Text('描边颜色'),
-            const SizedBox(width: 8),
-            _colorSquare(subtitleOutlineColor),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('字幕颜色'),
+                const SizedBox(width: 7),
+                _colorSquare(subtitleColor),
+              ],
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('描边颜色'),
+                const SizedBox(width: 7),
+                _colorSquare(subtitleOutlineColor),
+              ],
+            ),
           ],
         ),
         _labeledSlider(
@@ -8292,6 +9701,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _subTabs() {
+    final light = _studioLightControls;
     const items = [
       ('bgm', Icons.music_note, '背景音乐'),
       ('subtitles', Icons.closed_caption_outlined, '字幕及画中画'),
@@ -8309,8 +9719,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     border: Border(
                       bottom: BorderSide(
                         color: selectedMediaSubTab == item.$1
-                            ? const Color(0xFFD4A4FF)
-                            : const Color(0xFF414866),
+                            ? light
+                                ? studioPrimary
+                                : const Color(0xFFD4A4FF)
+                            : light
+                                ? studioBorder
+                                : const Color(0xFF414866),
                         width: selectedMediaSubTab == item.$1 ? 2 : 1,
                       ),
                     ),
@@ -8318,7 +9732,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(item.$2, size: 17, color: const Color(0xFFBFA8FF)),
+                      Icon(
+                        item.$2,
+                        size: 17,
+                        color: selectedMediaSubTab == item.$1
+                            ? light
+                                ? studioPrimary
+                                : const Color(0xFFBFA8FF)
+                            : light
+                                ? studioMuted
+                                : const Color(0xFFBFA8FF),
+                      ),
                       const SizedBox(width: 6),
                       Text(item.$3,
                           style: const TextStyle(fontWeight: FontWeight.w800)),

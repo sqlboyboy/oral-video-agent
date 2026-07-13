@@ -1045,6 +1045,101 @@ class QueueStore:
                 "wallet": self._wallet_for_user(db, user["user_id"]),
             }
 
+    def ensure_mobile_access(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        max_activations: int,
+    ) -> dict[str, Any]:
+        """Provision internal cloud access for a registered mobile device.
+
+        Mobile users never receive this internal license key.  Keeping the
+        activation record server-side lets the existing cloud-job authorization
+        continue to require both a valid account session and an approved device,
+        without exposing an activation-code step in the Android client.
+        """
+
+        now = utc_now()
+        activation_limit = max(1, int(max_activations))
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            user = self._user_for_id(db, user_id)
+            device = db.execute(
+                "SELECT * FROM devices WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
+                (device_id, user_id),
+            ).fetchone()
+            if device is None:
+                raise KeyError(device_id)
+            if user["status"] != "active":
+                raise PermissionError("user account is disabled")
+
+            license_row = db.execute(
+                """
+                SELECT * FROM license_keys
+                WHERE assigned_user_id = ? AND license_key LIKE 'mobile_%'
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if license_row is None:
+                license_key = f"mobile_{secrets.token_urlsafe(24)}"
+                db.execute(
+                    """
+                    INSERT INTO license_keys (
+                        license_key, status, max_activations, grant_points,
+                        assigned_user_id, created_at
+                    )
+                    VALUES (?, 'active', ?, 0, ?, ?)
+                    """,
+                    (license_key, activation_limit, user_id, now),
+                )
+            else:
+                if license_row["status"] != "active":
+                    raise PermissionError("mobile access is disabled")
+                license_key = str(license_row["license_key"])
+                if int(license_row["max_activations"]) < activation_limit:
+                    db.execute(
+                        "UPDATE license_keys SET max_activations = ? WHERE license_key = ?",
+                        (activation_limit, license_key),
+                    )
+
+            existing = db.execute(
+                """
+                SELECT activation_id FROM license_activations
+                WHERE license_key = ? AND device_id = ?
+                """,
+                (license_key, device_id),
+            ).fetchone()
+            if existing is None:
+                active_count = db.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM license_activations a
+                    JOIN devices d ON d.device_id = a.device_id
+                    WHERE a.license_key = ? AND d.revoked_at IS NULL
+                    """,
+                    (license_key,),
+                ).fetchone()["count"]
+                if int(active_count) >= activation_limit:
+                    raise PermissionError("mobile device limit reached")
+                db.execute(
+                    """
+                    INSERT INTO license_activations (
+                        activation_id, license_key, user_id, device_id, activated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (str(uuid4()), license_key, user_id, device_id, now),
+                )
+
+            return {
+                "activated": True,
+                "device": self._device_for_id(db, device_id),
+                "activated_at": now,
+            }
+
     def activate_user_license(
         self,
         *,
@@ -2962,6 +3057,19 @@ class QueueStore:
                 LIMIT ?
                 """,
                 tuple(params),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]
+
+    def list_client_jobs(self, *, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM render_jobs
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (user_id, max(1, min(limit, 100))),
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
 

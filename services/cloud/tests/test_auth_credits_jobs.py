@@ -343,6 +343,63 @@ def test_software_activation_required_before_email_account_and_cloud_job(monkeyp
     assert estimated.json()["enough_credits"] is False
 
 
+def test_android_registration_does_not_require_activation_code(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    fingerprint = "android-installation-1234567890"
+
+    sent = client.post(
+        "/api/mobile/auth/email-code",
+        json={
+            "email": "android@example.com",
+            "purpose": "register",
+            "device_fingerprint": fingerprint,
+        },
+    )
+    assert sent.status_code == 200, sent.text
+
+    registered = client.post(
+        "/api/mobile/auth/register",
+        json={
+            "email": "android@example.com",
+            "code": sent.json()["debug_code"],
+            "password": "mobile-pass-123",
+            "device_fingerprint": fingerprint,
+            "device_name": "Android phone",
+        },
+    )
+    assert registered.status_code == 200, registered.text
+    body = registered.json()
+    token = body["device_token"]
+    assert body["user"]["email"] == "android@example.com"
+    assert body["user"]["license_key"] is None
+    assert "mobile_" not in registered.text
+
+    headers = _device_headers(token)
+    assert client.get("/api/client/me", headers=headers).status_code == 200
+    assert client.get("/api/client/credits/ledger", headers=headers).status_code == 200
+    jobs = client.get("/api/client/jobs", headers=headers)
+    assert jobs.status_code == 200
+    assert jobs.json()["items"] == []
+
+    logged_in = client.post(
+        "/api/mobile/auth/password-login",
+        json={
+            "email": "android@example.com",
+            "password": "mobile-pass-123",
+            "device_fingerprint": fingerprint,
+            "device_name": "Android phone",
+        },
+    )
+    assert logged_in.status_code == 200, logged_in.text
+    assert logged_in.json()["device_token"]
+
+    desktop_without_activation = client.post(
+        "/api/client/auth/email-code",
+        json={"email": "desktop@example.com", "purpose": "register"},
+    )
+    assert desktop_without_activation.status_code == 401
+
+
 def test_client_rewrite_runs_directly_without_queue(monkeypatch, tmp_path):
     monkeypatch.setenv("REWRITE_PROVIDER", "placeholder")
     client = _client(monkeypatch, tmp_path)
