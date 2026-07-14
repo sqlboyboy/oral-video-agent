@@ -476,19 +476,33 @@ extension _MobileWorkbench on _WorkbenchPageState {
           const SizedBox(height: 12),
           _mobileCard(
             number: '4',
-            title: '生成数字人成片',
+            title: '选择数字人形象',
             subtitle: '选择正面、清晰、画面稳定的形象视频',
             icon: Icons.smart_display_rounded,
+            child: _mobileFileBar(
+              label: mobileDigitalHumanName.isEmpty
+                  ? '尚未选择形象视频'
+                  : mobileDigitalHumanName,
+              buttonText: '选择形象',
+              onPressed: uploadDigitalHuman,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _mobileCard(
+            number: '5',
+            title: '成片包装',
+            subtitle: '简单设置字幕、BGM、画中画和封面',
+            icon: Icons.auto_fix_high_rounded,
+            child: _mobilePackagingControls(),
+          ),
+          const SizedBox(height: 12),
+          _mobileCard(
+            number: '6',
+            title: '生成数字人成片',
+            subtitle: '确认时长后提交云端任务',
+            icon: Icons.movie_creation_outlined,
             child: Column(
               children: [
-                _mobileFileBar(
-                  label: mobileDigitalHumanName.isEmpty
-                      ? '尚未选择形象视频'
-                      : mobileDigitalHumanName,
-                  buttonText: '选择形象',
-                  onPressed: uploadDigitalHuman,
-                ),
-                const SizedBox(height: 10),
                 TextField(
                   controller: cloudDurationController,
                   keyboardType: TextInputType.number,
@@ -529,6 +543,212 @@ extension _MobileWorkbench on _WorkbenchPageState {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _mobilePackagingControls() {
+    final hasBgm = selectedBgm != 'none' && mobileBgmPath.isNotEmpty;
+    final currentCover = _currentCoverPath;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: subtitlesEnabled,
+          onChanged: loading
+              ? null
+              : (value) => _updateMobile(() => subtitlesEnabled = value),
+          title:
+              const Text('显示字幕', style: TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: const Text('默认黄字黑边，位于画面下方'),
+        ),
+        if (subtitlesEnabled) ...[
+          Row(
+            children: [
+              const Text('字幕大小', style: TextStyle(color: Colors.white70)),
+              Expanded(
+                child: Slider(
+                  min: 10,
+                  max: 24,
+                  divisions: 14,
+                  value: subtitleSize.clamp(10.0, 24.0).toDouble(),
+                  onChanged: loading
+                      ? null
+                      : (value) => _updateMobile(() => subtitleSize = value),
+                ),
+              ),
+              Text('${subtitleSize.round()}'),
+            ],
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              ChoiceChip(
+                label: const Text('黄字'),
+                selected: subtitleColor.toARGB32() ==
+                    const Color(0xFFFFE600).toARGB32(),
+                onSelected: loading
+                    ? null
+                    : (_) => _updateMobile(
+                          () => subtitleColor = const Color(0xFFFFE600),
+                        ),
+              ),
+              ChoiceChip(
+                label: const Text('白字'),
+                selected: subtitleColor.toARGB32() == Colors.white.toARGB32(),
+                onSelected: loading
+                    ? null
+                    : (_) => _updateMobile(() => subtitleColor = Colors.white),
+              ),
+            ],
+          ),
+        ],
+        const Divider(height: 28),
+        const Text('背景音乐', style: TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        _mobileFileBar(
+          label: hasBgm ? mobileBgmName : '不使用背景音乐',
+          buttonText: hasBgm ? '更换 BGM' : '选择 BGM',
+          onPressed: uploadBgm,
+        ),
+        if (hasBgm) ...[
+          Row(
+            children: [
+              const Text('BGM 音量', style: TextStyle(color: Colors.white70)),
+              Expanded(
+                child: Slider(
+                  value: bgmVolume,
+                  onChanged: loading
+                      ? null
+                      : (value) => _updateMobile(() => bgmVolume = value),
+                ),
+              ),
+              Text('${(bgmVolume * 100).round()}%'),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: loading
+                  ? null
+                  : () => _updateMobile(() {
+                        mobileBgmPath = '';
+                        mobileBgmName = '';
+                        selectedBgm = 'none';
+                      }),
+              icon: const Icon(Icons.delete_outline_rounded),
+              label: const Text('移除 BGM'),
+            ),
+          ),
+        ],
+        const Divider(height: 28),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: pipEnabled,
+          onChanged: loading
+              ? null
+              : (value) => _updateMobile(() => pipEnabled = value),
+          title:
+              const Text('画中画', style: TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: const Text('将图片或视频叠加到数字人画面'),
+        ),
+        if (pipEnabled) ...[
+          _mobileFileBar(
+            label: pipAssetName.isEmpty ? '尚未选择画中画素材' : pipAssetName,
+            buttonText: '选择素材',
+            onPressed: uploadPipAsset,
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            key: ValueKey('mobile-pip-$pipPosition'),
+            initialValue: pipPosition,
+            decoration: _mobileInputDecoration('画中画位置'),
+            items: const {
+              'top_left': '左上',
+              'top_right': '右上',
+              'bottom_left': '左下',
+              'bottom_right': '右下',
+              'fullscreen': '全屏',
+            }
+                .entries
+                .map((entry) => DropdownMenuItem(
+                      value: entry.key,
+                      child: Text(entry.value),
+                    ))
+                .toList(),
+            onChanged: loading
+                ? null
+                : (value) => _updateMobile(
+                      () => pipPosition = value ?? pipPosition,
+                    ),
+          ),
+          if (pipPosition != 'fullscreen')
+            Row(
+              children: [
+                const Text('画中画大小', style: TextStyle(color: Colors.white70)),
+                Expanded(
+                  child: Slider(
+                    min: 0.18,
+                    max: 0.55,
+                    value: pipScale.clamp(0.18, 0.55).toDouble(),
+                    onChanged: loading
+                        ? null
+                        : (value) => _updateMobile(() => pipScale = value),
+                  ),
+                ),
+                Text('${(pipScale * 100).round()}%'),
+              ],
+            ),
+        ],
+        const Divider(height: 28),
+        const Text('视频封面', style: TextStyle(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 5),
+        const Text(
+          '可一键生成，也可选择 9:16 图片',
+          style: TextStyle(color: Colors.white54, fontSize: 12),
+        ),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: loading ? null : generateCover,
+              icon: const Icon(Icons.auto_awesome_rounded),
+              label: const Text('生成封面'),
+            ),
+            OutlinedButton.icon(
+              onPressed: loading ? null : uploadCover,
+              icon: const Icon(Icons.add_photo_alternate_outlined),
+              label: const Text('选择图片'),
+            ),
+          ],
+        ),
+        if (currentCover != null) ...[
+          const SizedBox(height: 10),
+          Center(
+            child: SizedBox(
+              height: 180,
+              child: AspectRatio(
+                aspectRatio: 9 / 16,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.file(
+                    File(currentCover),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const ColoredBox(
+                      color: Colors.white10,
+                      child: Icon(Icons.broken_image_outlined),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -795,6 +1015,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
     required bool renderActive,
     required double progress,
   }) {
+    final cover = isOutput ? _currentCoverPath : null;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -829,6 +1050,27 @@ extension _MobileWorkbench on _WorkbenchPageState {
                       ),
                       child: Stack(
                         children: [
+                          if (cover != null) ...[
+                            Positioned.fill(
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(18),
+                                child: Image.file(
+                                  File(cover),
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) =>
+                                      const SizedBox.shrink(),
+                                ),
+                              ),
+                            ),
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(18),
+                                  color: Colors.black26,
+                                ),
+                              ),
+                            ),
+                          ],
                           Positioned(
                             left: 14,
                             top: 14,

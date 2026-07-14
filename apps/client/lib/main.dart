@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
@@ -245,6 +246,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String mobileVoiceReferenceName = '';
   String mobileDigitalHumanPath = '';
   String mobileDigitalHumanName = '';
+  String mobileBgmPath = '';
+  String mobileBgmName = '';
   String cloudVoiceJobId = '';
   String generatedVoiceKey = '';
   String coverPath = '';
@@ -2454,6 +2457,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先生成文案后再生成封面');
       return;
     }
+    if (_isAndroidClient) {
+      await _runBusy(() async {
+        final generatedPath = await _generateMobileCoverFile(script);
+        if (!mounted) return;
+        setState(() {
+          coverPath = generatedPath;
+          outputRefresh++;
+          message = '封面已生成';
+          messageIsError = false;
+        });
+      });
+      return;
+    }
     await _runBusy(() async {
       if (taskId != null && !taskId.startsWith('cloud-')) {
         final res =
@@ -2494,12 +2510,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> uploadCover() async {
     if (!_ensureSoftwareActivated()) return;
+    const supportedExtensions = ['png', 'jpg', 'jpeg', 'webp'];
     final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['png', 'jpg', 'jpeg', 'webp'],
+      type: _isAndroidClient ? FileType.any : FileType.custom,
+      allowedExtensions: _isAndroidClient ? null : supportedExtensions,
     );
-    final path = picked?.files.single.path;
-    if (path == null) return;
+    final file = picked?.files.single;
+    final path = file?.path;
+    if (path == null || file == null) return;
+    final lowerName = file.name.toLowerCase();
+    if (!supportedExtensions.any((ext) => lowerName.endsWith('.$ext'))) {
+      showError('请选择 PNG、JPG 或 WEBP 封面图片');
+      return;
+    }
     final taskId = task?['task_id'] as String?;
     if (taskId == null || taskId.startsWith('cloud-')) {
       setState(() {
@@ -2529,6 +2552,134 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         messageIsError = false;
       });
     });
+  }
+
+  Future<String> _generateMobileCoverFile(String script) async {
+    const width = 720;
+    const height = 1280;
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    const bounds = Rect.fromLTWH(0, 0, 720, 1280);
+    final background = Paint()
+      ..shader = ui.Gradient.linear(
+        const Offset(0, 0),
+        const Offset(720, 1280),
+        const [Color(0xFF15182A), Color(0xFF4B2C78), Color(0xFF161724)],
+        const [0, 0.52, 1],
+      );
+    canvas.drawRect(bounds, background);
+    canvas.drawCircle(
+      const Offset(565, 215),
+      230,
+      Paint()..color = const Color(0xFF36A8FF).withValues(alpha: 0.18),
+    );
+    canvas.drawCircle(
+      const Offset(105, 1080),
+      260,
+      Paint()..color = const Color(0xFFFF4FB8).withValues(alpha: 0.16),
+    );
+
+    final panel = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(48, 160, 624, 520),
+      const Radius.circular(34),
+    );
+    canvas.drawRRect(
+        panel, Paint()..color = Colors.black.withValues(alpha: 0.48));
+    canvas.drawRRect(
+      panel,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..color = const Color(0xFFFF67C8).withValues(alpha: 0.8),
+    );
+
+    final sourceTitle = publishTitleController.text.trim().isNotEmpty
+        ? publishTitleController.text.trim()
+        : script.trim().replaceAll(RegExp(r'\s+'), '');
+    final title = sourceTitle.isEmpty ? '爆款口播视频' : sourceTitle;
+    final titlePainter = TextPainter(
+      text: TextSpan(
+        text: title,
+        style: const TextStyle(
+          color: Color(0xFFFFE600),
+          fontSize: 62,
+          height: 1.28,
+          fontWeight: FontWeight.w900,
+          shadows: [
+            Shadow(color: Colors.black, blurRadius: 8, offset: Offset(0, 3)),
+          ],
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+      maxLines: 3,
+      ellipsis: '…',
+    )..layout(maxWidth: 560);
+    titlePainter.paint(
+      canvas,
+      Offset((width - titlePainter.width) / 2, 275),
+    );
+
+    final tagPainter = TextPainter(
+      text: const TextSpan(
+        text: '杰速口播',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 30,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 3,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final tagRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        (width - tagPainter.width - 64) / 2,
+        105,
+        tagPainter.width + 64,
+        58,
+      ),
+      const Radius.circular(29),
+    );
+    canvas.drawRRect(tagRect, Paint()..color = const Color(0xFFFF4FB8));
+    tagPainter.paint(
+      canvas,
+      Offset((width - tagPainter.width) / 2, 114),
+    );
+
+    final footerPainter = TextPainter(
+      text: const TextSpan(
+        text: '让好内容更容易被看见',
+        style: TextStyle(
+          color: Colors.white70,
+          fontSize: 27,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 2,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    footerPainter.paint(
+      canvas,
+      Offset((width - footerPainter.width) / 2, 1130),
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(width, height);
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    picture.dispose();
+    if (bytes == null) throw Exception('封面图片生成失败');
+    final supportDir = await getApplicationSupportDirectory();
+    final coverDir = Directory(
+      '${supportDir.path}${Platform.pathSeparator}covers',
+    );
+    await coverDir.create(recursive: true);
+    final file = File(
+      '${coverDir.path}${Platform.pathSeparator}cover-${DateTime.now().millisecondsSinceEpoch}.png',
+    );
+    await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    return file.path;
   }
 
   Future<void> cloneVoice() async {
@@ -3427,12 +3578,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> uploadBgm() async {
     if (!_ensureSoftwareActivated()) return;
+    const supportedExtensions = ['wav', 'mp3', 'm4a', 'aac', 'flac'];
     final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['wav', 'mp3', 'm4a', 'aac', 'flac'],
+      type: _isAndroidClient ? FileType.any : FileType.custom,
+      allowedExtensions: _isAndroidClient ? null : supportedExtensions,
     );
-    final path = picked?.files.single.path;
-    if (path == null) return;
+    final file = picked?.files.single;
+    final path = file?.path;
+    if (path == null || file == null) return;
+    final lowerName = file.name.toLowerCase();
+    if (!supportedExtensions.any((ext) => lowerName.endsWith('.$ext'))) {
+      showError('请选择 WAV、MP3、M4A、AAC 或 FLAC 背景音乐');
+      return;
+    }
+    if (_isAndroidClient) {
+      setState(() {
+        mobileBgmPath = path;
+        mobileBgmName = file.name;
+        selectedBgm = 'mobile:custom';
+        message = '已选择背景音乐';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request = http.MultipartRequest(
         'POST',
@@ -3452,22 +3620,39 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> uploadPipAsset() async {
     if (!_ensureSoftwareActivated()) return;
+    const supportedExtensions = [
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'mp4',
+      'mov',
+      'mkv',
+      'webm'
+    ];
     final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: [
-        'png',
-        'jpg',
-        'jpeg',
-        'webp',
-        'mp4',
-        'mov',
-        'mkv',
-        'webm'
-      ],
+      type: _isAndroidClient ? FileType.any : FileType.custom,
+      allowedExtensions: _isAndroidClient ? null : supportedExtensions,
     );
     final file = picked?.files.single;
     final path = file?.path;
     if (path == null || file == null) return;
+    final lowerName = file.name.toLowerCase();
+    if (!supportedExtensions.any((ext) => lowerName.endsWith('.$ext'))) {
+      showError('请选择图片或 MP4、MOV、MKV、WEBM 画中画素材');
+      return;
+    }
+    if (_isAndroidClient) {
+      setState(() {
+        pipAssetId = 'mobile:local';
+        pipAssetName = file.name;
+        pipAssetPath = path;
+        pipEnabled = true;
+        message = '已选择画中画素材';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request = http.MultipartRequest(
         'POST',
@@ -4023,6 +4208,52 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (pipEnabled && pipAssetId.isEmpty) {
         throw Exception('请先上传画中画素材');
       }
+      if (_isAndroidClient && selectedBgm != 'none') {
+        final bgmFile = File(mobileBgmPath);
+        if (mobileBgmPath.isEmpty || !await bgmFile.exists()) {
+          throw Exception('背景音乐文件不存在，请重新选择');
+        }
+        uploadFiles.add(
+          _CloudUploadFile(
+            kind: 'bgm_audio',
+            file: bgmFile,
+            fileName: mobileBgmName.isEmpty
+                ? _fileNameFromPath(mobileBgmPath)
+                : mobileBgmName,
+            contentType: _contentTypeForPath(mobileBgmPath),
+          ),
+        );
+      }
+      if (_isAndroidClient && pipEnabled) {
+        final pipFile = File(pipAssetPath);
+        if (pipAssetPath.isEmpty || !await pipFile.exists()) {
+          throw Exception('画中画素材不存在，请重新选择');
+        }
+        uploadFiles.add(
+          _CloudUploadFile(
+            kind: 'pip_asset',
+            file: pipFile,
+            fileName: pipAssetName.isEmpty
+                ? _fileNameFromPath(pipAssetPath)
+                : pipAssetName,
+            contentType: _contentTypeForPath(pipAssetPath),
+          ),
+        );
+      }
+      final currentCover = _currentCoverPath;
+      if (_isAndroidClient && currentCover != null) {
+        final coverFile = File(currentCover);
+        if (await coverFile.exists()) {
+          uploadFiles.add(
+            _CloudUploadFile(
+              kind: 'thumbnail',
+              file: coverFile,
+              fileName: _fileNameFromPath(currentCover),
+              contentType: _contentTypeForPath(currentCover),
+            ),
+          );
+        }
+      }
       final uploadSpecs = <Map<String, dynamic>>[];
       for (final item in uploadFiles) {
         uploadSpecs.add({
@@ -4034,11 +4265,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       final cloudBasePayload = {
         ..._renderPayload(script),
-        'bgm_id': 'none',
-        'bgm_volume': 0,
-        'subtitle_enabled': false,
-        'pip_enabled': false,
-        'pip_asset_id': null,
+        if (!_isAndroidClient) ...{
+          'bgm_id': 'none',
+          'bgm_volume': 0,
+          'subtitle_enabled': false,
+          'pip_enabled': false,
+          'pip_asset_id': null,
+        },
+        'cover_file_name':
+            currentCover == null ? null : _fileNameFromPath(currentCover),
         'source_file_name': fileName,
         'original_script': originalScriptController.text.trim(),
         'rewritten_script': rewrittenScriptController.text.trim(),

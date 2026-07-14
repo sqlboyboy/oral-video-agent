@@ -1,7 +1,7 @@
 name: oral_video_agent_client
 description: 智能口播智能体 Windows/Android 客户端
 publish_to: 'none'
-version: 0.2.2+5
+version: 0.2.3+6
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

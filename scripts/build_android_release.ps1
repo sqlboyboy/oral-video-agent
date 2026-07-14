@@ -4,9 +4,9 @@
     [int]$MinSupportedVersionCode = 3,
     [switch]$ForceUpdate,
     [string[]]$ReleaseNotes = @(
-        "修复部分安卓手机无法选择 M4A 声音样本的问题",
-        "视频页只显示数字人原视频，成品生成后自动替换",
-        "保留 HTTPS 安全更新、正式签名和完整性校验"
+        "修复 M4A 等声音参考文件导致克隆失败的问题",
+        "手机端创作流程调整为简洁的 6 个步骤",
+        "新增字幕、BGM、画中画和视频封面设置"
     )
 )
 
