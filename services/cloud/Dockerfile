@@ -6,7 +6,18 @@ ENV HF_HOME=/data/huggingface
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i \
+            -e 's|deb.debian.org|mirrors.cloud.tencent.com|g' \
+            -e 's|security.debian.org|mirrors.cloud.tencent.com|g' \
+            /etc/apt/sources.list.d/debian.sources; \
+    elif [ -f /etc/apt/sources.list ]; then \
+        sed -i \
+            -e 's|deb.debian.org|mirrors.cloud.tencent.com|g' \
+            -e 's|security.debian.org|mirrors.cloud.tencent.com|g' \
+            /etc/apt/sources.list; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         chromium \
         ffmpeg \
