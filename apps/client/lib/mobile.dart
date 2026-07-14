@@ -287,8 +287,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final jobStatus = cloudJob?['status']?.toString() ?? '';
     final jobProgress =
         (cloudJob?['progress_percent'] as num?)?.toDouble() ?? 0;
-    final douyinStatus =
-        cloudDouyinTranscription?['status']?.toString() ?? '';
+    final douyinStatus = cloudDouyinTranscription?['status']?.toString() ?? '';
     final douyinProgress =
         (cloudDouyinTranscription?['progress_percent'] as num?)?.toDouble() ??
             0;
@@ -333,8 +332,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed:
-                        loading ? null : createCloudDouyinTranscriptTask,
+                    onPressed: loading ? null : createCloudDouyinTranscriptTask,
                     icon: const Icon(Icons.auto_fix_high_rounded),
                     label: const Text('解析链接并提取文案'),
                   ),
@@ -954,6 +952,37 @@ extension _MobileWorkbench on _WorkbenchPageState {
                   ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF181A27),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFF303348)),
+            ),
+            child: ListTile(
+              leading: const Icon(
+                Icons.system_update_rounded,
+                color: Color(0xFFB99AFF),
+              ),
+              title: const Text(
+                '检查应用更新',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+              subtitle: Text(
+                mobileAppVersion.isEmpty ? '获取当前版本中' : '当前版本 $mobileAppVersion',
+              ),
+              trailing: mobileUpdateChecking
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.chevron_right_rounded),
+              onTap: mobileUpdateChecking
+                  ? null
+                  : () => _checkForMobileUpdate(silent: false),
             ),
           ),
           const SizedBox(height: 12),

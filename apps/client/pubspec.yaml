@@ -1,7 +1,7 @@
 name: oral_video_agent_client
 description: 智能口播智能体 Windows/Android 客户端
 publish_to: 'none'
-version: 0.1.1+2
+version: 0.2.1+4
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -10,11 +10,14 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.2
+  crypto: ^3.0.7
   file_picker: ^8.1.7
+  package_info_plus: ^9.0.1
   path_provider: ^2.1.5
   ffi: ^2.2.0
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7
+
 flutter:
   uses-material-design: true

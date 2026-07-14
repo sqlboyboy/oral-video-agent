@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,9 +11,11 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 part 'mobile.dart';
+part 'mobile_updater.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -106,6 +109,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     'CLOUD_API_BASE',
     defaultValue: 'https://api.example.com',
   );
+  static const _allowInsecureCloudHttp = bool.fromEnvironment(
+    'ALLOW_INSECURE_CLOUD_HTTP',
+    defaultValue: false,
+  );
+  static const _secureActivationTokenKey = 'cloud_activation_token_v1';
+  static const _secureDeviceTokenKey = 'cloud_device_token_v1';
   static const cyan = Color(0xFF2F9BFF);
   static const pink = Color(0xFFE260D4);
   static const panelBg = Color(0xFF1D2030);
@@ -188,7 +197,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final pipStartController = TextEditingController(text: '0');
   final pipEndController = TextEditingController();
   final pipTriggerController = TextEditingController();
-
   Map<String, dynamic>? task;
   Map<String, dynamic>? providers;
   Map<String, dynamic>? output;
@@ -253,6 +261,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String taskStatusFilter = 'all';
   String cloudAuthMode = 'login';
   int mobileNavigationIndex = 0;
+  bool mobileUpdateChecking = false;
+  String mobileAppVersion = '';
   int studioStep = 0;
   final Set<String> selectedTaskIds = <String>{};
   bool toothHd = true;
@@ -430,6 +440,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       generationMode = 'cloud';
       subtitlesEnabled = false;
       cloudDurationController.text = '60';
+      await _loadMobilePackageVersion();
       await _loadCloudAuth();
       if (_cloudLoggedIn) {
         await loadCloudMe(silent: true);
@@ -438,6 +449,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       if (!mounted) return;
       setState(() => initialized = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_checkForMobileUpdate(silent: true));
+      });
       return;
     }
     await loadBootstrap();
@@ -490,8 +504,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   String get _cloudApiBase {
     final value = cloudApiController.text.trim();
-    final base = value.isEmpty ? _configuredCloudApiBase : value;
+    var base = value.isEmpty ? _configuredCloudApiBase : value;
+    if (_isAndroidClient && !_isSecureCloudBase(base)) {
+      base = _configuredCloudApiBase;
+    }
     return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+  }
+
+  bool _isSecureCloudBase(String value) {
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null || !uri.hasAuthority) return false;
+    if (uri.scheme.toLowerCase() == 'https') return true;
+    return kDebugMode &&
+        _allowInsecureCloudHttp &&
+        uri.scheme.toLowerCase() == 'http';
   }
 
   bool get _isAndroidClient => !kIsWeb && Platform.isAndroid;
@@ -570,15 +596,38 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final saved =
           jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       final savedBase = saved['cloud_api_base'] as String? ?? '';
-      final savedToken = saved['device_token'] as String? ?? '';
+      var savedToken = saved['device_token'] as String? ?? '';
       final hasSeparateActivationToken = saved.containsKey('activation_token');
-      final savedActivationToken =
+      var savedActivationToken =
           saved['activation_token'] as String? ?? savedToken;
       final savedEmail = saved['email'] as String? ?? '';
       final savedSignedOut = saved['account_signed_out'] == true;
+      if (_isAndroidClient) {
+        final secureDeviceToken =
+            await _readAndroidSecureValue(_secureDeviceTokenKey);
+        final secureActivationToken =
+            await _readAndroidSecureValue(_secureActivationTokenKey);
+        if ((secureDeviceToken == null || secureDeviceToken.isEmpty) &&
+            savedToken.isNotEmpty &&
+            !savedSignedOut) {
+          await _writeAndroidSecureValue(_secureDeviceTokenKey, savedToken);
+        } else {
+          savedToken = secureDeviceToken ?? '';
+        }
+        if ((secureActivationToken == null || secureActivationToken.isEmpty) &&
+            savedActivationToken.isNotEmpty) {
+          await _writeAndroidSecureValue(
+            _secureActivationTokenKey,
+            savedActivationToken,
+          );
+        } else {
+          savedActivationToken = secureActivationToken ?? '';
+        }
+      }
       if (!mounted) return;
       setState(() {
-        if (savedBase.isNotEmpty) {
+        if (savedBase.isNotEmpty &&
+            (!_isAndroidClient || _isSecureCloudBase(savedBase))) {
           cloudApiController.text = savedBase;
         }
         if (savedEmail.isNotEmpty) {
@@ -586,9 +635,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         }
         cloudActivationToken = savedActivationToken;
         cloudDeviceToken =
-            hasSeparateActivationToken && !savedSignedOut ? savedToken : '';
+            (_isAndroidClient || hasSeparateActivationToken) && !savedSignedOut
+                ? savedToken
+                : '';
         cloudAccountSignedOut = savedSignedOut;
       });
+      if (_isAndroidClient) {
+        await _saveCloudAuth();
+      }
       if (savedActivationToken.isNotEmpty) {
         final activated = await _validateCloudActivation();
         if (!activated) {
@@ -607,6 +661,34 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _saveCloudAuth() async {
     final file = await _cloudAuthFile();
+    if (_isAndroidClient) {
+      if (cloudActivationToken.isEmpty) {
+        await _deleteAndroidSecureValue(_secureActivationTokenKey);
+      } else {
+        await _writeAndroidSecureValue(
+          _secureActivationTokenKey,
+          cloudActivationToken,
+        );
+      }
+      if (cloudDeviceToken.isEmpty) {
+        await _deleteAndroidSecureValue(_secureDeviceTokenKey);
+      } else {
+        await _writeAndroidSecureValue(
+          _secureDeviceTokenKey,
+          cloudDeviceToken,
+        );
+      }
+      await file.writeAsString(
+        jsonEncode({
+          'storage_version': 2,
+          'cloud_api_base': _cloudApiBase,
+          'email': cloudEmailController.text.trim(),
+          'account_signed_out': cloudAccountSignedOut,
+        }),
+        flush: true,
+      );
+      return;
+    }
     await file.writeAsString(jsonEncode({
       'cloud_api_base': _cloudApiBase,
       'activation_token': cloudActivationToken,
@@ -618,6 +700,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _clearCloudAuth() async {
     try {
+      if (_isAndroidClient) {
+        await _deleteAndroidSecureValue(_secureActivationTokenKey);
+        await _deleteAndroidSecureValue(_secureDeviceTokenKey);
+      }
       final file = await _cloudAuthFile();
       if (await file.exists()) {
         await file.delete();
@@ -2047,9 +2133,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             current['progress_message']?.toString().trim() ?? '';
         setState(() {
           cloudDouyinTranscription = current;
-          message = progressMessage.isNotEmpty
-              ? progressMessage
-              : '服务器正在处理抖音视频';
+          message =
+              progressMessage.isNotEmpty ? progressMessage : '服务器正在处理抖音视频';
           messageIsError = false;
         });
         final status = current['status']?.toString() ?? '';
@@ -5106,31 +5191,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             builder: (context, constraints) {
               final compact = constraints.maxWidth < 1180;
               if (compact) {
-                return Column(
-                  children: [
-                    _studioCompactSteps(),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
-                        child: Column(
-                          children: [
-                            _studioStepCard(compact: true),
-                            const SizedBox(height: 14),
-                            SizedBox(
-                              height: 620,
-                              child: _studioPreviewPanel(),
-                            ),
-                          ],
-                        ),
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                  child: Column(
+                    children: [
+                      _studioStepCard(compact: true),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        height: 620,
+                        child: _studioPreviewPanel(),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               }
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SizedBox(width: 228, child: _studioWorkflowRail()),
                   Expanded(child: _studioStepCard()),
                   SizedBox(width: 326, child: _studioPreviewPanel()),
                 ],
@@ -5176,21 +5253,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ),
       ];
 
-  Widget _studioWorkflowRail() {
+  Widget _studioWorkflowRail({bool embedded = false}) {
     final steps = _studioSteps;
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 8, 16),
+      margin:
+          embedded ? EdgeInsets.zero : const EdgeInsets.fromLTRB(16, 16, 8, 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: studioBorder),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0A111827),
-            blurRadius: 24,
-            offset: Offset(0, 8),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(embedded ? 0 : 18),
+        border: embedded ? null : Border.all(color: studioBorder),
+        boxShadow: embedded
+            ? null
+            : const [
+                BoxShadow(
+                  color: Color(0x0A111827),
+                  blurRadius: 24,
+                  offset: Offset(0, 8),
+                ),
+              ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5220,6 +5300,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       child: Text(
                         'AI 创作工作流',
                         style: TextStyle(
+                          color: studioInk,
                           fontSize: 15,
                           fontWeight: FontWeight.w900,
                         ),
@@ -5271,41 +5352,42 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   _studioStepNavItem(index, steps[index]),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FC),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: localApiOnline
-                          ? studioSuccess
-                          : const Color(0xFFFF6B7B),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      localApiOnline ? '创作服务运行正常' : '等待本地服务连接',
-                      style: const TextStyle(
-                        color: studioMuted,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
+          if (!embedded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F8FC),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: localApiOnline
+                            ? studioSuccess
+                            : const Color(0xFFFF6B7B),
+                        shape: BoxShape.circle,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        localApiOnline ? '创作服务运行正常' : '等待本地服务连接',
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -5315,14 +5397,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     int index,
     ({String title, String subtitle, IconData icon}) step,
   ) {
-    final active = studioStep == index;
+    final active =
+        selectedSection == _WorkspaceSection.studio && studioStep == index;
     final completed = index < studioStep;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => setState(() => studioStep = index),
+          onTap: () => setState(() {
+            selectedSection = _WorkspaceSection.studio;
+            studioStep = index;
+          }),
           borderRadius: BorderRadius.circular(12),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
@@ -5391,6 +5477,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // Retained for possible future tablet navigation.
+  // ignore: unused_element
   Widget _studioCompactSteps() {
     final steps = _studioSteps;
     return Container(
@@ -6205,18 +6293,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _workspaceSidebar() {
-    final compact = MediaQuery.sizeOf(context).width < 1280;
-    final items = const [
-      (_WorkspaceSection.studio, Icons.home_rounded, '创作中心'),
-      (_WorkspaceSection.voices, Icons.graphic_eq_rounded, '声音管理'),
-      (_WorkspaceSection.avatars, Icons.smart_display_rounded, '形象管理'),
-      (_WorkspaceSection.media, Icons.folder_copy_rounded, '素材管理'),
-      (_WorkspaceSection.tasks, Icons.format_list_bulleted_rounded, '任务中心'),
-      (_WorkspaceSection.accounts, Icons.person_outline_rounded, '账号管理'),
-      (_WorkspaceSection.cloudAccount, Icons.cloud_outlined, '云端账户'),
-    ];
     return Container(
-      width: compact ? 76 : 184,
+      width: 228,
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(right: BorderSide(color: studioBorder)),
@@ -6249,38 +6327,32 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     child: const Icon(Icons.play_arrow_rounded,
                         color: Colors.white, size: 26),
                   ),
-                  if (!compact) ...[
-                    const SizedBox(width: 10),
-                    const Text(
-                      '杰速口播',
-                      style: TextStyle(
-                        color: studioInk,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                      ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    '杰速口播',
+                    style: TextStyle(
+                      color: studioInk,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
                     ),
-                  ],
+                  ),
                 ],
               ),
             ),
             const Divider(height: 1),
-            const SizedBox(height: 12),
-            for (final item in items)
-              Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: compact ? 10 : 12,
-                  vertical: 3,
-                ),
-                child: _sidebarItem(
-                  section: item.$1,
-                  icon: item.$2,
-                  label: item.$3,
-                  compact: compact,
-                ),
-              ),
-            const Spacer(),
+            Expanded(child: _studioWorkflowRail(embedded: true)),
+            const Divider(height: 1),
             Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              child: _sidebarItem(
+                section: _WorkspaceSection.cloudAccount,
+                icon: Icons.cloud_outlined,
+                label: '云端账户',
+                compact: false,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
               child: Tooltip(
                 message: localApiOnline ? '本地服务 $apiBase' : '本地服务未连接，点击顶部刷新重试',
                 child: Row(
@@ -6296,12 +6368,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         shape: BoxShape.circle,
                       ),
                     ),
-                    if (!compact) ...[
-                      const SizedBox(width: 8),
-                      Text(localApiOnline ? '服务已连接' : '服务未连接',
-                          style: const TextStyle(
-                              color: studioMuted, fontSize: 12)),
-                    ],
+                    const SizedBox(width: 8),
+                    Text(localApiOnline ? '服务已连接' : '服务未连接',
+                        style:
+                            const TextStyle(color: studioMuted, fontSize: 12)),
                   ],
                 ),
               ),

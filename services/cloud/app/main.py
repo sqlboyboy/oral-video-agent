@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import secrets
 import mimetypes
 import threading
@@ -467,6 +468,102 @@ def health() -> dict[str, Any]:
         "database_backend": store.backend,
         "redis": redis_state.health(),
     }
+
+
+def _load_android_release() -> tuple[dict[str, Any], Path]:
+    release_root = settings.android_release_dir.resolve()
+    manifest_path = release_root / "latest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="android release not published")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        version_name = str(manifest["version_name"]).strip()
+        version_code = int(manifest["version_code"])
+        apk_file = str(manifest["apk_file"]).strip()
+        sha256 = str(manifest["sha256"]).strip().lower()
+        min_supported_version_code = int(
+            manifest.get("min_supported_version_code", 0)
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="android release manifest is invalid",
+        ) from exc
+
+    if (
+        not version_name
+        or version_code <= 0
+        or min_supported_version_code < 0
+        or Path(apk_file).name != apk_file
+        or not apk_file.lower().endswith(".apk")
+        or len(sha256) != 64
+        or any(char not in "0123456789abcdef" for char in sha256)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="android release manifest is invalid",
+        )
+
+    apk_path = (release_root / apk_file).resolve()
+    if apk_path.parent != release_root or not apk_path.is_file():
+        raise HTTPException(status_code=404, detail="android release file not found")
+
+    manifest["version_name"] = version_name
+    manifest["version_code"] = version_code
+    manifest["apk_file"] = apk_file
+    manifest["sha256"] = sha256
+    manifest["min_supported_version_code"] = min_supported_version_code
+    manifest["size_bytes"] = apk_path.stat().st_size
+    return manifest, apk_path
+
+
+@app.get("/api/mobile/releases/latest")
+def latest_mobile_release(
+    version_code: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    release, _ = _load_android_release()
+    latest_version_code = int(release["version_code"])
+    update_available = latest_version_code > version_code
+    force_update = update_available and (
+        bool(release.get("force_update", False))
+        or version_code < int(release["min_supported_version_code"])
+    )
+    release_notes = release.get("release_notes", [])
+    if isinstance(release_notes, str):
+        release_notes = [release_notes]
+    if not isinstance(release_notes, list):
+        release_notes = []
+    return {
+        "platform": "android",
+        "version_name": release["version_name"],
+        "version_code": latest_version_code,
+        "update_available": update_available,
+        "force_update": force_update,
+        "min_supported_version_code": release["min_supported_version_code"],
+        "download_url": (
+            f"/api/mobile/releases/{release['apk_file']}/download"
+        ),
+        "sha256": release["sha256"],
+        "size_bytes": release["size_bytes"],
+        "release_notes": [str(item) for item in release_notes if str(item).strip()],
+        "published_at": str(release.get("published_at", "")),
+    }
+
+
+@app.get("/api/mobile/releases/{apk_file}/download")
+def download_mobile_release(apk_file: str) -> FileResponse:
+    release, apk_path = _load_android_release()
+    if apk_file != release["apk_file"]:
+        raise HTTPException(status_code=404, detail="android release file not found")
+    return FileResponse(
+        apk_path,
+        media_type="application/vnd.android.package-archive",
+        filename=apk_file,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/admin", response_class=HTMLResponse, include_in_schema=False)

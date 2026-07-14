@@ -1,7 +1,32 @@
+# HTTP is retained only for ACME validation and redirects all application
+# traffic to the trusted short-lived IP certificate installed by
+# install_ip_https.sh.
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    server_name _;
+    server_name PUBLIC_IP _;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type text/plain;
+    }
+
+    location / {
+        return 308 https://PUBLIC_IP$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name PUBLIC_IP;
+
+    ssl_certificate /etc/letsencrypt/live/PUBLIC_IP/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/PUBLIC_IP/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
 
     client_max_body_size 2048m;
     send_timeout 7200s;
@@ -29,7 +54,7 @@ server {
     }
 
     location / {
-        return 200 "oral-video-agent cloud api is running\n";
+        return 200 "oral-video-agent cloud api is running securely\n";
         add_header Content-Type text/plain;
     }
 }
