@@ -12,6 +12,8 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
+part 'mobile.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -97,8 +99,10 @@ enum _WorkspaceSection {
 
 class _WorkbenchPageState extends State<WorkbenchPage> {
   static const _defaultApiBase = 'http://127.0.0.1:8000';
-  static const _configuredApiBase =
-      String.fromEnvironment('API_BASE', defaultValue: _defaultApiBase);
+  static const _configuredApiBase = String.fromEnvironment(
+    'API_BASE',
+    defaultValue: _defaultApiBase,
+  );
   static const _fallbackApiBase = 'http://127.0.0.1:8001';
   static const _configuredCloudApiBase = String.fromEnvironment(
     'CLOUD_API_BASE',
@@ -109,6 +113,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   static const panelBg = Color(0xFF1D2030);
   static const panelBg2 = Color(0xFF24283A);
   static const purpleLine = Color(0xFF7E54E8);
+  static const studioPrimary = Color(0xFF5B5CEB);
+  static const studioPrimaryDark = Color(0xFF4546D7);
+  static const studioCanvas = Color(0xFFF4F6FA);
+  static const studioBorder = Color(0xFFE7EAF0);
+  static const studioInk = Color(0xFF161A2B);
+  static const studioMuted = Color(0xFF7B8194);
+  static const studioSuccess = Color(0xFF2BB673);
   static const _subtitleFontOptions = [
     'Microsoft YaHei',
     'Microsoft YaHei UI',
@@ -134,11 +145,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     'bottom_left',
     'center',
   ];
-  static const _pipTimingOptions = [
-    'full',
-    'time',
-    'sentence',
-  ];
+  static const _pipTimingOptions = ['full', 'time', 'sentence'];
   static const _pipPositionLabels = {
     'top_right': '右上角',
     'top_left': '左上角',
@@ -168,8 +175,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final publishTitleController = TextEditingController();
   final publishBodyController = TextEditingController();
   final publishTopicsController = TextEditingController();
-  final cloudApiController =
-      TextEditingController(text: _configuredCloudApiBase);
+  final cloudApiController = TextEditingController(
+    text: _configuredCloudApiBase,
+  );
   final cloudEmailController = TextEditingController();
   final cloudEmailCodeController = TextEditingController();
   final cloudPasswordController = TextEditingController();
@@ -186,6 +194,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic>? cloudSession;
   Map<String, dynamic>? cloudWallet;
   Map<String, dynamic>? cloudJob;
+  Map<String, dynamic>? cloudDouyinTranscription;
   Map<String, dynamic>? cloudEstimate;
   Map<String, dynamic>? mouthAtlasDiagnosis;
   List<Map<String, dynamic>> cloudLedger = const [];
@@ -196,6 +205,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   List<Map<String, dynamic>> publisherAccounts = const [];
   List<Map<String, dynamic>> publishJobs = const [];
   List<Map<String, dynamic>> taskHistory = const [];
+  List<Map<String, dynamic>> mobileCloudJobs = const [];
   bool loading = false;
   bool renderingVideo = false;
   bool diagnosingMouthAtlas = false;
@@ -222,6 +232,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String cloudOutputUrl = '';
   String cloudOutputLocalPath = '';
   String cloudVoiceAudioPath = '';
+  String mobileVoiceReferencePath = '';
+  String mobileVoiceReferenceName = '';
+  String mobileDigitalHumanPath = '';
+  String mobileDigitalHumanName = '';
   String cloudVoiceJobId = '';
   String generatedVoiceKey = '';
   String coverPath = '';
@@ -237,6 +251,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   _WorkspaceSection selectedSection = _WorkspaceSection.studio;
   String taskStatusFilter = 'all';
   String cloudAuthMode = 'login';
+  int mobileNavigationIndex = 0;
+  int studioStep = 0;
   final Set<String> selectedTaskIds = <String>{};
   bool toothHd = true;
   bool randomMotion = false;
@@ -324,7 +340,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           (body['voices'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       final loadedHumans =
           (body['digital_humans'] as List?)?.cast<Map<String, dynamic>>() ??
-              const [];
+          const [];
       final loadedBgm =
           (body['bgm'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       if (!mounted) return;
@@ -336,7 +352,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         providers = loadedProviders;
         rewriteStyles =
             (body['rewrite_styles'] as List?)?.cast<Map<String, dynamic>>() ??
-                const [];
+            const [];
         voices = loadedVoices;
         digitalHumans = loadedHumans;
         bgmTracks = loadedBgm;
@@ -373,8 +389,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'wav2lip_aperture_release',
           fallback: mouthApertureRelease,
         );
-        final voiceIds = _limitedProfileOptions(loadedVoices, 'voice_id',
-            preferredSystemPrefix: 'clone:');
+        final voiceIds = _limitedProfileOptions(
+          loadedVoices,
+          'voice_id',
+          preferredSystemPrefix: 'clone:',
+        );
         if (!voiceIds.contains(selectedVoice) && voiceIds.isNotEmpty) {
           selectedVoice = voiceIds.first;
         }
@@ -409,6 +428,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _initialize() async {
+    if (_isAndroidClient) {
+      generationMode = 'cloud';
+      subtitlesEnabled = false;
+      cloudDurationController.text = '60';
+      await _loadCloudAuth();
+      if (_cloudLoggedIn) {
+        await loadCloudMe(silent: true);
+        await loadCloudLedger(silent: true);
+        await loadMobileCloudJobs(silent: true);
+      }
+      if (!mounted) return;
+      setState(() => initialized = true);
+      return;
+    }
     await loadBootstrap();
     await loadTaskHistory(silent: true);
     await _resetReleaseLocalStateIfNeeded();
@@ -463,6 +496,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return base.endsWith('/') ? base.substring(0, base.length - 1) : base;
   }
 
+  bool get _isAndroidClient => !kIsWeb && Platform.isAndroid;
+
+  bool get _studioLightControls =>
+      !_isAndroidClient && selectedSection == _WorkspaceSection.studio;
+
   Map<String, dynamic>? get _cloudUser {
     final user = cloudSession?['user'];
     if (user is Map) return user.cast<String, dynamic>();
@@ -472,7 +510,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   bool get _cloudLoggedIn => cloudDeviceToken.isNotEmpty;
 
   bool get _cloudLicensed =>
-      cloudActivationValid && cloudActivationToken.isNotEmpty;
+      _isAndroidClient ||
+      (cloudActivationValid && cloudActivationToken.isNotEmpty);
 
   bool get _cloudAccountBound {
     if (cloudAccountSignedOut) return false;
@@ -481,6 +520,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   bool _ensureSoftwareActivated() {
+    if (_isAndroidClient) return true;
     if (!_cloudLicensed) {
       showError('请先输入激活码激活软件');
       return false;
@@ -547,8 +587,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           cloudEmailController.text = savedEmail;
         }
         cloudActivationToken = savedActivationToken;
-        cloudDeviceToken =
-            hasSeparateActivationToken && !savedSignedOut ? savedToken : '';
+        cloudDeviceToken = hasSeparateActivationToken && !savedSignedOut
+            ? savedToken
+            : '';
         cloudAccountSignedOut = savedSignedOut;
       });
       if (savedActivationToken.isNotEmpty) {
@@ -569,13 +610,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _saveCloudAuth() async {
     final file = await _cloudAuthFile();
-    await file.writeAsString(jsonEncode({
-      'cloud_api_base': _cloudApiBase,
-      'activation_token': cloudActivationToken,
-      'device_token': cloudDeviceToken,
-      'email': cloudEmailController.text.trim(),
-      'account_signed_out': cloudAccountSignedOut,
-    }));
+    await file.writeAsString(
+      jsonEncode({
+        'cloud_api_base': _cloudApiBase,
+        'activation_token': cloudActivationToken,
+        'device_token': cloudDeviceToken,
+        'email': cloudEmailController.text.trim(),
+        'account_signed_out': cloudAccountSignedOut,
+      }),
+    );
   }
 
   Future<void> _clearCloudAuth() async {
@@ -624,6 +667,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String _deviceName() {
+    if (_isAndroidClient) return 'Android phone';
     final host = Platform.localHostname.trim();
     if (host.isEmpty) return 'Windows client';
     return '${Platform.operatingSystem} $host';
@@ -708,6 +752,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  Future<void> loadMobileCloudJobs({bool silent = false}) async {
+    if (!_cloudLoggedIn) return;
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/jobs?limit=50'),
+        headers: _cloudHeaders(),
+      );
+      _check(res);
+      final body = _decodeMap(res);
+      if (!mounted) return;
+      setState(() {
+        mobileCloudJobs =
+            (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+        if (!silent) {
+          message = '云端任务已刷新';
+          messageIsError = false;
+        }
+      });
+    } catch (e) {
+      if (!silent) showError(_friendlyError(e));
+    }
+  }
+
   Future<void> sendCloudEmailCode({String purpose = 'register'}) async {
     if (!_ensureSoftwareActivated()) return;
     final email = cloudEmailController.text.trim();
@@ -715,13 +782,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入邮箱');
       return;
     }
+    final mobileFingerprint = _isAndroidClient
+        ? await _mobileDeviceFingerprint()
+        : '';
+    final endpoint = _isAndroidClient
+        ? '/api/mobile/auth/email-code'
+        : '/api/client/auth/email-code';
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/email-code'),
-        headers: _cloudHeaders(),
-        body: jsonEncode({'email': email, 'purpose': purpose}),
+        Uri.parse('$_cloudApiBase$endpoint'),
+        headers: _isAndroidClient
+            ? _cloudHeaders(auth: false, activation: false)
+            : _cloudHeaders(),
+        body: jsonEncode({
+          'email': email,
+          'purpose': purpose,
+          if (_isAndroidClient) 'device_fingerprint': mobileFingerprint,
+        }),
       );
-      if (res.statusCode == 401) {
+      if (!_isAndroidClient && res.statusCode == 401) {
         await _clearCloudAuth();
         throw Exception('软件激活状态已失效，请重新输入激活码激活');
       }
@@ -770,15 +849,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入密码');
       return false;
     }
+    final mobileFingerprint = _isAndroidClient
+        ? await _mobileDeviceFingerprint()
+        : '';
+    final endpoint = _isAndroidClient
+        ? '/api/mobile/auth/password-login'
+        : '/api/client/auth/password-login';
     var succeeded = false;
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/password-login'),
-        headers: _cloudHeaders(),
+        Uri.parse('$_cloudApiBase$endpoint'),
+        headers: _isAndroidClient
+            ? _cloudHeaders(auth: false, activation: false)
+            : _cloudHeaders(),
         body: jsonEncode({
           'email': email,
           'password': password,
           'device_name': _deviceName(),
+          if (_isAndroidClient) 'device_fingerprint': mobileFingerprint,
         }),
       );
       _check(res);
@@ -796,6 +884,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       });
       await _saveCloudAuth();
       await loadCloudLedger(silent: true);
+      if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
       succeeded = true;
     });
     return succeeded;
@@ -843,19 +932,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('两次输入的密码不一致');
       return false;
     }
+    final mobileFingerprint = _isAndroidClient
+        ? await _mobileDeviceFingerprint()
+        : '';
+    final endpointPrefix = _isAndroidClient
+        ? '/api/mobile/auth'
+        : '/api/client/auth';
     var succeeded = false;
     await _runBusy(() async {
       final res = await http.post(
-        Uri.parse('$_cloudApiBase/api/client/auth/$endpoint'),
-        headers: _cloudHeaders(),
+        Uri.parse('$_cloudApiBase$endpointPrefix/$endpoint'),
+        headers: _isAndroidClient
+            ? _cloudHeaders(auth: false, activation: false)
+            : _cloudHeaders(),
         body: jsonEncode({
           'email': email,
           'code': code,
           passwordKey: password,
           'device_name': _deviceName(),
+          if (_isAndroidClient) 'device_fingerprint': mobileFingerprint,
         }),
       );
-      if (res.statusCode == 401) {
+      if (!_isAndroidClient && res.statusCode == 401) {
         await _clearCloudAuth();
         throw Exception('软件激活状态已失效，请重新输入激活码激活');
       }
@@ -875,6 +973,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       });
       await _saveCloudAuth();
       await loadCloudLedger(silent: true);
+      if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
       succeeded = true;
     });
     return succeeded;
@@ -911,7 +1010,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudWallet = null;
         cloudAccountSignedOut = false;
         cloudActivationCodeController.clear();
-        message = '软件已激活，请绑定邮箱账号管理点?';
+        message = '软件已激活，请绑定邮箱账号管理点数';
         messageIsError = false;
       });
       await _saveCloudAuth();
@@ -952,12 +1051,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('欢迎回来',
-                    style:
-                        TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                Text(
+                  '欢迎回来',
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                ),
                 SizedBox(height: 2),
-                Text('使用邮箱和密码登录云端账号',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                Text(
+                  '使用邮箱和密码登录云端账号',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
               ],
             ),
           ),
@@ -978,6 +1080,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> _showCloudAuthDialog(String initialMode) async {
     cloudAuthMode = initialMode;
+    message = '';
+    messageIsError = false;
     cloudEmailCodeController.clear();
     cloudPasswordController.clear();
     cloudPasswordConfirmController.clear();
@@ -1000,18 +1104,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               : (isRegister ? '验证邮箱并设置首次登录密码' : '验证邮箱后设置新密码');
           return Dialog(
             backgroundColor: Colors.transparent,
+            insetPadding: EdgeInsets.symmetric(
+              horizontal: _isAndroidClient ? 16 : 40,
+              vertical: _isAndroidClient ? 20 : 24,
+            ),
             child: Container(
-              width: 500,
-              padding: const EdgeInsets.fromLTRB(30, 24, 30, 28),
+              width: _isAndroidClient ? double.infinity : 500,
+              padding: EdgeInsets.fromLTRB(
+                _isAndroidClient ? 20 : 30,
+                _isAndroidClient ? 16 : 24,
+                _isAndroidClient ? 20 : 30,
+                _isAndroidClient ? 22 : 28,
+              ),
               decoration: BoxDecoration(
                 color: const Color(0xFF1D2132),
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(color: purpleLine.withValues(alpha: 0.75)),
                 boxShadow: const [
                   BoxShadow(
-                      color: Colors.black54,
-                      blurRadius: 34,
-                      offset: Offset(0, 16)),
+                    color: Colors.black54,
+                    blurRadius: 34,
+                    offset: Offset(0, 16),
+                  ),
                 ],
               ),
               child: SingleChildScrollView(
@@ -1034,17 +1148,49 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         ),
                         borderRadius: BorderRadius.circular(18),
                       ),
-                      child: const Icon(Icons.play_arrow_rounded,
-                          size: 38, color: Colors.white),
+                      child: const Icon(
+                        Icons.play_arrow_rounded,
+                        size: 38,
+                        color: Colors.white,
+                      ),
                     ),
                     const SizedBox(height: 16),
-                    Text(title,
-                        style: const TextStyle(
-                            fontSize: 28, fontWeight: FontWeight.w900)),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                     const SizedBox(height: 6),
-                    Text(subtitle,
-                        style: const TextStyle(
-                            color: Colors.white54, fontSize: 14)),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 14,
+                      ),
+                    ),
+                    if (messageIsError) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFFFF7892,
+                          ).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        child: Text(
+                          message,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Color(0xFFFF9BAD),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 28),
                     _cloudAuthField(
                       controller: cloudEmailController,
@@ -1103,9 +1249,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                                       if (dialogContext.mounted)
                                         setModalState(() {});
                                     },
-                              child: Text(cloudEmailCodeCooldown > 0
-                                  ? '${cloudEmailCodeCooldown} 秒'
-                                  : '发送验证码'),
+                              child: Text(
+                                cloudEmailCodeCooldown > 0
+                                    ? '${cloudEmailCodeCooldown} 秒'
+                                    : '发送验证码',
+                              ),
                             ),
                           ),
                         ],
@@ -1135,18 +1283,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                                 final ok = isLogin
                                     ? await loginCloudWithPassword()
                                     : (isRegister
-                                        ? await registerCloudAccount()
-                                        : await resetCloudPassword());
+                                          ? await registerCloudAccount()
+                                          : await resetCloudPassword());
                                 if (ok && dialogContext.mounted) {
                                   Navigator.pop(dialogContext);
                                 }
                               },
-                        icon: Icon(isLogin
-                            ? Icons.login_rounded
-                            : Icons.arrow_forward_rounded),
-                        label: Text(isLogin
-                            ? '登录'
-                            : (isRegister ? '注册并登录' : '重置密码并登录')),
+                        icon: Icon(
+                          isLogin
+                              ? Icons.login_rounded
+                              : Icons.arrow_forward_rounded,
+                        ),
+                        label: Text(
+                          isLogin ? '登录' : (isRegister ? '注册并登录' : '重置密码并登录'),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -1181,9 +1331,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: const TextStyle(
-                fontWeight: FontWeight.w800, color: Colors.white70)),
+        Text(
+          label,
+          style: const TextStyle(
+            fontWeight: FontWeight.w800,
+            color: Colors.white70,
+          ),
+        ),
         const SizedBox(height: 7),
         TextField(
           controller: controller,
@@ -1235,20 +1389,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         children: [
           const Icon(Icons.account_circle, size: 22, color: Color(0xFFD4A4FF)),
           const SizedBox(width: 8),
-          Flexible(
-            flex: 3,
-            child: _headerInfo('账号', _cloudAccountText),
-          ),
+          Flexible(flex: 3, child: _headerInfo('账号', _cloudAccountText)),
           const SizedBox(width: 12),
-          _headerInfo('可用', '$available 点',
-              valueColor: const Color(0xFFB9F8D0)),
+          _headerInfo(
+            '可用',
+            '$available 点',
+            valueColor: const Color(0xFFB9F8D0),
+          ),
           const SizedBox(width: 12),
           _headerInfo('冻结', '$frozen 点'),
           const SizedBox(width: 12),
-          Flexible(
-            flex: 3,
-            child: _headerInfo('点数明细', _latestLedgerText),
-          ),
+          Flexible(flex: 3, child: _headerInfo('点数明细', _latestLedgerText)),
           const SizedBox(width: 8),
           _headerIconButton(Icons.refresh, () async {
             await loadCloudMe(silent: true);
@@ -1266,8 +1417,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: const TextStyle(color: Colors.white54, fontSize: 11)),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white54, fontSize: 11),
+        ),
         const SizedBox(height: 2),
         Text(
           value,
@@ -1300,10 +1453,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 backgroundColor: cyan,
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
-              child: Text(text,
-                  style: const TextStyle(fontWeight: FontWeight.w900)),
+              child: Text(
+                text,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
             )
           : OutlinedButton(
               onPressed: loading || !enabled ? null : onPressed,
@@ -1312,10 +1468,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 side: BorderSide(color: purpleLine.withValues(alpha: 0.8)),
                 padding: const EdgeInsets.symmetric(horizontal: 10),
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
-              child: Text(text,
-                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              child: Text(
+                text,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
             ),
     );
   }
@@ -1354,17 +1513,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final res = await http.post(
         Uri.parse('$_cloudApiBase/api/client/jobs/estimate'),
         headers: _cloudHeaders(),
-        body: jsonEncode({
-          'duration_seconds': duration,
-          'resolution': '1080p',
-        }),
+        body: jsonEncode({'duration_seconds': duration, 'resolution': '1080p'}),
       );
       _check(res);
       final body = _decodeMap(res);
       setState(() {
         cloudEstimate = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
-        message = '云端任务已预?';
+        message = '云端任务已预估';
         messageIsError = false;
       });
     });
@@ -1402,8 +1558,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     String candidate, {
     Duration timeout = const Duration(seconds: 20),
   }) async {
-    final res =
-        await http.get(Uri.parse('$candidate/api/bootstrap')).timeout(timeout);
+    final res = await http
+        .get(Uri.parse('$candidate/api/bootstrap'))
+        .timeout(timeout);
     _check(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     if (_isExpectedBootstrapPayload(body)) {
@@ -1417,10 +1574,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final appDir = File(Platform.resolvedExecutable).parent;
     final candidates = [
       File('${appDir.path}${Platform.pathSeparator}oral_video_agent_api.exe'),
-      File('${appDir.path}${Platform.pathSeparator}api'
-          '${Platform.pathSeparator}oral_video_agent_api.exe'),
-      File('${appDir.path}${Platform.pathSeparator}backend'
-          '${Platform.pathSeparator}oral_video_agent_api.exe'),
+      File(
+        '${appDir.path}${Platform.pathSeparator}api'
+        '${Platform.pathSeparator}oral_video_agent_api.exe',
+      ),
+      File(
+        '${appDir.path}${Platform.pathSeparator}backend'
+        '${Platform.pathSeparator}oral_video_agent_api.exe',
+      ),
     ];
     for (final apiExe in candidates) {
       if (!await apiExe.exists()) continue;
@@ -1447,23 +1608,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       var current = start.absolute;
       for (var depth = 0; depth < 10; depth++) {
         if (!visited.add(current.path)) break;
-        final apiDir =
-            Directory('${current.path}${Platform.pathSeparator}services'
-                '${Platform.pathSeparator}api');
-        final mainFile = File('${apiDir.path}${Platform.pathSeparator}app'
-            '${Platform.pathSeparator}main.py');
+        final apiDir = Directory(
+          '${current.path}${Platform.pathSeparator}services'
+          '${Platform.pathSeparator}api',
+        );
+        final mainFile = File(
+          '${apiDir.path}${Platform.pathSeparator}app'
+          '${Platform.pathSeparator}main.py',
+        );
         if (await mainFile.exists()) {
           final projectPython = File(
-              '${apiDir.path}${Platform.pathSeparator}.venv'
-              '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe');
+            '${apiDir.path}${Platform.pathSeparator}.venv'
+            '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe',
+          );
           final rootPython = File(
-              '${current.path}${Platform.pathSeparator}.venv'
-              '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe');
+            '${current.path}${Platform.pathSeparator}.venv'
+            '${Platform.pathSeparator}Scripts${Platform.pathSeparator}python.exe',
+          );
           final python = await projectPython.exists()
               ? projectPython.path
               : await rootPython.exists()
-                  ? rootPython.path
-                  : 'python';
+              ? rootPython.path
+              : 'python';
           try {
             _localApiProcess = await Process.start(
               python,
@@ -1528,20 +1694,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> loadPublisherAccounts() async {
     try {
-      final accountsRes =
-          await http.get(Uri.parse('$apiBase/api/publisher/accounts'));
+      final accountsRes = await http.get(
+        Uri.parse('$apiBase/api/publisher/accounts'),
+      );
       _check(accountsRes);
-      final accountsBody = jsonDecode(utf8.decode(accountsRes.bodyBytes))
-          as Map<String, dynamic>;
+      final accountsBody =
+          jsonDecode(utf8.decode(accountsRes.bodyBytes))
+              as Map<String, dynamic>;
       final jobsRes = await http.get(Uri.parse('$apiBase/api/publish-jobs'));
       _check(jobsRes);
       final jobsBody =
           jsonDecode(utf8.decode(jobsRes.bodyBytes)) as Map<String, dynamic>;
       final accounts =
           (accountsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
-              const [];
+          const [];
       final visibleAccounts = _dedupePublisherAccounts(accounts);
-      final jobs = (jobsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
+      final jobs =
+          (jobsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
           const [];
       setState(() {
         localApiOnline = true;
@@ -1553,7 +1722,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         });
         if (!selectedStillValid) {
           selectedPublisherAccount = _firstPublisherAccountForPlatform(
-              visibleAccounts, selectedPublishPlatform);
+            visibleAccounts,
+            selectedPublishPlatform,
+          );
         }
         _syncPublisherNicknameField(visibleAccounts);
       });
@@ -1614,8 +1785,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   void _selectPublisherPlatform(String platform) {
     selectedPublishPlatform = platform;
-    selectedPublisherAccount =
-        _firstPublisherAccountForPlatform(publisherAccounts, platform);
+    selectedPublisherAccount = _firstPublisherAccountForPlatform(
+      publisherAccounts,
+      platform,
+    );
     _syncPublisherNicknameField(publisherAccounts);
   }
 
@@ -1633,19 +1806,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
   }
 
+  void _updateMobile(VoidCallback update) {
+    setState(update);
+  }
+
   Future<void> createPublisherAccount() async {
     final rawNickname = publisherNicknameController.text.trim();
-    final nickname =
-        rawNickname == _publisherNicknamePlaceholder ? '' : rawNickname;
+    final nickname = rawNickname == _publisherNicknamePlaceholder
+        ? ''
+        : rawNickname;
     if (nickname.isNotEmpty) {
       final existing = publisherAccounts.where((account) {
         return account['platform'] == selectedPublishPlatform &&
             (_normalizedPublisherNickname(account['nickname']) == nickname);
       }).toList();
       if (existing.isNotEmpty) {
-        setState(() =>
-            selectedPublisherAccount = existing.first['account_id'] as String);
-        showInfo('该账号已存在，已为你选中?');
+        setState(
+          () =>
+              selectedPublisherAccount = existing.first['account_id'] as String,
+        );
+        showInfo('该账号已存在，已为你选中');
         return;
       }
     }
@@ -1664,7 +1844,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await loadPublisherAccounts();
       setState(() {
         selectedPublisherAccount = account['account_id'] as String;
-        message = '账号已添加，请点击登录打弢平台登录窗口，登录成功后会自动识别账号名称?';
+        message = '账号已添加，请点击登录打开平台登录窗口，登录成功后会自动识别账号名称';
         messageIsError = false;
       });
     });
@@ -1672,19 +1852,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> loginPublisherAccount() async {
     if (selectedPublisherAccount.isEmpty) {
-      showError('请先添加或择发布账号?');
+      showError('请先添加或选择发布账号');
       return;
     }
     await _runBusy(() async {
       final res = await http.post(
         Uri.parse(
-            '$apiBase/api/publisher/accounts/$selectedPublisherAccount/login'),
+          '$apiBase/api/publisher/accounts/$selectedPublisherAccount/login',
+        ),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'timeout_seconds': 900}),
       );
       _check(res);
       await loadPublisherAccounts();
-      showInfo('已请求打弢登录窗口，请按平台提示完成扫码或验证?');
+      showInfo('已请求打开登录窗口，请按平台提示完成扫码或验证');
     });
   }
 
@@ -1693,7 +1874,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     await _runBusy(() async {
       final res = await http.post(
         Uri.parse(
-            '$apiBase/api/publisher/accounts/$selectedPublisherAccount/check-session'),
+          '$apiBase/api/publisher/accounts/$selectedPublisherAccount/check-session',
+        ),
       );
       _check(res);
       await loadPublisherAccounts();
@@ -1703,11 +1885,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Future<void> createPublishJobs() async {
     final taskId = _taskId;
     if (taskId == null) {
-      showError('请先创建视频任务?');
+      showError('请先创建视频任务');
       return;
     }
     if (selectedPublisherAccount.isEmpty) {
-      showError('请先选择发布账号?');
+      showError('请先选择发布账号');
       return;
     }
     if (publishTitleController.text.trim().isEmpty ||
@@ -1746,7 +1928,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _check(res);
       await loadPublisherAccounts();
       await _loadTask(taskId);
-      showInfo('发布任务已创建，请在下方查看任务状?');
+      showInfo('发布任务已创建，请在下方查看任务状态');
     });
     setState(() => publishing = false);
   }
@@ -1770,10 +1952,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final topics =
           (body['topics'] as List?)?.map((item) => item.toString()).toList() ??
-              const <String>[];
+          const <String>[];
       setState(() {
-        publishTitleController.text =
-            _limitPublishTitle(body['title'] as String? ?? '');
+        publishTitleController.text = _limitPublishTitle(
+          body['title'] as String? ?? '',
+        );
         publishBodyController.text = body['body'] as String? ?? '';
         publishTopicsController.text = topics
             .map((topic) => '#${topic.replaceFirst(RegExp(r'^#+'), '')}')
@@ -1831,10 +2014,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _invalidateGeneratedVoice();
     }
     final taskId = currentTask['task_id'] as String? ?? '';
-    final publishSource = ((currentTask['rewritten_script'] as String?) ??
-            (currentTask['original_script'] as String?) ??
-            '')
-        .trim();
+    final publishSource =
+        ((currentTask['rewritten_script'] as String?) ??
+                (currentTask['original_script'] as String?) ??
+                '')
+            .trim();
     final generationKey = '$taskId:${publishSource.hashCode}';
     if (taskId.isNotEmpty &&
         publishSource.isNotEmpty &&
@@ -1885,6 +2069,90 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _syncEditors(body);
       final taskId = body['task_id'] as String;
       await _pollImport(taskId);
+    });
+  }
+
+  Future<void> createCloudDouyinTranscriptTask() async {
+    if (!_ensureCloudAccountReady()) return;
+    final shareText = urlController.text.trim();
+    if (shareText.isEmpty) {
+      showError('请先粘贴抖音分享链接或完整分享口令');
+      return;
+    }
+    await _runBusy(() async {
+      setState(() {
+        cloudDouyinTranscription = null;
+        message = '正在向服务器提交抖音链接';
+        messageIsError = false;
+      });
+      final created = await http
+          .post(
+            Uri.parse('$_cloudApiBase/api/client/douyin/transcriptions'),
+            headers: _cloudHeaders(),
+            body: jsonEncode({'share_text': shareText}),
+          )
+          .timeout(const Duration(seconds: 30));
+      _check(created);
+      var current = _decodeMap(created);
+      final transcriptionId =
+          current['transcription_id']?.toString().trim() ?? '';
+      if (transcriptionId.isEmpty) {
+        throw Exception('服务器未返回文案提取任务编号');
+      }
+
+      for (var attempt = 0; attempt < 400; attempt++) {
+        if (!mounted) return;
+        final progressMessage =
+            current['progress_message']?.toString().trim() ?? '';
+        setState(() {
+          cloudDouyinTranscription = current;
+          message = progressMessage.isNotEmpty
+              ? progressMessage
+              : '服务器正在处理抖音视频';
+          messageIsError = false;
+        });
+        final status = current['status']?.toString() ?? '';
+        if (status == 'completed') {
+          final transcript = current['transcript']?.toString().trim() ?? '';
+          if (transcript.isEmpty) {
+            throw Exception('服务器没有返回识别出的口播文案');
+          }
+          setState(() {
+            originalScriptController.text = transcript;
+            task = {
+              'task_id': 'douyin-$transcriptionId',
+              'status': 'transcribed',
+              'original_script': transcript,
+              'rewritten_script': rewrittenScriptController.text.trim(),
+              'progress_steps': const [],
+            };
+            output = null;
+            outputRefresh++;
+            coverPath = '';
+            _invalidateGeneratedVoice();
+            message = '服务器已完成抖音视频下载和口播文案提取';
+            messageIsError = false;
+          });
+          return;
+        }
+        if (status == 'failed') {
+          final error = current['error_message']?.toString().trim() ?? '';
+          throw Exception(error.isEmpty ? '抖音文案提取失败' : error);
+        }
+
+        await Future<void>.delayed(const Duration(seconds: 3));
+        final polled = await http
+            .get(
+              Uri.parse(
+                '$_cloudApiBase/api/client/douyin/transcriptions/$transcriptionId',
+              ),
+              headers: _cloudHeaders(),
+            )
+            .timeout(const Duration(seconds: 30));
+        _check(polled);
+        current = _decodeMap(polled);
+      }
+      throw Exception('服务器处理时间过长，请稍后重试');
     });
   }
 
@@ -2031,8 +2299,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return;
     }
     await _runBusy(() async {
-      final request =
-          http.MultipartRequest('POST', Uri.parse('$apiBase/api/tasks/upload'));
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$apiBase/api/tasks/upload'),
+      );
       request.files.add(await http.MultipartFile.fromPath('file', path));
       final streamed = await request.send();
       final res = await http.Response.fromStream(streamed);
@@ -2143,8 +2413,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     await _runBusy(() async {
-      final res =
-          await http.post(Uri.parse('$apiBase/api/tasks/$taskId/title'));
+      final res = await http.post(
+        Uri.parse('$apiBase/api/tasks/$taskId/title'),
+      );
       _check(res);
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -2162,8 +2433,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     await _runBusy(() async {
       if (taskId != null && !taskId.startsWith('cloud-')) {
-        final res =
-            await http.post(Uri.parse('$apiBase/api/tasks/$taskId/cover'));
+        final res = await http.post(
+          Uri.parse('$apiBase/api/tasks/$taskId/cover'),
+        );
         _check(res);
         final body =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
@@ -2180,8 +2452,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         Uri.parse('$apiBase/api/covers/generate'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'title':
-              (task?['title'] as String? ?? publishTitleController.text).trim(),
+          'title': (task?['title'] as String? ?? publishTitleController.text)
+              .trim(),
           'script': script,
           'background_path': _outputVideoPath ?? '',
         }),
@@ -2239,7 +2511,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> cloneVoice() async {
     if (!_ensureSoftwareActivated()) return;
-    final taskId = task?['task_id'] as String?;
+    var taskId = task?['task_id'] as String?;
+    if (_isAndroidClient && taskId == null && _renderScript.isNotEmpty) {
+      taskId = 'mobile-${DateTime.now().millisecondsSinceEpoch}';
+      setState(() {
+        task = {
+          'task_id': taskId,
+          'status': 'rewritten',
+          'original_script': originalScriptController.text.trim(),
+          'rewritten_script': rewrittenScriptController.text.trim(),
+          'progress_steps': const [],
+        };
+      });
+    }
     if (taskId == null) return;
     final script = _renderScript;
     if (script.isEmpty) {
@@ -2286,10 +2570,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         message = '正在准备云端克隆声音素材';
         messageIsError = false;
       });
-      final referencePath = await _downloadPreviewToTempFile(
-        _selectedVoicePreviewUrl,
-        'voice_reference',
-      );
+      final referencePath = _isAndroidClient
+          ? mobileVoiceReferencePath
+          : await _downloadPreviewToTempFile(
+              _selectedVoicePreviewUrl,
+              'voice_reference',
+            );
+      if (referencePath.isEmpty) {
+        throw Exception('请先选择声音参考文件');
+      }
       final referenceFile = File(referencePath);
       if (!await referenceFile.exists()) {
         throw Exception('声音参考文件下载失败，请重新选择或上传声音');
@@ -2301,7 +2590,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'file_name': fileName,
           'content_type': _contentTypeForPath(fileName),
           'file_size_bytes': await referenceFile.length(),
-        }
+        },
       ];
       final payload = {
         ..._renderPayload(script),
@@ -2313,10 +2602,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final sessionRes = await http.post(
         Uri.parse('$_cloudApiBase/api/client/preprocess/upload-session'),
         headers: _cloudHeaders(),
-        body: jsonEncode({
-          'assets': uploadSpecs,
-          'payload': payload,
-        }),
+        body: jsonEncode({'assets': uploadSpecs, 'payload': payload}),
       );
       _check(sessionRes);
       final uploadJob = _decodeMap(sessionRes);
@@ -2503,7 +2789,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('退出云端账号'),
-        content: const Text('退出后不会影响软件激活状态，可重新选择登录或注册。'),
+        content: Text(
+          _isAndroidClient ? '退出后可使用邮箱和密码重新登录。' : '退出后不会影响软件激活状态，可重新选择登录或注册。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -2621,10 +2909,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _finishCloudVoiceJob(String jobId, String script) async {
-    await _waitCloudPreprocessResult(
-      jobId,
-      timeout: const Duration(hours: 4),
-    );
+    await _waitCloudPreprocessResult(jobId, timeout: const Duration(hours: 4));
     final localPath = await _downloadCloudJobOutputToLocal(
       jobId,
       fallbackFileName: 'voice.wav',
@@ -2651,14 +2936,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     final voiceUrl = _generatedVoiceUrl;
     if (voiceUrl == null) {
-      showError('请先点击“克隆声音生成后再播放声?');
+      showError('请先点击“克隆声音”生成后再播放声音');
       return;
     }
     try {
       await _stopOriginalAudioPreview();
       if (_isPlayingVoice) {
         await _stopVoicePreview();
-        showInfo('已停止播放声?');
+        showInfo('已停止播放声音');
         return;
       }
       await _stopVoicePreview();
@@ -2698,7 +2983,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await _stopVoicePreview();
       if (_isPlayingOriginalAudio) {
         await _stopOriginalAudioPreview();
-        showInfo('已停止播放原?');
+        showInfo('已停止播放原音');
         return;
       }
       await _stopOriginalAudioPreview();
@@ -2707,8 +2992,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _isPlayingOriginalAudio = true;
         _isPlayingVoice = false;
       });
-      final localPath =
-          await _downloadPreviewToTempFile(sourceUrl, 'original_voice');
+      final localPath = await _downloadPreviewToTempFile(
+        sourceUrl,
+        'original_voice',
+      );
       await _originalAudioPlayer!.open(Media(_playableMediaSource(localPath)));
       await _originalAudioPlayer!.setVolume(_voicePreviewMediaVolume);
       await _originalAudioPlayer!.play();
@@ -2938,6 +3225,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
     final path = picked?.files.single.path;
     if (path == null) return;
+    if (_isAndroidClient) {
+      setState(() {
+        mobileDigitalHumanPath = path;
+        mobileDigitalHumanName =
+            picked?.files.single.name ?? _fileNameFromPath(path);
+        selectedDigitalHuman = 'mobile:reference';
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        outputRefresh++;
+        message = '已选择数字人形象视频';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request = http.MultipartRequest(
         'POST',
@@ -2968,21 +3269,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (!_ensureSoftwareActivated()) return;
     final digitalHumanId = selectedDigitalHuman;
     if (digitalHumanId.isEmpty) {
-      showError('请先选择要删除的数字?');
+      showError('请先选择要删除的数字人');
       return;
     }
     if (!digitalHumanId.startsWith('custom:')) {
-      showError('只能删除你上传的数字?');
+      showError('只能删除你上传的数字人');
       return;
     }
     final assetId = digitalHumanId.substring('custom:'.length);
     if (assetId.isEmpty) {
-      showError('数字人素?ID 无效');
+      showError('数字人素材 ID 无效');
       return;
     }
     await _runBusy(() async {
-      final uri =
-          Uri.parse('$apiBase/api/assets/${Uri.encodeComponent(assetId)}');
+      final uri = Uri.parse(
+        '$apiBase/api/assets/${Uri.encodeComponent(assetId)}',
+      );
       final res = await http.delete(uri);
       _check(res);
       if (!mounted) return;
@@ -3016,8 +3318,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     setState(() => diagnosingMouthAtlas = true);
     try {
-      final uri = Uri.parse('$apiBase/api/digital-humans/atlas-diagnosis')
-          .replace(queryParameters: {'digital_human_id': digitalHumanId});
+      final uri = Uri.parse(
+        '$apiBase/api/digital-humans/atlas-diagnosis',
+      ).replace(queryParameters: {'digital_human_id': digitalHumanId});
       final res = await http.get(uri);
       _check(res);
       final body =
@@ -3054,6 +3357,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
     final path = picked?.files.single.path;
     if (path == null) return;
+    if (_isAndroidClient) {
+      setState(() {
+        mobileVoiceReferencePath = path;
+        mobileVoiceReferenceName =
+            picked?.files.single.name ?? _fileNameFromPath(path);
+        selectedVoice = 'mobile:reference';
+        _invalidateGeneratedVoice();
+        message = '已选择声音参考文件';
+        messageIsError = false;
+      });
+      return;
+    }
     await _runBusy(() async {
       final request = http.MultipartRequest(
         'POST',
@@ -3111,7 +3426,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         'mp4',
         'mov',
         'mkv',
-        'webm'
+        'webm',
       ],
     );
     final file = picked?.files.single;
@@ -3177,17 +3492,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final res = await http.post(
         Uri.parse('$apiBase/api/subtitles/preview'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'script': script,
-          'style': _subtitleStylePayload(),
-        }),
+        body: jsonEncode({'script': script, 'style': _subtitleStylePayload()}),
       );
       _check(res);
       final body =
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final lines =
           (body['lines'] as List?)?.map((line) => line.toString()).toList() ??
-              const <String>[];
+          const <String>[];
       setState(() {
         subtitlePreviewLines = lines;
         if (!silent) {
@@ -3238,7 +3550,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                               (value) {
                                 if (value == null) return;
                                 updateDialog(
-                                    () => selectedSubtitleFont = value);
+                                  () => selectedSubtitleFont = value,
+                                );
                               },
                               labels: _subtitleFontLabels,
                             ),
@@ -3340,9 +3653,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                           Expanded(
                             child: _ghostButton(
                               '自定义拖放',
-                              () => updateDialog(
-                                () => _setPipPosition('custom'),
-                              ),
+                              () =>
+                                  updateDialog(() => _setPipPosition('custom')),
                             ),
                           ),
                         ],
@@ -3442,8 +3754,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             borderRadius: BorderRadius.all(Radius.circular(8)),
             borderSide: BorderSide(color: cyan, width: 1.2),
           ),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 10,
+          ),
         ),
       ),
     );
@@ -3548,8 +3862,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final taskId = task?['task_id'] as String?;
     if (taskId == null) return;
     try {
-      final res = await http
-          .post(Uri.parse('$apiBase/api/tasks/$taskId/cancel-render'));
+      final res = await http.post(
+        Uri.parse('$apiBase/api/tasks/$taskId/cancel-render'),
+      );
       _check(res);
       await _loadTask(taskId);
       setState(() {
@@ -3563,17 +3878,32 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<_CloudUploadFile> _digitalHumanSourceUploadFile() async {
+    if (_isAndroidClient) {
+      final path = mobileDigitalHumanPath.trim();
+      if (path.isEmpty) throw Exception('请先选择数字人形象视频');
+      final file = File(path);
+      if (!await file.exists()) throw Exception('数字人形象视频不存在，请重新选择');
+      final fileName = mobileDigitalHumanName.trim().isEmpty
+          ? _fileNameFromPath(path)
+          : mobileDigitalHumanName.trim();
+      return _CloudUploadFile(
+        kind: 'source_video',
+        file: file,
+        fileName: fileName,
+        contentType: _contentTypeForPath(fileName),
+      );
+    }
     final digitalHumanId = selectedDigitalHuman.trim();
     if (digitalHumanId.isEmpty) {
       throw Exception('请先上传或选择数字人形象');
     }
     final profile = _digitalHumanProfile(digitalHumanId);
     final name = profile?['name']?.toString().trim();
-    final preferredName = '${_safeUploadFileNameBase(
-      (name == null || name.isEmpty) ? 'digital_human' : name,
-    )}.mp4';
-    final url = Uri.parse('$apiBase/api/digital-humans/reference').replace(
-        queryParameters: {'digital_human_id': digitalHumanId}).toString();
+    final preferredName =
+        '${_safeUploadFileNameBase((name == null || name.isEmpty) ? 'digital_human' : name)}.mp4';
+    final url = Uri.parse(
+      '$apiBase/api/digital-humans/reference',
+    ).replace(queryParameters: {'digital_human_id': digitalHumanId}).toString();
     final localPath = await _downloadPreviewToTempFile(
       url,
       'digital_human_source',
@@ -3630,9 +3960,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     try {
       final sourceUpload = await _digitalHumanSourceUploadFile();
       final fileName = sourceUpload.fileName;
-      final uploadFiles = <_CloudUploadFile>[
-        sourceUpload,
-      ];
+      final uploadFiles = <_CloudUploadFile>[sourceUpload];
       final voicePath = _hasFreshCloudVoice(script)
           ? cloudVoiceAudioPath
           : task?['extracted_audio_path'] as String? ?? '';
@@ -3680,10 +4008,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final sessionRes = await http.post(
         Uri.parse('$_cloudApiBase/api/client/jobs/upload-session'),
         headers: _cloudHeaders(),
-        body: jsonEncode({
-          'assets': uploadSpecs,
-          'payload': cloudBasePayload,
-        }),
+        body: jsonEncode({'assets': uploadSpecs, 'payload': cloudBasePayload}),
       );
       _check(sessionRes);
       final uploadJob = _decodeMap(sessionRes);
@@ -3715,7 +4040,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         final assetId = asset['asset_id'] as String;
         final uploadedRes = await http.post(
           Uri.parse(
-              '$_cloudApiBase/api/client/jobs/$jobId/assets/$assetId/uploaded'),
+            '$_cloudApiBase/api/client/jobs/$jobId/assets/$assetId/uploaded',
+          ),
           headers: _cloudHeaders(),
           body: jsonEncode({'file_size_bytes': uploadSize}),
         );
@@ -3767,9 +4093,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final fileSize = await file.length();
     final timeout = _cloudUploadTimeout(fileSize);
     try {
-      await _uploadFileToPresignedUrlInner(upload, file, fileSize).timeout(
-        timeout,
-      );
+      await _uploadFileToPresignedUrlInner(
+        upload,
+        file,
+        fileSize,
+      ).timeout(timeout);
     } on TimeoutException {
       throw TimeoutException(
         '上传素材到云端临时存储超时，已等待 ${timeout.inMinutes} 分钟，请检查网络后重试',
@@ -3782,10 +4110,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     File? sourceFile,
     String? sourceFileName,
   }) async {
-    final preprocessPayload = {
-      ...payload,
-      'client': 'oral_video_agent_client',
-    };
+    final preprocessPayload = {...payload, 'client': 'oral_video_agent_client'};
     String jobId;
     if (sourceFile != null) {
       final fileName = sourceFileName?.trim().isNotEmpty == true
@@ -3797,15 +4122,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'file_name': fileName,
           'content_type': _contentTypeForPath(fileName),
           'file_size_bytes': await sourceFile.length(),
-        }
+        },
       ];
       final sessionRes = await http.post(
         Uri.parse('$_cloudApiBase/api/client/preprocess/upload-session'),
         headers: _cloudHeaders(),
-        body: jsonEncode({
-          'assets': uploadSpecs,
-          'payload': preprocessPayload,
-        }),
+        body: jsonEncode({'assets': uploadSpecs, 'payload': preprocessPayload}),
       );
       _check(sessionRes);
       final uploadJob = _decodeMap(sessionRes);
@@ -3902,8 +4224,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final url = upload['url'] as String? ?? '';
     if (url.isEmpty) throw Exception('云端上传链接为空');
     final method = (upload['method'] as String? ?? 'PUT').toUpperCase();
-    final headers = (upload['headers'] as Map? ?? const {})
-        .map((key, value) => MapEntry('$key', '$value'));
+    final headers = (upload['headers'] as Map? ?? const {}).map(
+      (key, value) => MapEntry('$key', '$value'),
+    );
 
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 20);
@@ -3964,7 +4287,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (!mounted || total <= 0) return;
     final percent = ((sent / total) * 100).clamp(0, 100).floor();
     final now = DateTime.now();
-    final shouldUpdate = sent >= total ||
+    final shouldUpdate =
+        sent >= total ||
         percent >= lastPercent + 5 ||
         now.difference(lastUpdate).inMilliseconds >= 600;
     if (!shouldUpdate) return;
@@ -4018,6 +4342,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _stopCloudPolling();
         await _loadCloudDownload(jobId);
         await loadCloudMe(silent: true);
+        if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
         if (!mounted) return;
         setState(() {
           loading = false;
@@ -4030,6 +4355,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           status == 'timed_out') {
         _stopCloudPolling();
         await loadCloudMe(silent: true);
+        if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
         if (!mounted) return;
         setState(() {
           loading = false;
@@ -4055,8 +4381,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final download = (body['download'] as Map).cast<String, dynamic>();
     final url = download['url'] as String? ?? '';
     if (url.isEmpty) throw Exception('云端下载链接为空');
-    final headers = (download['headers'] as Map? ?? const {})
-        .map((key, value) => MapEntry('$key', '$value'));
+    final headers = (download['headers'] as Map? ?? const {}).map(
+      (key, value) => MapEntry('$key', '$value'),
+    );
     final cosKey = download['cos_key'] as String? ?? '';
     final fileName = _cloudOutputFileName(jobId, cosKey);
     if (mounted) {
@@ -4087,6 +4414,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   bool get _needsLocalCloudPostprocess {
+    if (_isAndroidClient) return false;
     return subtitlesEnabled || selectedBgm != 'none' || pipEnabled;
   }
 
@@ -4133,8 +4461,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final download = (body['download'] as Map).cast<String, dynamic>();
     final url = download['url'] as String? ?? '';
     if (url.isEmpty) throw Exception('云端下载链接为空');
-    final headers = (download['headers'] as Map? ?? const {})
-        .map((key, value) => MapEntry('$key', '$value'));
+    final headers = (download['headers'] as Map? ?? const {}).map(
+      (key, value) => MapEntry('$key', '$value'),
+    );
     final cosKey = download['cos_key'] as String? ?? '';
     final fileName = _cloudGenericOutputFileName(
       jobId,
@@ -4162,13 +4491,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final rawName = cosKey.trim().isEmpty
         ? fallbackFileName
         : Uri.decodeComponent(_fileNameFromPath(cosKey));
-    final safeName =
-        rawName.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    final safeName = rawName
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .trim();
     final name = safeName.isEmpty ? fallbackFileName : safeName;
     final hasExtension = RegExp(r'\.[A-Za-z0-9]{2,5}$').hasMatch(name);
     final fallbackExtension =
         RegExp(r'\.[A-Za-z0-9]{2,5}$').firstMatch(fallbackFileName)?.group(0) ??
-            '';
+        '';
     final withExt = hasExtension || fallbackExtension.isEmpty
         ? name
         : '$name$fallbackExtension';
@@ -4179,8 +4509,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final rawName = cosKey.trim().isEmpty
         ? 'result.mp4'
         : Uri.decodeComponent(_fileNameFromPath(cosKey));
-    final safeName =
-        rawName.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
+    final safeName = rawName
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .trim();
     final name = safeName.isEmpty ? 'result.mp4' : safeName;
     final lower = name.toLowerCase();
     final withExt = lower.endsWith('.mp4') ? name : '$name.mp4';
@@ -4284,6 +4615,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         messageIsError = false;
       });
       await loadCloudMe(silent: true);
+      if (_isAndroidClient) await loadMobileCloudJobs(silent: true);
     } catch (e) {
       _stopCloudPolling();
       if (!mounted) return;
@@ -4367,7 +4699,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     await loadOutput();
     final url = _outputVideoUrl;
     if (url == null) {
-      setState(() => message = '请先生成视频，生成完成后再预?');
+      setState(() => message = '请先生成视频，生成完成后再预览');
       return;
     }
     if (!mounted) return;
@@ -4420,7 +4752,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         await Process.start('xdg-open', [File(path).parent.path]);
       }
     } catch (e) {
-      setState(() => message = '打开视频失败?e');
+      setState(() => message = '打开视频失败：$e');
     }
   }
 
@@ -4448,7 +4780,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         await Process.start('xdg-open', [url]);
       }
     } catch (e) {
-      showError('打开链接失败?e');
+      showError('打开链接失败：$e');
     }
   }
 
@@ -4508,7 +4840,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'voice_id': selectedVoice,
       'voice_volume': voicePreviewVolume,
       'digital_human_engine': selectedDigitalHumanEngine,
-      'digital_human_id': selectedDigitalHuman.startsWith('custom:') ||
+      'digital_human_id':
+          selectedDigitalHuman.startsWith('custom:') ||
               selectedDigitalHuman.startsWith('template:')
           ? selectedDigitalHuman
           : null,
@@ -4590,9 +4923,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String? get _cloudJobId => cloudJob?['job_id'] as String?;
 
   String get _cloudAccountText {
-    if (!_cloudLicensed) return '软件未激?';
+    if (!_cloudLicensed) return '软件未激活';
     final email = _cloudUser?['email'] as String? ?? '';
-    if (email.trim().isEmpty) return '未绑定邮箱账?';
+    if (email.trim().isEmpty) return '未绑定邮箱账号';
     return email;
   }
 
@@ -4654,21 +4987,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     final taskId = _taskId;
     if (taskId == null) return null;
-    final hasOutputPath = (output?['ready'] == true) ||
+    final hasOutputPath =
+        (output?['ready'] == true) ||
         ((task?['output_video_path'] as String? ?? '').isNotEmpty);
     if (!hasOutputPath) return null;
     return '$apiBase/api/tasks/$taskId/download?v=$outputRefresh';
   }
 
   String get _selectedBgmUrl {
-    return Uri.parse('$apiBase/api/bgm/preview').replace(queryParameters: {
-      'bgm_id': selectedBgm,
-    }).toString();
+    return Uri.parse(
+      '$apiBase/api/bgm/preview',
+    ).replace(queryParameters: {'bgm_id': selectedBgm}).toString();
   }
 
   String get _selectedVoicePreviewUrl {
-    return Uri.parse('$apiBase/api/voices/preview')
-        .replace(queryParameters: {'voice_id': selectedVoice}).toString();
+    return Uri.parse(
+      '$apiBase/api/voices/preview',
+    ).replace(queryParameters: {'voice_id': selectedVoice}).toString();
   }
 
   String? get _generatedVoiceUrl {
@@ -4741,13 +5076,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String _ledgerTitle(Map<String, dynamic> item) {
     final event = item['event_type'] as String? ?? '';
     final source = item['source'] as String? ?? '';
-    final sourceText = source == 'bonus' ? '赠点' : '付费?';
+    final sourceText = source == 'bonus' ? '赠点' : '付费点数';
     return switch (event) {
       'admin_credit' => '后台加点',
       'credit_redeem' => '兑换加点',
       'hold' => '任务冻结',
       'capture' => '任务扣点',
-      'release' => '任务逢?',
+      'release' => '任务释放',
       'cancel_fee' => '取消扣费',
       _ => '$event $sourceText',
     };
@@ -4757,6 +5092,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget build(BuildContext context) {
     if (!initialized) {
       return _gateScaffold('正在启动软件');
+    }
+    if (_isAndroidClient) {
+      if (!_cloudLoggedIn || !_cloudAccountBound) {
+        return _mobileAuthScaffold();
+      }
+      return _mobileWorkbenchScaffold();
     }
     if (!_cloudLicensed) {
       return _gateScaffold('请先激活软件', showActivationActions: true);
@@ -4792,68 +5133,1137 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _studioPage() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (constraints.maxWidth < 1050) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                _pageHeading(
-                  '创作中心',
-                  '从素材导入到视频发布，每个模块都可以独立编辑和预览。',
-                  Icons.auto_awesome_rounded,
-                ),
-                const SizedBox(height: 14),
-                SizedBox(height: 860, child: _leftPanel()),
-                SizedBox(height: 1040, child: _centerPanel()),
-                SizedBox(height: 1050, child: _rightPanel()),
-              ],
-            ),
-          );
-        }
-        return Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 4),
-              child: _pageHeading(
-                '创作中心',
-                '分步骤处理文案、声音、画面与发布，修改后可在右侧即时预览。',
-                Icons.auto_awesome_rounded,
-              ),
-            ),
-            Expanded(
-              child: Row(
+    final studioTheme = ThemeData(
+      brightness: Brightness.light,
+      useMaterial3: true,
+      fontFamilyFallback: const [
+        'Microsoft YaHei UI',
+        'Microsoft YaHei',
+        'PingFang SC',
+      ],
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: studioPrimary,
+        brightness: Brightness.light,
+        primary: studioPrimary,
+        surface: Colors.white,
+      ),
+      dividerColor: studioBorder,
+      textTheme: ThemeData.light().textTheme.apply(
+        bodyColor: studioInk,
+        displayColor: studioInk,
+      ),
+      sliderTheme: const SliderThemeData(
+        activeTrackColor: studioPrimary,
+        thumbColor: studioPrimary,
+        inactiveTrackColor: Color(0xFFE7E9F2),
+      ),
+    );
+    return Theme(
+      data: studioTheme,
+      child: DefaultTextStyle(
+        style: studioTheme.textTheme.bodyMedium!.copyWith(color: studioInk),
+        child: ColoredBox(
+          color: studioCanvas,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 1180;
+              if (compact) {
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+                  child: Column(
+                    children: [
+                      _studioStepCard(compact: true),
+                      const SizedBox(height: 14),
+                      SizedBox(height: 620, child: _studioPreviewPanel()),
+                    ],
+                  ),
+                );
+              }
+              return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(flex: 30, child: _leftPanel()),
-                  Expanded(flex: 39, child: _centerPanel()),
-                  Expanded(flex: 31, child: _rightPanel()),
+                  Expanded(child: _studioStepCard()),
+                  SizedBox(width: 326, child: _studioPreviewPanel()),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<({String title, String subtitle, IconData icon})>
+  get _studioSteps => const [
+    (title: '文案生成', subtitle: '导入链接并智能改写', icon: Icons.edit_note_rounded),
+    (title: '声音生成', subtitle: '选择音色与克隆声音', icon: Icons.graphic_eq_rounded),
+    (
+      title: '数字人生成',
+      subtitle: '选择形象并生成视频',
+      icon: Icons.face_retouching_natural_rounded,
+    ),
+    (title: '视频封面', subtitle: '生成或上传竖版封面', icon: Icons.image_outlined),
+    (title: 'BGM 与字幕', subtitle: '完善声音和字幕样式', icon: Icons.subtitles_rounded),
+    (title: '一键发布', subtitle: '编辑文案并选择平台', icon: Icons.rocket_launch_rounded),
+  ];
+
+  Widget _studioWorkflowRail({bool embedded = false}) {
+    final steps = _studioSteps;
+    return Container(
+      margin: embedded
+          ? EdgeInsets.zero
+          : const EdgeInsets.fromLTRB(16, 16, 8, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(embedded ? 0 : 18),
+        border: embedded ? null : Border.all(color: studioBorder),
+        boxShadow: embedded
+            ? null
+            : const [
+                BoxShadow(
+                  color: Color(0x0A111827),
+                  blurRadius: 24,
+                  offset: Offset(0, 8),
+                ),
+              ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEEF0FF),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.auto_awesome_rounded,
+                        color: studioPrimary,
+                        size: 19,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'AI 创作工作流',
+                        style: TextStyle(
+                          color: studioInk,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Text(
+                      '整体进度',
+                      style: TextStyle(
+                        color: studioMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${studioStep + 1}/${steps.length}',
+                      style: const TextStyle(
+                        color: studioPrimary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(99),
+                  child: LinearProgressIndicator(
+                    minHeight: 6,
+                    value: (studioStep + 1) / steps.length,
+                    backgroundColor: const Color(0xFFEEF0F4),
+                    color: studioPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              itemCount: steps.length,
+              itemBuilder: (context, index) =>
+                  _studioStepNavItem(index, steps[index]),
+            ),
+          ),
+          if (!embedded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F8FC),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: localApiOnline
+                            ? studioSuccess
+                            : const Color(0xFFFF6B7B),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        localApiOnline ? '创作服务运行正常' : '等待本地服务连接',
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioStepNavItem(
+    int index,
+    ({String title, String subtitle, IconData icon}) step,
+  ) {
+    final active =
+        selectedSection == _WorkspaceSection.studio && studioStep == index;
+    final completed = index < studioStep;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() {
+            selectedSection = _WorkspaceSection.studio;
+            studioStep = index;
+          }),
+          borderRadius: BorderRadius.circular(12),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+            decoration: BoxDecoration(
+              color: active ? const Color(0xFFF0F1FF) : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: active ? const Color(0xFFD8DAFF) : Colors.transparent,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 31,
+                  height: 31,
+                  decoration: BoxDecoration(
+                    color: completed
+                        ? const Color(0xFFE8F8F0)
+                        : active
+                        ? studioPrimary
+                        : const Color(0xFFF0F2F6),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    completed ? Icons.check_rounded : step.icon,
+                    size: 17,
+                    color: completed
+                        ? studioSuccess
+                        : active
+                        ? Colors.white
+                        : const Color(0xFF9AA0B2),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        step.title,
+                        style: TextStyle(
+                          color: active ? studioPrimaryDark : studioInk,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        step.subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Retained for possible future tablet navigation.
+  // ignore: unused_element
+  Widget _studioCompactSteps() {
+    final steps = _studioSteps;
+    return Container(
+      height: 86,
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: steps.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final active = studioStep == index;
+          final completed = index < studioStep;
+          return InkWell(
+            onTap: () => setState(() => studioStep = index),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: 138,
+              padding: const EdgeInsets.symmetric(horizontal: 11),
+              decoration: BoxDecoration(
+                color: active ? const Color(0xFFF0F1FF) : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: active ? const Color(0xFFD8DAFF) : studioBorder,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    completed ? Icons.check_circle : steps[index].icon,
+                    color: completed
+                        ? studioSuccess
+                        : active
+                        ? studioPrimary
+                        : studioMuted,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      steps[index].title,
+                      style: TextStyle(
+                        color: active ? studioPrimaryDark : studioInk,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ],
-        );
-      },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _studioStepCard({bool compact = false}) {
+    final step = _studioSteps[studioStep];
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 26),
+      child: _studioCurrentStep(),
+    );
+    return Container(
+      margin: EdgeInsets.fromLTRB(8, 16, compact ? 8 : 8, compact ? 0 : 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: studioBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A111827),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: compact ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 20, 17),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEEF0FF),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(step.icon, color: studioPrimary, size: 23),
+                ),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        step.title,
+                        style: const TextStyle(
+                          color: studioInk,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        step.subtitle,
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF4F5F8),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    '步骤 ${studioStep + 1} / ${_studioSteps.length}',
+                    style: const TextStyle(
+                      color: studioMuted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          if (compact)
+            content
+          else
+            Expanded(child: SingleChildScrollView(child: content)),
+          const Divider(height: 1),
+          _studioStepFooter(),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioStepFooter() {
+    final lastStep = studioStep == _studioSteps.length - 1;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+      child: Row(
+        children: [
+          TextButton.icon(
+            onPressed: studioStep == 0
+                ? null
+                : () => setState(() => studioStep -= 1),
+            icon: const Icon(Icons.arrow_back_rounded, size: 18),
+            label: const Text('上一步'),
+          ),
+          const Spacer(),
+          FilledButton.icon(
+            onPressed: loading
+                ? null
+                : lastStep
+                ? createPublishJobs
+                : () => setState(() => studioStep += 1),
+            style: FilledButton.styleFrom(
+              backgroundColor: studioPrimary,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(132, 44),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            icon: Icon(
+              lastStep
+                  ? Icons.rocket_launch_rounded
+                  : Icons.arrow_forward_rounded,
+              size: 18,
+            ),
+            label: Text(lastStep ? '创建发布任务' : '保存并继续'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioCurrentStep() {
+    return switch (studioStep) {
+      0 => _studioScriptStep(),
+      1 => _studioVoiceStep(),
+      2 => _studioAvatarStep(),
+      3 => _studioCoverStep(),
+      4 => _studioMediaStep(),
+      _ => _studioPublishStep(),
+    };
+  }
+
+  Widget _studioScriptStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('从同行视频链接提取口播文案，也可以直接上传本地视频。AI 会保留核心卖点并重写表达。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '导入对标视频',
+          subtitle: '支持抖音分享链接、完整分享文案或本地视频',
+          icon: Icons.link_rounded,
+          child: Column(
+            children: [
+              _input(urlController, '粘贴抖音分享链接或完整分享文案'),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(child: _stepButton('提取视频文案', createTask)),
+                  const SizedBox(width: 10),
+                  _ghostButton('上传本地视频', uploadSourceVideo),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final stacked = constraints.maxWidth < 720;
+            final original = _studioFieldCard(
+              title: '原始文案',
+              subtitle: '提取后仍可手动校正内容',
+              icon: Icons.article_outlined,
+              child: _textBox(originalScriptController, '等待提取原文案', 10),
+            );
+            final rewritten = _studioFieldCard(
+              title: 'AI 改写',
+              subtitle: '选择表达风格并补充受众与产品',
+              icon: Icons.auto_fix_high_rounded,
+              child: Column(
+                children: [
+                  _styleDropdown(),
+                  const SizedBox(height: 9),
+                  Row(
+                    children: [
+                      Expanded(child: _input(audienceController, '目标人群')),
+                      const SizedBox(width: 8),
+                      Expanded(child: _input(productController, '产品 / 服务')),
+                    ],
+                  ),
+                  const SizedBox(height: 9),
+                  _stepButton('生成改写文案', rewrite),
+                  const SizedBox(height: 9),
+                  _textBox(rewrittenScriptController, 'AI 改写结果', 8),
+                ],
+              ),
+            );
+            if (stacked) {
+              return Column(
+                children: [original, const SizedBox(height: 14), rewritten],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: original),
+                const SizedBox(width: 14),
+                Expanded(child: rewritten),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _studioVoiceStep() {
+    final voiceOptions = _limitedProfileOptions(
+      voices,
+      'voice_id',
+      preferredSystemPrefix: 'clone:',
+    );
+    final voiceLabels = {
+      for (final voice in voices)
+        voice['voice_id'] as String: voice['name'] as String,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('选择已有音色直接合成，或上传 15–60 秒清晰人声创建专属声音。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '声音模型',
+          subtitle: '当前服务：$_voiceServiceText',
+          icon: Icons.record_voice_over_rounded,
+          trailing: _studioStatusPill(
+            _cloudVoiceJobActive ? '克隆中' : '服务可用',
+            _cloudVoiceJobActive ? const Color(0xFFFFA726) : studioSuccess,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '选择声音',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 7),
+              _dropdown(
+                selectedVoice,
+                voiceOptions,
+                (value) => setState(() {
+                  selectedVoice = value ?? selectedVoice;
+                  _invalidateGeneratedVoice();
+                }),
+                labels: voiceLabels,
+              ),
+              const SizedBox(height: 16),
+              _studioSlider(
+                '语速',
+                '调节口播节奏',
+                speechRate,
+                0.6,
+                1.4,
+                (value) => setState(() => speechRate = value),
+                '${speechRate.toStringAsFixed(1)}x',
+              ),
+              const SizedBox(height: 10),
+              _studioSlider(
+                '试听音量',
+                '仅影响本地试听',
+                voicePreviewVolume,
+                0,
+                1,
+                _updateVoicePreviewVolume,
+                '${(voicePreviewVolume * 100).round()}%',
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 9,
+                runSpacing: 9,
+                children: [
+                  _ghostButton('上传声音', uploadVoice),
+                  _stepButton(
+                    _cloudVoiceJobActive ? '停止克隆' : '克隆声音',
+                    _cloudVoiceJobActive ? stopCloudVoiceJob : cloneVoice,
+                    compact: true,
+                    allowWhileLoading: _cloudVoiceJobActive,
+                  ),
+                  _ghostButton(_isPlayingVoice ? '停止试听' : '试听声音', playVoice),
+                  _ghostButton(
+                    _isPlayingOriginalAudio ? '停止原音' : '试听原音',
+                    playOriginalAudio,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioAvatarStep() {
+    final userDigitalHumans = digitalHumans
+        .where((item) => item['built_in'] != true)
+        .toList();
+    final options = _limitedProfileOptions(
+      userDigitalHumans,
+      'digital_human_id',
+      preferredSystemPrefix: 'custom:',
+    );
+    final labels = {
+      for (final human in userDigitalHumans)
+        human['digital_human_id'] as String: human['name'] as String,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('选择已授权的数字人形象，系统会将改写文案、声音和画面合成为竖版视频。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '数字人形象',
+          subtitle: options.isEmpty ? '还没有可用形象，请先上传素材' : '点击列表选择本次出镜形象',
+          icon: Icons.face_rounded,
+          trailing: Wrap(
+            spacing: 8,
+            children: [
+              _ghostButton('上传形象', uploadDigitalHuman),
+              _ghostButton('删除', deleteDigitalHuman),
+            ],
+          ),
+          child: _digitalHumanPicker(options, labels),
+        ),
+        const SizedBox(height: 14),
+        _studioFieldCard(
+          title: '合成设置',
+          subtitle: _engineStatusText(),
+          icon: Icons.movie_creation_outlined,
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: _studioChoiceTile('单形象', '稳定生成，适合口播', true)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _studioChoiceTile('多镜头', '即将开放', false)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _stepButton(
+                renderingVideo ? '停止生成' : '生成数字人成品视频',
+                renderingVideo ? stopRender : render,
+                allowWhileLoading: renderingVideo,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioCoverStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('根据文案智能生成竖版封面，也可以上传已经设计好的 9:16 图片。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '视频封面',
+          subtitle: '建议尺寸 1080 × 1920，主体和标题保持在安全区域内',
+          icon: Icons.image_outlined,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _coverTools(),
+              const SizedBox(height: 14),
+              _coverPreview(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioMediaStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('统一配置背景音乐、字幕样式和画中画素材，所有设置会在最终合成时生效。'),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '声音与字幕',
+          subtitle: '在背景音乐和字幕设置之间切换',
+          icon: Icons.library_music_outlined,
+          child: Column(
+            children: [
+              _subTabs(),
+              const SizedBox(height: 18),
+              _mediaSubTabPanel(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioPublishStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip('选择发布平台与账号，补充标题、正文和话题后创建发布任务。'),
+        const SizedBox(height: 18),
+        _publisherPanel(),
+      ],
+    );
+  }
+
+  Widget _studioPreviewPanel() {
+    final sourceUrl = _sourceVideoUrl;
+    final outputUrl = _outputVideoUrl;
+    final avatarUrl = selectedDigitalHuman.isEmpty
+        ? null
+        : _digitalHumanThumbnailUrl(selectedDigitalHuman);
+    final status = task?['status']?.toString() ?? '';
+    return Container(
+      margin: const EdgeInsets.fromLTRB(8, 16, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: studioBorder),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A111827),
+            blurRadius: 24,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '实时预览',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                ),
+              ),
+              _studioStatusPill(
+                status.isEmpty ? '待生成' : _statusText(status),
+                status == 'completed'
+                    ? studioSuccess
+                    : status == 'failed'
+                    ? const Color(0xFFFF5D73)
+                    : studioPrimary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '所有步骤的修改都会汇总到最终成片',
+            style: TextStyle(color: studioMuted, fontSize: 11),
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: 9 / 16,
+                child: Container(
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF171925),
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: const Color(0xFF24283B)),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x26000000),
+                        blurRadius: 20,
+                        offset: Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: outputUrl != null
+                      ? _OutputVideoPreview(url: outputUrl)
+                      : avatarUrl != null
+                      ? _digitalHumanPreviewImage(avatarUrl)
+                      : sourceUrl != null
+                      ? _OutputVideoPreview(url: sourceUrl)
+                      : _previewPlaceholder(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF7F8FC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: studioBorder),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.smart_display_outlined,
+                  color: studioPrimary,
+                  size: 20,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        outputUrl != null ? '成品视频已就绪' : '竖版视频 · 9:16',
+                        style: const TextStyle(
+                          color: studioInk,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        outputUrl != null ? _cloudOutputLabel : '等待生成后可预览与下载',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '预览成品',
+                  onPressed: outputUrl == null ? null : previewOutputVideo,
+                  icon: const Icon(Icons.play_circle_outline_rounded),
+                  color: studioPrimary,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioTip(String text) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4F5FF),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: const Color(0xFFE1E2FF)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.lightbulb_outline_rounded,
+            color: studioPrimary,
+            size: 18,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: Color(0xFF5C6380),
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioFieldCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Widget child,
+    Widget? trailing,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: studioBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F2F7),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(icon, color: const Color(0xFF626A80), size: 18),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: studioInk,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: studioMuted, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              if (trailing != null) trailing,
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _studioStatusPill(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _studioSlider(
+    String label,
+    String subtitle,
+    double value,
+    double min,
+    double max,
+    ValueChanged<double> onChanged,
+    String valueText,
+  ) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 90,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                subtitle,
+                style: const TextStyle(color: studioMuted, fontSize: 9),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Slider(value: value, min: min, max: max, onChanged: onChanged),
+        ),
+        Container(
+          width: 54,
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF4F5F8),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            valueText,
+            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _studioChoiceTile(String title, String subtitle, bool active) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
+      decoration: BoxDecoration(
+        color: active ? const Color(0xFFF2F3FF) : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(
+          color: active ? const Color(0xFFC9CCFF) : studioBorder,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            active ? Icons.radio_button_checked : Icons.lock_outline_rounded,
+            color: active ? studioPrimary : studioMuted,
+            size: 19,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: studioMuted, fontSize: 9),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _workspaceSidebar() {
-    final compact = MediaQuery.sizeOf(context).width < 1280;
-    final items = const [
-      (_WorkspaceSection.studio, Icons.home_rounded, '创作中心'),
-      (_WorkspaceSection.voices, Icons.graphic_eq_rounded, '声音管理'),
-      (_WorkspaceSection.avatars, Icons.smart_display_rounded, '形象管理'),
-      (_WorkspaceSection.media, Icons.folder_copy_rounded, '素材管理'),
-      (_WorkspaceSection.tasks, Icons.format_list_bulleted_rounded, '任务中心'),
-      (_WorkspaceSection.accounts, Icons.person_outline_rounded, '账号管理'),
-      (_WorkspaceSection.cloudAccount, Icons.cloud_outlined, '云端账户'),
-    ];
     return Container(
-      width: compact ? 76 : 184,
+      width: 228,
       decoration: const BoxDecoration(
-        color: Color(0xFF151624),
-        border: Border(right: BorderSide(color: Color(0xFF292B3E))),
+        color: Colors.white,
+        border: Border(right: BorderSide(color: studioBorder)),
       ),
       child: SafeArea(
         child: Column(
@@ -4867,47 +6277,51 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     width: 38,
                     height: 38,
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(colors: [cyan, pink]),
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [studioPrimary, Color(0xFF7C5CFC)],
+                      ),
                       borderRadius: BorderRadius.circular(11),
                       boxShadow: [
                         BoxShadow(
-                          color: purpleLine.withValues(alpha: 0.28),
+                          color: studioPrimary.withValues(alpha: 0.18),
                           blurRadius: 16,
                         ),
                       ],
                     ),
-                    child: const Icon(Icons.play_arrow_rounded,
-                        color: Colors.white, size: 26),
-                  ),
-                  if (!compact) ...[
-                    const SizedBox(width: 10),
-                    const Text(
-                      '杰速口播',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                    child: const Icon(
+                      Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 26,
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    '杰速口播',
+                    style: TextStyle(
+                      color: studioInk,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
                 ],
               ),
             ),
             const Divider(height: 1),
-            const SizedBox(height: 12),
-            for (final item in items)
-              Padding(
-                padding: EdgeInsets.symmetric(
-                  horizontal: compact ? 10 : 12,
-                  vertical: 3,
-                ),
-                child: _sidebarItem(
-                  section: item.$1,
-                  icon: item.$2,
-                  label: item.$3,
-                  compact: compact,
-                ),
-              ),
-            const Spacer(),
+            Expanded(child: _studioWorkflowRail(embedded: true)),
+            const Divider(height: 1),
             Padding(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              child: _sidebarItem(
+                section: _WorkspaceSection.cloudAccount,
+                icon: Icons.cloud_outlined,
+                label: '云端账户',
+                compact: false,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
               child: Tooltip(
                 message: localApiOnline ? '本地服务 $apiBase' : '本地服务未连接，点击顶部刷新重试',
                 child: Row(
@@ -4923,12 +6337,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         shape: BoxShape.circle,
                       ),
                     ),
-                    if (!compact) ...[
-                      const SizedBox(width: 8),
-                      Text(localApiOnline ? '服务已连接' : '服务未连接',
-                          style: const TextStyle(
-                              color: Colors.white60, fontSize: 12)),
-                    ],
+                    const SizedBox(width: 8),
+                    Text(
+                      localApiOnline ? '服务已连接' : '服务未连接',
+                      style: const TextStyle(color: studioMuted, fontSize: 12),
+                    ),
                   ],
                 ),
               ),
@@ -4965,34 +6378,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             height: 48,
             padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 13),
             decoration: BoxDecoration(
-              gradient: active
-                  ? LinearGradient(
-                      colors: [
-                        const Color(0xFF5B3EA8).withValues(alpha: 0.72),
-                        const Color(0xFF39224D).withValues(alpha: 0.82),
-                      ],
-                    )
-                  : null,
+              color: active ? const Color(0xFFF0F1FF) : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                color: active
-                    ? purpleLine.withValues(alpha: 0.65)
-                    : Colors.transparent,
+                color: active ? const Color(0xFFD8DAFF) : Colors.transparent,
               ),
             ),
             child: Row(
-              mainAxisAlignment:
-                  compact ? MainAxisAlignment.center : MainAxisAlignment.start,
+              mainAxisAlignment: compact
+                  ? MainAxisAlignment.center
+                  : MainAxisAlignment.start,
               children: [
-                Icon(icon,
-                    size: 20,
-                    color: active ? const Color(0xFFE8D8FF) : Colors.white54),
+                Icon(
+                  icon,
+                  size: 20,
+                  color: active ? studioPrimary : studioMuted,
+                ),
                 if (!compact) ...[
                   const SizedBox(width: 12),
                   Text(
                     label,
                     style: TextStyle(
-                      color: active ? Colors.white : Colors.white70,
+                      color: active ? studioPrimaryDark : studioInk,
                       fontWeight: active ? FontWeight.w800 : FontWeight.w600,
                     ),
                   ),
@@ -5007,11 +6414,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Widget _workspaceTopBar() {
     return Container(
-      height: 70,
+      height: 72,
       padding: const EdgeInsets.symmetric(horizontal: 20),
       decoration: const BoxDecoration(
-        color: Color(0xFF171824),
-        border: Border(bottom: BorderSide(color: Color(0xFF292B3E))),
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: studioBorder)),
       ),
       child: Row(
         children: [
@@ -5032,20 +6439,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           InkWell(
             borderRadius: BorderRadius.circular(10),
             onTap: () => setState(
-                () => selectedSection = _WorkspaceSection.cloudAccount),
+              () => selectedSection = _WorkspaceSection.cloudAccount,
+            ),
             child: Container(
               height: 40,
               padding: const EdgeInsets.symmetric(horizontal: 12),
               decoration: BoxDecoration(
-                color: panelBg2,
+                color: const Color(0xFFF7F8FC),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.white12),
+                border: Border.all(color: studioBorder),
               ),
               child: Row(
                 children: [
                   const CircleAvatar(
                     radius: 13,
-                    backgroundColor: Color(0xFF7046D9),
+                    backgroundColor: studioPrimary,
                     child: Icon(Icons.person, size: 16, color: Colors.white),
                   ),
                   const SizedBox(width: 8),
@@ -5053,7 +6461,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     _cloudAccountBound
                         ? (_cloudUser?['email']?.toString() ?? '云端账户')
                         : '登录 / 注册',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                      color: studioInk,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
               ),
@@ -5074,7 +6485,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       tooltip: tooltip,
       onPressed: loading ? null : onPressed,
       icon: Icon(icon, size: 20),
-      style: IconButton.styleFrom(backgroundColor: panelBg2),
+      style: IconButton.styleFrom(
+        backgroundColor: const Color(0xFFF1F2F7),
+        foregroundColor: const Color(0xFF626A80),
+      ),
     );
   }
 
@@ -5088,9 +6502,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 15),
       decoration: BoxDecoration(
-        color: const Color(0xFF181A27),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: const Color(0xFF2D3044)),
+        border: Border.all(color: studioBorder),
       ),
       child: Row(
         children: [
@@ -5098,7 +6512,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [cyan, pink]),
+              gradient: const LinearGradient(
+                colors: [studioPrimary, Color(0xFF7C5CFC)],
+              ),
               borderRadius: BorderRadius.circular(11),
             ),
             child: Icon(icon, color: Colors.white, size: 23),
@@ -5108,13 +6524,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: const TextStyle(
-                        fontSize: 22, fontWeight: FontWeight.w900)),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: studioInk,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
                 const SizedBox(height: 3),
-                Text(subtitle,
-                    style:
-                        const TextStyle(color: Colors.white54, fontSize: 13)),
+                Text(
+                  subtitle,
+                  style: const TextStyle(color: studioMuted, fontSize: 13),
+                ),
               ],
             ),
           ),
@@ -5223,7 +6645,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               color: selected ? const Color(0xFF292247) : panelBg2,
               borderRadius: BorderRadius.circular(11),
               border: Border.all(
-                  color: selected ? purpleLine : const Color(0xFF34374D)),
+                color: selected ? purpleLine : const Color(0xFF34374D),
+              ),
             ),
             child: Row(
               children: [
@@ -5241,14 +6664,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(voice['name']?.toString() ?? '未命名声音',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text(
+                        voice['name']?.toString() ?? '未命名声音',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                       const SizedBox(height: 3),
-                      Text(builtIn ? '系统声音' : '我的声音',
-                          style: const TextStyle(
-                              color: Color(0x75FFFFFF), fontSize: 12)),
+                      Text(
+                        builtIn ? '系统声音' : '我的声音',
+                        style: const TextStyle(
+                          color: Color(0x75FFFFFF),
+                          fontSize: 12,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -5266,8 +6695,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   IconButton(
                     tooltip: '删除',
                     onPressed: () => _deleteAsset(voice['asset_id'].toString()),
-                    icon: const Icon(Icons.delete_outline_rounded,
-                        size: 20, color: Color(0xFFFF7892)),
+                    icon: const Icon(
+                      Icons.delete_outline_rounded,
+                      size: 20,
+                      color: Color(0xFFFF7892),
+                    ),
                   ),
               ],
             ),
@@ -5278,8 +6710,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _avatarManagementPage() {
-    final customHumans =
-        digitalHumans.where((item) => item['built_in'] != true).toList();
+    final customHumans = digitalHumans
+        .where((item) => item['built_in'] != true)
+        .toList();
     return Padding(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -5307,11 +6740,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 : GridView.builder(
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 320,
-                      childAspectRatio: 0.78,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                    ),
+                          maxCrossAxisExtent: 320,
+                          childAspectRatio: 0.78,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                        ),
                     itemCount: customHumans.length + 1,
                     itemBuilder: (context, index) {
                       if (index == 0) return _addAvatarCard();
@@ -5339,13 +6772,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           child: const Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.add_circle_outline_rounded,
-                  size: 48, color: Color(0xFFA98AFF)),
+              Icon(
+                Icons.add_circle_outline_rounded,
+                size: 48,
+                color: Color(0xFFA98AFF),
+              ),
               SizedBox(height: 12),
               Text('上传新形象', style: TextStyle(fontWeight: FontWeight.w800)),
               SizedBox(height: 5),
-              Text('MP4 / MOV / WebM',
-                  style: TextStyle(color: Color(0x75FFFFFF), fontSize: 12)),
+              Text(
+                'MP4 / MOV / WebM',
+                style: TextStyle(color: Color(0x75FFFFFF), fontSize: 12),
+              ),
             ],
           ),
         ),
@@ -5422,8 +6860,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         setState(() => selectedDigitalHuman = id);
                         await deleteDigitalHuman();
                       },
-                      icon: const Icon(Icons.delete_outline_rounded,
-                          size: 20, color: Color(0xFFFF7892)),
+                      icon: const Icon(
+                        Icons.delete_outline_rounded,
+                        size: 20,
+                        color: Color(0xFFFF7892),
+                      ),
                     ),
                   ],
                 ),
@@ -5473,9 +6914,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _bgmLibraryCard(
-                  const {'bgm_id': 'none', 'name': '不使用背景音乐'},
-                ),
+                _bgmLibraryCard(const {'bgm_id': 'none', 'name': '不使用背景音乐'}),
                 for (final track in bgmTracks) _bgmLibraryCard(track),
               ],
             ),
@@ -5493,8 +6932,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     Expanded(
                       child: _dropZone(
                         icon: Icons.add_photo_alternate_outlined,
-                        title:
-                            pipAssetName.isEmpty ? '上传画中画图片或视频' : pipAssetName,
+                        title: pipAssetName.isEmpty
+                            ? '上传画中画图片或视频'
+                            : pipAssetName,
                         subtitle: pipAssetName.isEmpty
                             ? '支持常见图片与视频格式'
                             : '素材已关联当前任务，可继续设置显示方式',
@@ -5564,12 +7004,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               color: selected ? const Color(0xFF292247) : panelBg2,
               borderRadius: BorderRadius.circular(11),
               border: Border.all(
-                  color: selected ? purpleLine : const Color(0xFF34374D)),
+                color: selected ? purpleLine : const Color(0xFF34374D),
+              ),
             ),
             child: Row(
               children: [
-                Icon(id == 'none' ? Icons.music_off : Icons.music_note,
-                    color: selected ? const Color(0xFFD7C4FF) : Colors.white54),
+                Icon(
+                  id == 'none' ? Icons.music_off : Icons.music_note,
+                  color: selected ? const Color(0xFFD7C4FF) : Colors.white54,
+                ),
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
@@ -5592,8 +7035,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   IconButton(
                     tooltip: '删除',
                     onPressed: () => _deleteAsset(track['asset_id'].toString()),
-                    icon: const Icon(Icons.delete_outline,
-                        size: 19, color: Color(0xFFFF7892)),
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      size: 19,
+                      color: Color(0xFFFF7892),
+                    ),
                   ),
               ],
             ),
@@ -5607,8 +7053,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final total = taskHistory.length;
     final filteredTasks = _filteredTaskHistory();
     final running = taskHistory
-        .where((item) => {'created', 'imported', 'rendering'}
-            .contains(item['status']?.toString()))
+        .where(
+          (item) => {
+            'created',
+            'imported',
+            'rendering',
+          }.contains(item['status']?.toString()),
+        )
         .length;
     final completed = taskHistory
         .where((item) => item['status']?.toString() == 'completed')
@@ -5632,7 +7083,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 _stepButton(
                   '新建任务',
                   () => setState(
-                      () => selectedSection = _WorkspaceSection.studio),
+                    () => selectedSection = _WorkspaceSection.studio,
+                  ),
                   compact: true,
                 ),
               ],
@@ -5642,19 +7094,35 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Row(
             children: [
               Expanded(
-                  child: _statCard('总任务', total, Icons.article_outlined, cyan)),
+                child: _statCard('总任务', total, Icons.article_outlined, cyan),
+              ),
               const SizedBox(width: 10),
               Expanded(
-                  child: _statCard('进行中', running, Icons.sync_rounded,
-                      const Color(0xFFFFC857))),
+                child: _statCard(
+                  '进行中',
+                  running,
+                  Icons.sync_rounded,
+                  const Color(0xFFFFC857),
+                ),
+              ),
               const SizedBox(width: 10),
               Expanded(
-                  child: _statCard('已完成', completed, Icons.check_circle_outline,
-                      const Color(0xFF51D8A5))),
+                child: _statCard(
+                  '已完成',
+                  completed,
+                  Icons.check_circle_outline,
+                  const Color(0xFF51D8A5),
+                ),
+              ),
               const SizedBox(width: 10),
               Expanded(
-                  child: _statCard('失败', failed, Icons.error_outline,
-                      const Color(0xFFFF6D8A))),
+                child: _statCard(
+                  '失败',
+                  failed,
+                  Icons.error_outline,
+                  const Color(0xFFFF6D8A),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -5742,8 +7210,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final checkboxValue = selectedVisible == 0
         ? false
         : allSelected
-            ? true
-            : null;
+        ? true
+        : null;
     return Row(
       children: [
         SizedBox(
@@ -5763,20 +7231,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           onChanged: visibleIds.isEmpty
               ? null
               : (value) => setState(() {
-                    if (value == true) {
-                      selectedTaskIds.addAll(visibleIds);
-                    } else {
-                      selectedTaskIds.removeAll(visibleIds);
-                    }
-                  }),
+                  if (value == true) {
+                    selectedTaskIds.addAll(visibleIds);
+                  } else {
+                    selectedTaskIds.removeAll(visibleIds);
+                  }
+                }),
         ),
         Text(
           allSelected ? '取消全选' : '全选当前结果',
           style: const TextStyle(color: Colors.white70),
         ),
         const SizedBox(width: 10),
-        Text('已选 ${selectedTaskIds.length} 项',
-            style: const TextStyle(color: Color(0xFFB99AFF))),
+        Text(
+          '已选 ${selectedTaskIds.length} 项',
+          style: const TextStyle(color: Color(0xFFB99AFF)),
+        ),
         const Spacer(),
         OutlinedButton.icon(
           onPressed: selectedTaskIds.isEmpty || batchDeletingTasks
@@ -5817,9 +7287,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(label, style: const TextStyle(color: Colors.white54)),
-              Text('$value',
-                  style: TextStyle(
-                      color: color, fontSize: 24, fontWeight: FontWeight.w900)),
+              Text(
+                '$value',
+                style: TextStyle(
+                  color: color,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ],
           ),
         ],
@@ -5840,12 +7315,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             onChanged: taskId.isEmpty
                 ? null
                 : (value) => setState(() {
-                      if (value == true) {
-                        selectedTaskIds.add(taskId);
-                      } else {
-                        selectedTaskIds.remove(taskId);
-                      }
-                    }),
+                    if (value == true) {
+                      selectedTaskIds.add(taskId);
+                    } else {
+                      selectedTaskIds.remove(taskId);
+                    }
+                  }),
           ),
           Container(
             width: 34,
@@ -5854,8 +7329,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               color: _taskStatusColor(status).withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(_taskStatusIcon(status),
-                size: 19, color: _taskStatusColor(status)),
+            child: Icon(
+              _taskStatusIcon(status),
+              size: 19,
+              color: _taskStatusColor(status),
+            ),
           ),
           const SizedBox(width: 11),
           Expanded(
@@ -5865,42 +7343,50 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                    item['title']?.toString().isNotEmpty == true
-                        ? item['title'].toString()
-                        : '未命名视频任务',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800)),
+                  item['title']?.toString().isNotEmpty == true
+                      ? item['title'].toString()
+                      : '未命名视频任务',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
                 const SizedBox(height: 3),
-                Text(taskId,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style:
-                        const TextStyle(color: Colors.white38, fontSize: 11)),
+                Text(
+                  taskId,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
               ],
             ),
           ),
           Expanded(
-            child: Text(_statusText(status),
-                style: TextStyle(
-                    color: _taskStatusColor(status),
-                    fontWeight: FontWeight.w700)),
+            child: Text(
+              _statusText(status),
+              style: TextStyle(
+                color: _taskStatusColor(status),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
           SizedBox(
             width: 90,
-            child: Text(outputReady ? '成品可用' : '暂无成品',
-                style: TextStyle(
-                    color: outputReady
-                        ? const Color(0xFF51D8A5)
-                        : Colors.white38)),
+            child: Text(
+              outputReady ? '成品可用' : '暂无成品',
+              style: TextStyle(
+                color: outputReady ? const Color(0xFF51D8A5) : Colors.white38,
+              ),
+            ),
           ),
           _ghostButton('打开', () => _openTaskFromHistory(taskId)),
           const SizedBox(width: 7),
           IconButton(
             tooltip: '删除任务',
             onPressed: () => _deleteTaskFromHistory(item),
-            icon: const Icon(Icons.delete_outline_rounded,
-                color: Color(0xFFFF7892)),
+            icon: const Icon(
+              Icons.delete_outline_rounded,
+              color: Color(0xFFFF7892),
+            ),
           ),
         ],
       ),
@@ -5939,8 +7425,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               children: [
                 _ghostButton('刷新状态', loadPublisherAccounts),
                 const SizedBox(width: 8),
-                _stepButton('添加账号', _showAddPublisherAccountDialog,
-                    compact: true),
+                _stepButton(
+                  '添加账号',
+                  _showAddPublisherAccountDialog,
+                  compact: true,
+                ),
               ],
             ),
           ),
@@ -6036,8 +7525,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                           padding: const EdgeInsets.symmetric(vertical: 8),
                           child: Row(
                             children: [
-                              const Icon(Icons.bolt_rounded,
-                                  size: 18, color: Color(0xFFB99AFF)),
+                              const Icon(
+                                Icons.bolt_rounded,
+                                size: 18,
+                                color: Color(0xFFB99AFF),
+                              ),
                               const SizedBox(width: 9),
                               Expanded(
                                 child: Text(
@@ -6045,7 +7537,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                      fontWeight: FontWeight.w700),
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                               Text(
@@ -6053,8 +7546,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                                     item['amount']?.toString() ??
                                     '',
                                 style: const TextStyle(
-                                    color: Color(0xFFFFC857),
-                                    fontWeight: FontWeight.w800),
+                                  color: Color(0xFFFFC857),
+                                  fontWeight: FontWeight.w800,
+                                ),
                               ),
                             ],
                           ),
@@ -6068,7 +7562,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _cloudMetricCard(
-      String label, String value, IconData icon, Color color) {
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Container(
       height: 92,
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -6087,9 +7585,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             children: [
               Text(label, style: const TextStyle(color: Colors.white54)),
               const SizedBox(height: 3),
-              Text(value,
-                  style: TextStyle(
-                      color: color, fontSize: 21, fontWeight: FontWeight.w900)),
+              Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ],
           ),
         ],
@@ -6121,35 +7624,45 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             Row(
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: _platformColor(platform).withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(999),
                   ),
-                  child: Text(_platformLabel(platform),
-                      style: TextStyle(
-                          color: _platformColor(platform),
-                          fontWeight: FontWeight.w800,
-                          fontSize: 12)),
+                  child: Text(
+                    _platformLabel(platform),
+                    style: TextStyle(
+                      color: _platformColor(platform),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
                 ),
                 const Spacer(),
-                Icon(loggedIn ? Icons.check_circle : Icons.info_outline,
-                    size: 18,
-                    color: loggedIn
-                        ? const Color(0xFF51D8A5)
-                        : const Color(0xFFFFC857)),
+                Icon(
+                  loggedIn ? Icons.check_circle : Icons.info_outline,
+                  size: 18,
+                  color: loggedIn
+                      ? const Color(0xFF51D8A5)
+                      : const Color(0xFFFFC857),
+                ),
               ],
             ),
             const SizedBox(height: 13),
-            Text(_accountDisplayName(account),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style:
-                    const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+            Text(
+              _accountDisplayName(account),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
             const SizedBox(height: 5),
-            Text(_accountStatusLabel(status),
-                style: const TextStyle(color: Colors.white54)),
+            Text(
+              _accountStatusLabel(status),
+              style: const TextStyle(color: Colors.white54),
+            ),
             const SizedBox(height: 13),
             Row(
               children: [
@@ -6232,10 +7745,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   decoration: _inputDecoration(''),
                   items:
                       const ['douyin', 'kuaishou', 'xiaohongshu', 'shipinhao']
-                          .map((value) => DropdownMenuItem(
-                                value: value,
-                                child: Text(_platformLabel(value)),
-                              ))
+                          .map(
+                            (value) => DropdownMenuItem(
+                              value: value,
+                              child: Text(_platformLabel(value)),
+                            ),
+                          )
                           .toList(),
                   onChanged: (value) =>
                       setDialogState(() => platform = value ?? platform),
@@ -6302,13 +7817,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title,
-                        style: const TextStyle(
-                            fontSize: 17, fontWeight: FontWeight.w900)),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text(subtitle,
-                        style: const TextStyle(
-                            color: Color(0x75FFFFFF), fontSize: 12)),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: Color(0x75FFFFFF),
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -6350,14 +7873,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             children: [
               Icon(icon, size: 36, color: const Color(0xFFC4A9FF)),
               const SizedBox(height: 10),
-              Text(title,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
               const SizedBox(height: 5),
-              Text(subtitle,
-                  textAlign: TextAlign.center,
-                  style:
-                      const TextStyle(color: Color(0x75FFFFFF), fontSize: 12)),
+              Text(
+                subtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0x75FFFFFF), fontSize: 12),
+              ),
             ],
           ),
         ),
@@ -6376,9 +7902,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             const SizedBox(height: 9),
             Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 4),
-            Text(subtitle,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white38, fontSize: 12)),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
           ],
         ),
       ),
@@ -6463,8 +7991,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                           ),
                           const SizedBox(width: 10),
                           FilledButton.icon(
-                            onPressed:
-                                loading ? null : _activateSoftwareFromInput,
+                            onPressed: loading
+                                ? null
+                                : _activateSoftwareFromInput,
                             icon: const Icon(Icons.verified_user_outlined),
                             label: const Text('激活软件'),
                           ),
@@ -6548,21 +8077,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _generationModeSelector() {
     final isCloud = generationMode == 'cloud';
     return Container(
-      height: 58,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      height: 50,
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: panelBg2,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+        color: const Color(0xFFF7F8FC),
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: studioBorder),
       ),
       child: Row(
         children: [
           const Text(
             '运行模式',
-            style: TextStyle(
-              color: Colors.white70,
-              fontWeight: FontWeight.w900,
-            ),
+            style: TextStyle(color: studioInk, fontWeight: FontWeight.w900),
           ),
           const SizedBox(width: 10),
           _modeSelectChip(
@@ -6586,7 +8112,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: Colors.white70,
+                color: studioMuted,
                 fontWeight: FontWeight.w800,
               ),
             ),
@@ -6608,21 +8134,21 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       borderRadius: BorderRadius.circular(8),
       onTap: canTap ? onTap : null,
       child: Container(
-        height: 40,
+        height: 36,
         padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           color: active
-              ? const Color(0xFF34254A)
+              ? const Color(0xFFEEF0FF)
               : enabled
-                  ? panelBg
-                  : const Color(0xFF252735),
+              ? Colors.white
+              : const Color(0xFFF0F1F4),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: active
-                ? pink
+                ? const Color(0xFFC9CCFF)
                 : enabled
-                    ? Colors.white24
-                    : Colors.white12,
+                ? studioBorder
+                : const Color(0xFFE4E6EB),
             width: active ? 1.4 : 1,
           ),
         ),
@@ -6633,16 +8159,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               icon,
               size: 16,
               color: active
-                  ? pink
+                  ? studioPrimary
                   : enabled
-                      ? Colors.white54
-                      : Colors.white30,
+                  ? studioMuted
+                  : const Color(0xFFB4B8C3),
             ),
             const SizedBox(width: 6),
             Text(
               label,
               style: TextStyle(
-                color: enabled ? Colors.white : Colors.white38,
+                color: enabled ? studioInk : const Color(0xFFA7ABB6),
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -6652,6 +8178,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // Legacy three-column layout kept as a fallback while the new workflow UI
+  // reuses its lower-level controls.
+  // ignore: unused_element
   Widget _leftPanel() {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(10, 10, 5, 14),
@@ -6705,11 +8234,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _digitalHumanRenderPanel() {
-    final userDigitalHumans =
-        digitalHumans.where((item) => item['built_in'] != true).toList();
+    final userDigitalHumans = digitalHumans
+        .where((item) => item['built_in'] != true)
+        .toList();
     final humanOptions = _limitedProfileOptions(
-        userDigitalHumans, 'digital_human_id',
-        preferredSystemPrefix: 'custom:');
+      userDigitalHumans,
+      'digital_human_id',
+      preferredSystemPrefix: 'custom:',
+    );
     if (humanOptions.isEmpty) {
       humanOptions.add('');
     }
@@ -6779,9 +8311,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _centerPanel() {
-    final voiceOptions = _limitedProfileOptions(voices, 'voice_id',
-        preferredSystemPrefix: 'clone:');
+    final voiceOptions = _limitedProfileOptions(
+      voices,
+      'voice_id',
+      preferredSystemPrefix: 'clone:',
+    );
     final voiceLabels = {
       for (final v in voices) v['voice_id'] as String: v['name'] as String,
     };
@@ -6814,9 +8350,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   '${(voicePreviewVolume * 100).round()}%',
                 ),
                 const SizedBox(height: 10),
-                const Text('声音',
-                    style: TextStyle(
-                        color: Colors.white70, fontWeight: FontWeight.w800)),
+                const Text(
+                  '声音',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
                 const SizedBox(height: 7),
                 ConstrainedBox(
                   constraints: const BoxConstraints(minWidth: 180),
@@ -6877,6 +8417,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  // ignore: unused_element
   Widget _rightPanel() {
     final sourceUrl = _sourceVideoUrl;
     final outputUrl = _outputVideoUrl;
@@ -6959,8 +8500,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final fileName = isCloud
         ? _cloudOutputLabel
         : path == null || path.isEmpty
-            ? '成品视频生成后自动关联'
-            : path.split(RegExp(r'[\\/]')).last;
+        ? '成品视频生成后自动关联'
+        : path.split(RegExp(r'[\\/]')).last;
     return Row(
       children: [
         Expanded(child: _readonlyBox(fileName)),
@@ -6994,6 +8535,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _coverPreview() {
+    final light = _studioLightControls;
     final path = _currentCoverPath;
     final label = path == null ? '封面将自动生成' : _fileNameFromPath(path);
     return Column(
@@ -7007,21 +8549,31 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               child: Container(
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF25283A),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: purpleLine.withValues(alpha: 0.5)),
+                  color: light
+                      ? const Color(0xFFF0F2F6)
+                      : const Color(0xFF25283A),
+                  borderRadius: BorderRadius.circular(light ? 12 : 8),
+                  border: Border.all(
+                    color: light
+                        ? studioBorder
+                        : purpleLine.withValues(alpha: 0.5),
+                  ),
                 ),
                 child: path == null
-                    ? const Center(
-                        child:
-                            Icon(Icons.image_outlined, color: Colors.white54),
+                    ? Center(
+                        child: Icon(
+                          Icons.image_outlined,
+                          color: light ? studioMuted : Colors.white54,
+                        ),
                       )
                     : Image.file(
                         File(path),
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Center(
-                          child:
-                              Icon(Icons.broken_image, color: Colors.white70),
+                        errorBuilder: (_, __, ___) => Center(
+                          child: Icon(
+                            Icons.broken_image,
+                            color: light ? studioMuted : Colors.white70,
+                          ),
                         ),
                       ),
               ),
@@ -7046,6 +8598,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _publisherPanel() {
+    final light = _studioLightControls;
     const platformOptions = ['douyin', 'kuaishou', 'xiaohongshu', 'shipinhao'];
     final visibleAccounts = publisherAccounts
         .where((account) => account['platform'] == selectedPublishPlatform)
@@ -7073,7 +8626,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             children: [
               const Expanded(
                 child: Text(
-                  '7. 视频发布',
+                  '发布设置',
                   style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                 ),
               ),
@@ -7114,9 +8667,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               ),
               const SizedBox(width: 8),
               Expanded(
-                  child: _readonlyBox(publisherNicknameController.text.isEmpty
+                child: _readonlyBox(
+                  publisherNicknameController.text.isEmpty
                       ? _publisherNicknamePlaceholder
-                      : publisherNicknameController.text)),
+                      : publisherNicknameController.text,
+                ),
+              ),
               const SizedBox(width: 8),
               _ghostButton('添加账号', createPublisherAccount),
             ],
@@ -7151,9 +8707,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: const Color(0xFF34223C),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: pink.withValues(alpha: 0.55)),
+              color: light ? const Color(0xFFF8F7FF) : const Color(0xFF34223C),
+              borderRadius: BorderRadius.circular(light ? 12 : 8),
+              border: Border.all(
+                color: light
+                    ? const Color(0xFFE2E0FF)
+                    : pink.withValues(alpha: 0.55),
+              ),
             ),
             child: Column(
               children: [
@@ -7223,18 +8783,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Row(
       children: [
         Expanded(
-          child:
-              _publishModeChip('direct', '直接发布', Icons.cloud_upload_outlined),
+          child: _publishModeChip(
+            'direct',
+            '直接发布',
+            Icons.cloud_upload_outlined,
+          ),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: _publishModeChip('draft', '草60', Icons.edit_note_outlined),
+          child: _publishModeChip('draft', '保存草稿', Icons.edit_note_outlined),
         ),
       ],
     );
   }
 
   Widget _publishModeChip(String value, String label, IconData icon) {
+    final light = _studioLightControls;
     final active = selectedPublishMode == value;
     return InkWell(
       onTap: () => setState(() => selectedPublishMode = value),
@@ -7243,16 +8807,38 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         height: 42,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: active ? const Color(0xFF25315A) : panelBg2,
-          borderRadius: BorderRadius.circular(8),
+          color: active
+              ? light
+                    ? const Color(0xFFEEF0FF)
+                    : const Color(0xFF25315A)
+              : light
+              ? Colors.white
+              : panelBg2,
+          borderRadius: BorderRadius.circular(light ? 10 : 8),
           border: Border.all(
-            color: active ? cyan : purpleLine.withValues(alpha: 0.45),
+            color: active
+                ? light
+                      ? studioPrimary
+                      : cyan
+                : light
+                ? studioBorder
+                : purpleLine.withValues(alpha: 0.45),
           ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 17, color: active ? cyan : Colors.white54),
+            Icon(
+              icon,
+              size: 17,
+              color: active
+                  ? light
+                        ? studioPrimary
+                        : cyan
+                  : light
+                  ? studioMuted
+                  : Colors.white54,
+            ),
             const SizedBox(width: 6),
             Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
           ],
@@ -7274,11 +8860,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String _accountStatusLabel(String status) {
     return switch (status) {
       'created' => '已创建',
-      'login_opened' => '登录?',
+      'login_opened' => '登录窗口已打开',
       'logged_in' => '已登录',
       'needs_login' => '待登录',
-      'needs_user_action' => '霢人工处理',
-      'expired' => '已过?',
+      'needs_user_action' => '需要人工处理',
+      'expired' => '已过期',
       'failed' => '失败',
       _ => status,
     };
@@ -7350,7 +8936,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   String _engineStatusText() {
     final heygemOnline = providers?['heygem_online'] == true;
-    if (heygemOnline) return '云服务：已开?';
+    if (heygemOnline) return '云服务：已开启';
     return '云服务：未开启';
   }
 
@@ -7373,10 +8959,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _messageBar() {
-    final bgColor =
-        messageIsError ? const Color(0xFF3A1420) : const Color(0xFF123B2A);
-    final textColor =
-        messageIsError ? const Color(0xFFFFB0C2) : const Color(0xFFB9F8D0);
+    final bgColor = messageIsError
+        ? const Color(0xFF3A1420)
+        : const Color(0xFF123B2A);
+    final textColor = messageIsError
+        ? const Color(0xFFFFB0C2)
+        : const Color(0xFFB9F8D0);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -7386,12 +8974,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _panel({required Widget child}) {
+    final light = _studioLightControls;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: panelBg,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.35)),
+        color: light ? Colors.white : panelBg,
+        borderRadius: BorderRadius.circular(light ? 14 : 10),
+        border: Border.all(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.35),
+        ),
       ),
       child: child,
     );
@@ -7400,15 +8991,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _sectionHeader(String title, String label, String value) {
     return Row(
       children: [
-        Text(title,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900)),
+        Text(
+          title,
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+        ),
         const Spacer(),
-        Text(label,
-            style: const TextStyle(
-                color: Colors.white70, fontWeight: FontWeight.w800)),
-        Text(value,
-            style: const TextStyle(
-                color: Color(0xFF55E6A5), fontWeight: FontWeight.w900)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Color(0xFF55E6A5),
+            fontWeight: FontWeight.w900,
+          ),
+        ),
       ],
     );
   }
@@ -7416,8 +9017,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _sectionTitle(String text) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Text(text,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+      ),
     );
   }
 
@@ -7462,10 +9065,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return a.key.compareTo(b.key);
     });
 
-    final systemOptions = (preferredSystemOptions.isNotEmpty
-            ? preferredSystemOptions
-            : fallbackSystemOptions)
-        .take(4);
+    final systemOptions =
+        (preferredSystemOptions.isNotEmpty
+                ? preferredSystemOptions
+                : fallbackSystemOptions)
+            .take(4);
 
     return [
       ...systemOptions,
@@ -7477,8 +9081,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _styleDropdown() {
-    final options =
-        rewriteStyles.map((s) => s['name'] as String).toList(growable: true);
+    final options = rewriteStyles
+        .map((s) => s['name'] as String)
+        .toList(growable: true);
     if (options.isEmpty) options.addAll(const ['同款口播', '带货', '种草']);
     if (!options.contains(selectedStyle)) options.insert(0, selectedStyle);
     return _dropdown(
@@ -7540,19 +9145,25 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   InputDecoration _inputDecoration(String hint) {
+    final light = _studioLightControls;
     return InputDecoration(
       hintText: hint.isEmpty ? null : hint,
       filled: true,
-      fillColor: panelBg2,
+      fillColor: light ? const Color(0xFFF8F9FC) : panelBg2,
+      hintStyle: light ? const TextStyle(color: Color(0xFFA1A7B7)) : null,
       isDense: true,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(7)),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+      ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(7),
-        borderSide: BorderSide(color: purpleLine.withValues(alpha: 0.45)),
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+        borderSide: BorderSide(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.45),
+        ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(7),
-        borderSide: const BorderSide(color: cyan, width: 1.2),
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+        borderSide: BorderSide(color: light ? studioPrimary : cyan, width: 1.2),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     );
@@ -7565,11 +9176,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     bool allowWhileLoading = false,
   }) {
     final disabled = loading && !allowWhileLoading;
+    final light = _studioLightControls;
     final child = DecoratedBox(
       decoration: BoxDecoration(
-        gradient: disabled ? null : const LinearGradient(colors: [cyan, pink]),
-        color: disabled ? Colors.white12 : null,
-        borderRadius: BorderRadius.circular(8),
+        gradient: disabled || light
+            ? null
+            : const LinearGradient(colors: [cyan, pink]),
+        color: disabled
+            ? (light ? const Color(0xFFE3E5EB) : Colors.white12)
+            : light
+            ? studioPrimary
+            : null,
+        borderRadius: BorderRadius.circular(light ? 10 : 8),
       ),
       child: ElevatedButton(
         onPressed: disabled ? null : onPressed,
@@ -7582,7 +9200,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           disabledForegroundColor: Colors.white54,
           minimumSize: Size(compact ? 96 : 0, 42),
           padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 18),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(light ? 10 : 8),
+          ),
         ),
         child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
       ),
@@ -7591,15 +9211,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _ghostButton(String text, VoidCallback onPressed) {
+    final light = _studioLightControls;
     return OutlinedButton(
       onPressed: loading ? null : onPressed,
       style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        side: BorderSide(color: purpleLine.withValues(alpha: 0.8)),
-        backgroundColor: panelBg2,
+        foregroundColor: light ? studioInk : Colors.white,
+        side: BorderSide(
+          color: light
+              ? const Color(0xFFD9DCE5)
+              : purpleLine.withValues(alpha: 0.8),
+        ),
+        backgroundColor: light ? Colors.white : panelBg2,
         minimumSize: const Size(72, 40),
         padding: const EdgeInsets.symmetric(horizontal: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(light ? 10 : 8),
+        ),
       ),
       child: Text(text, style: const TextStyle(fontWeight: FontWeight.w800)),
     );
@@ -7614,7 +9241,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         color: active ? const Color(0xFF25315A) : panelBg2,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-            color: active ? cyan : purpleLine.withValues(alpha: 0.55)),
+          color: active ? cyan : purpleLine.withValues(alpha: 0.55),
+        ),
       ),
       child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
     );
@@ -7632,9 +9260,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon,
-              size: 17,
-              color: active ? const Color(0xFFD4A4FF) : Colors.white54),
+          Icon(
+            icon,
+            size: 17,
+            color: active ? const Color(0xFFD4A4FF) : Colors.white54,
+          ),
           const SizedBox(width: 8),
           Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
         ],
@@ -7643,16 +9273,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _readonlyBox(String text) {
+    final light = _studioLightControls;
     return Container(
       height: 42,
       alignment: Alignment.centerLeft,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: panelBg2,
-        borderRadius: BorderRadius.circular(7),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.4)),
+        color: light ? const Color(0xFFF8F9FC) : panelBg2,
+        borderRadius: BorderRadius.circular(light ? 10 : 7),
+        border: Border.all(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.4),
+        ),
       ),
-      child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: light ? const TextStyle(color: studioMuted) : null,
+      ),
     );
   }
 
@@ -7673,32 +9311,35 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       return '$apiBase$providedUrl';
     }
-    final version = profile?['last_used_at']?.toString() ??
+    final version =
+        profile?['last_used_at']?.toString() ??
         profile?['asset_id']?.toString();
-    return Uri.parse('$apiBase/api/digital-humans/thumbnail').replace(
-      queryParameters: {
-        'digital_human_id': digitalHumanId,
-        if (version != null && version.isNotEmpty) 'v': version,
-      },
-    ).toString();
+    return Uri.parse('$apiBase/api/digital-humans/thumbnail')
+        .replace(
+          queryParameters: {
+            'digital_human_id': digitalHumanId,
+            if (version != null && version.isNotEmpty) 'v': version,
+          },
+        )
+        .toString();
   }
 
-  Widget _digitalHumanPicker(
-    List<String> options,
-    Map<String, String> labels,
-  ) {
+  Widget _digitalHumanPicker(List<String> options, Map<String, String> labels) {
+    final light = _studioLightControls;
     final visibleOptions = options.where((id) => id.isNotEmpty).toList();
     if (visibleOptions.isEmpty) {
-      return _readonlyBox('请上传或选择数字人素?');
+      return _readonlyBox('请上传或选择数字人素材');
     }
     final visibleRows = math.min(4, math.max(1, visibleOptions.length));
     final dividerHeight = math.max(0, visibleRows - 1).toDouble();
     return Container(
       height: 72.0 * visibleRows + dividerHeight,
       decoration: BoxDecoration(
-        color: const Color(0xFF171A28),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: purpleLine.withValues(alpha: 0.45)),
+        color: light ? const Color(0xFFF8F9FC) : const Color(0xFF171A28),
+        borderRadius: BorderRadius.circular(light ? 11 : 8),
+        border: Border.all(
+          color: light ? studioBorder : purpleLine.withValues(alpha: 0.45),
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: ListView.separated(
@@ -7710,13 +9351,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         },
         separatorBuilder: (_, __) => Divider(
           height: 1,
-          color: Colors.white.withValues(alpha: 0.08),
+          color: light ? studioBorder : Colors.white.withValues(alpha: 0.08),
         ),
       ),
     );
   }
 
   Widget _digitalHumanRow(String digitalHumanId, String name) {
+    final light = _studioLightControls;
     final active = selectedDigitalHuman == digitalHumanId;
     final profile = _digitalHumanProfile(digitalHumanId);
     final builtIn = profile?['built_in'] == true;
@@ -7726,10 +9368,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         height: 72,
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: active ? const Color(0xFF262B47) : Colors.transparent,
+          color: active
+              ? light
+                    ? const Color(0xFFEEF0FF)
+                    : const Color(0xFF262B47)
+              : Colors.transparent,
           border: Border(
             left: BorderSide(
-              color: active ? cyan : Colors.transparent,
+              color: active
+                  ? light
+                        ? studioPrimary
+                        : cyan
+                  : Colors.transparent,
               width: 3,
             ),
           ),
@@ -7746,10 +9396,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   key: ValueKey(_digitalHumanThumbnailUrl(digitalHumanId)),
                   fit: BoxFit.cover,
                   errorBuilder: (_, __, ___) => Container(
-                    color: const Color(0xFF24283A),
-                    child: const Icon(
+                    color: light
+                        ? const Color(0xFFEDEFF4)
+                        : const Color(0xFF24283A),
+                    child: Icon(
                       Icons.person,
-                      color: Colors.white54,
+                      color: light ? studioMuted : Colors.white54,
                       size: 24,
                     ),
                   ),
@@ -7773,7 +9425,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     builtIn ? '系统模板' : '已上传形象',
                     style: TextStyle(
                       color: builtIn
-                          ? const Color(0xFFBFA8FF)
+                          ? light
+                                ? studioPrimary
+                                : const Color(0xFFBFA8FF)
+                          : light
+                          ? studioSuccess
                           : const Color(0xFF55E6A5),
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -7783,8 +9439,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               ),
             ),
             if (active)
-              const Icon(Icons.check_circle,
-                  size: 18, color: Color(0xFF55E6A5)),
+              Icon(
+                Icons.check_circle,
+                size: 18,
+                color: light ? studioPrimary : const Color(0xFF55E6A5),
+              ),
           ],
         ),
       ),
@@ -7805,9 +9464,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         Row(
           children: [
             Expanded(
-                child: _readonlyBox(selectedDigitalHuman.isEmpty
+              child: _readonlyBox(
+                selectedDigitalHuman.isEmpty
                     ? '请上传或选择数字人素材'
-                    : selectedDigitalHuman)),
+                    : selectedDigitalHuman,
+              ),
+            ),
             const SizedBox(width: 8),
             _ghostButton('选择视频', uploadSourceVideo),
           ],
@@ -7822,7 +9484,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'none': '无背景音乐',
       for (final item in bgmTracks)
         item['bgm_id'].toString():
-            item['name']?.toString() ?? item['bgm_id'].toString()
+            item['name']?.toString() ?? item['bgm_id'].toString(),
     };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -7830,15 +9492,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         Row(
           children: [
             Expanded(
-              child: _dropdown(
-                selectedBgm,
-                options,
-                (value) {
-                  if (value == null) return;
-                  setState(() => selectedBgm = value);
-                },
-                labels: names,
-              ),
+              child: _dropdown(selectedBgm, options, (value) {
+                if (value == null) return;
+                setState(() => selectedBgm = value);
+              }, labels: names),
             ),
             const SizedBox(width: 8),
             _ghostButton('上传BGM', uploadBgm),
@@ -7862,9 +9519,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           selectedBgm == 'none'
               ? '最终视频不会混入背景音乐。'
               : selectedBgm.startsWith('custom:')
-                  ? '将使用你上传的背景音乐，并按音量混入最终视频。'
-                  : '将使用模板背景音乐，并按音量混入最终视频。',
-          style: const TextStyle(color: Colors.white60, fontSize: 12),
+              ? '将使用你上传的背景音乐，并按音量混入最终视频。'
+              : '将使用模板背景音乐，并按音量混入最终视频。',
+          style: TextStyle(
+            color: _studioLightControls ? studioMuted : Colors.white60,
+            fontSize: 12,
+          ),
         ),
       ],
     );
@@ -7913,16 +9573,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ],
         ),
         const SizedBox(height: 10),
-        Row(
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Checkbox(
-              value: subtitlesEnabled,
-              onChanged: (value) =>
-                  setState(() => subtitlesEnabled = value ?? subtitlesEnabled),
+            SizedBox(
+              width: 116,
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: subtitlesEnabled,
+                    onChanged: (value) => setState(
+                      () => subtitlesEnabled = value ?? subtitlesEnabled,
+                    ),
+                  ),
+                  const Text('启用字幕'),
+                ],
+              ),
             ),
-            const Text('字幕 启用'),
-            const SizedBox(width: 12),
-            Expanded(
+            SizedBox(
+              width: 210,
               child: _dropdown(
                 selectedSubtitleFont,
                 _subtitleFontOptions,
@@ -7933,16 +9604,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 labels: _subtitleFontLabels,
               ),
             ),
-            const SizedBox(width: 8),
             _ghostButton('刷新', refreshSubtitlePreview),
-            const SizedBox(width: 8),
-            const Text('字幕颜色'),
-            const SizedBox(width: 8),
-            _colorSquare(subtitleColor),
-            const SizedBox(width: 8),
-            const Text('描边颜色'),
-            const SizedBox(width: 8),
-            _colorSquare(subtitleOutlineColor),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('字幕颜色'),
+                const SizedBox(width: 7),
+                _colorSquare(subtitleColor),
+              ],
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('描边颜色'),
+                const SizedBox(width: 7),
+                _colorSquare(subtitleOutlineColor),
+              ],
+            ),
           ],
         ),
         _labeledSlider(
@@ -8094,11 +9772,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return;
     }
     final widthDelta = details.delta.dx / canvasSize.width;
-    final heightDelta = details.delta.dy /
+    final heightDelta =
+        details.delta.dy /
         canvasSize.height /
         (_pipCanvasAspectRatio / _pipMediaAspectRatio);
-    final delta =
-        widthDelta.abs() > heightDelta.abs() ? widthDelta : heightDelta;
+    final delta = widthDelta.abs() > heightDelta.abs()
+        ? widthDelta
+        : heightDelta;
     _updatePreviewState(() {
       pipScale = (pipScale + delta).clamp(0.1, 0.95).toDouble();
       _clampPipCustomPosition();
@@ -8139,8 +9819,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             ),
             child: LayoutBuilder(
               builder: (context, constraints) {
-                final canvasSize =
-                    Size(constraints.maxWidth, constraints.maxHeight);
+                final canvasSize = Size(
+                  constraints.maxWidth,
+                  constraints.maxHeight,
+                );
                 return Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -8226,7 +9908,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 decoration: BoxDecoration(
                   color: const Color(0xFF202334),
                   borderRadius: BorderRadius.circular(
-                      pipPosition == 'fullscreen' ? 0 : 6),
+                    pipPosition == 'fullscreen' ? 0 : 6,
+                  ),
                   border: Border.all(
                     color: cyan.withValues(alpha: 0.8),
                     width: 2,
@@ -8234,8 +9917,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 ),
                 child: pipAssetId.isEmpty
                     ? const Center(
-                        child:
-                            Icon(Icons.image_outlined, color: Colors.white70),
+                        child: Icon(
+                          Icons.image_outlined,
+                          color: Colors.white70,
+                        ),
                       )
                     : _pipPreviewMedia(),
               ),
@@ -8274,7 +9959,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _pipPreviewMedia() {
     final previewUrl = '$apiBase/api/pip/$pipAssetId/preview';
     final lowerName = pipAssetName.toLowerCase();
-    final isImage = lowerName.endsWith('.png') ||
+    final isImage =
+        lowerName.endsWith('.png') ||
         lowerName.endsWith('.jpg') ||
         lowerName.endsWith('.jpeg') ||
         lowerName.endsWith('.webp');
@@ -8292,6 +9978,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _subTabs() {
+    final light = _studioLightControls;
     const items = [
       ('bgm', Icons.music_note, '背景音乐'),
       ('subtitles', Icons.closed_caption_outlined, '字幕及画中画'),
@@ -8309,7 +9996,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     border: Border(
                       bottom: BorderSide(
                         color: selectedMediaSubTab == item.$1
-                            ? const Color(0xFFD4A4FF)
+                            ? light
+                                  ? studioPrimary
+                                  : const Color(0xFFD4A4FF)
+                            : light
+                            ? studioBorder
                             : const Color(0xFF414866),
                         width: selectedMediaSubTab == item.$1 ? 2 : 1,
                       ),
@@ -8318,10 +10009,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(item.$2, size: 17, color: const Color(0xFFBFA8FF)),
+                      Icon(
+                        item.$2,
+                        size: 17,
+                        color: selectedMediaSubTab == item.$1
+                            ? light
+                                  ? studioPrimary
+                                  : const Color(0xFFBFA8FF)
+                            : light
+                            ? studioMuted
+                            : const Color(0xFFBFA8FF),
+                      ),
                       const SizedBox(width: 6),
-                      Text(item.$3,
-                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      Text(
+                        item.$3,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ],
                   ),
                 ),
@@ -8333,7 +10036,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Map<String, dynamic>? _activeProgressStep(Map<String, dynamic>? currentTask) {
-    final steps = (currentTask?['progress_steps'] as List?)
+    final steps =
+        (currentTask?['progress_steps'] as List?)
             ?.cast<Map<String, dynamic>>() ??
         const [];
     for (final step in steps) {
@@ -8400,7 +10104,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ),
         ),
         const Center(
-            child: Icon(Icons.person, size: 88, color: Colors.white70)),
+          child: Icon(Icons.person, size: 88, color: Colors.white70),
+        ),
         const Align(
           alignment: Alignment.bottomCenter,
           child: Padding(
@@ -8467,11 +10172,7 @@ class _PlatformChip extends StatelessWidget {
   final bool active;
   final VoidCallback? onTap;
 
-  const _PlatformChip({
-    required this.label,
-    required this.active,
-    this.onTap,
-  });
+  const _PlatformChip({required this.label, required this.active, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -8594,9 +10295,10 @@ class _VideoPlayerDialogState extends State<_VideoPlayerDialog> {
               padding: const EdgeInsets.fromLTRB(14, 10, 8, 8),
               child: Row(
                 children: [
-                  const Text('预览视频',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                  const Text(
+                    '预览视频',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                  ),
                   const Spacer(),
                   IconButton(
                     tooltip: '关闭',
