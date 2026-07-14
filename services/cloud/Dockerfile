@@ -37,6 +37,9 @@ RUN pip install --no-cache-dir -i https://mirrors.tencent.com/pypi/simple \
     "redis>=5.2.0" \
     uvicorn[standard]==0.32.1
 
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV HF_HUB_DISABLE_XET=1
+
 COPY app ./app
 
 EXPOSE 8000

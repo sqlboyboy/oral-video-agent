@@ -24,9 +24,13 @@ DOUYIN_URL_RE = re.compile(
 TRAILING_URL_CHARS = ".,;:!?，。；：！？、)]}）】》\"'"
 
 _BROWSER_UA = (
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Mobile Safari/537.36"
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+_MOBILE_SHARE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
 )
 _BROWSER_ARGS = [
     "--disable-background-networking",
@@ -93,6 +97,115 @@ def _select_video_url(data: dict) -> str | None:
     return None
 
 
+def _find_video_url_in_payload(data: object) -> str | None:
+    candidates: list[str] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, dict):
+            for key in ("play_addr", "playAddr", "download_addr", "downloadAddr"):
+                address = value.get(key)
+                if not isinstance(address, dict):
+                    continue
+                urls = address.get("url_list") or address.get("urlList") or []
+                if isinstance(urls, list):
+                    for url in urls:
+                        text = str(url)
+                        if urllib.parse.urlparse(text).scheme in {"http", "https"}:
+                            candidates.append(text)
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    visit(data)
+    trusted = [url for url in candidates if _is_video_cdn_url(url)]
+    if trusted:
+        return trusted[0]
+    without_watermark = [url for url in candidates if "/playwm/" not in url]
+    if without_watermark:
+        return without_watermark[0]
+    return candidates[0] if candidates else None
+
+
+def _is_video_cdn_url(url: str) -> bool:
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host.endswith(".douyinvod.com") or host.endswith(".amemv.com")
+
+
+def _is_aweme_detail_api(url: str) -> bool:
+    try:
+        path = urllib.parse.urlparse(url).path.lower().rstrip("/")
+    except ValueError:
+        return False
+    return path.endswith("/aweme/v1/web/aweme/detail")
+
+
+def _extract_aweme_id(url: str) -> str | None:
+    match = re.search(r"/(?:share/)?video/(\d{10,})(?:/|$)", url)
+    return match.group(1) if match else None
+
+
+def _parse_router_data_video_url(html: str) -> str | None:
+    match = re.search(
+        r"window\._ROUTER_DATA\s*=\s*(\{.*?\})\s*</script>",
+        html,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return _find_video_url_in_payload(data)
+
+
+def _extract_video_url_via_mobile_share(
+    share_url: str,
+    *,
+    timeout_seconds: int,
+) -> str:
+    aweme_id = _extract_aweme_id(share_url)
+    if not aweme_id:
+        request = urllib.request.Request(
+            share_url,
+            headers={"User-Agent": _MOBILE_SHARE_UA},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                final_url = response.geturl()
+        except Exception as exc:
+            raise DouyinTranscriptionError(f"抖音短链接跳转失败：{exc}") from exc
+        aweme_id = _extract_aweme_id(final_url)
+    if not aweme_id:
+        raise DouyinTranscriptionError("没有从抖音链接中识别到作品编号")
+
+    official_share_url = f"https://www.iesdouyin.com/share/video/{aweme_id}/"
+    request = urllib.request.Request(
+        official_share_url,
+        headers={
+            "User-Agent": _MOBILE_SHARE_UA,
+            "Referer": "https://www.douyin.com/",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw_html = response.read(5 * 1024 * 1024 + 1)
+    except Exception as exc:
+        raise DouyinTranscriptionError(f"抖音官方分享页读取失败：{exc}") from exc
+    if len(raw_html) > 5 * 1024 * 1024:
+        raise DouyinTranscriptionError("抖音官方分享页数据异常")
+    html = raw_html.decode("utf-8", errors="replace")
+    video_url = _parse_router_data_video_url(html)
+    if not video_url:
+        raise DouyinTranscriptionError("抖音官方分享页未返回可下载视频地址")
+    return video_url
+
+
 def _extract_video_url_via_browser(
     share_url: str,
     *,
@@ -105,6 +218,7 @@ def _extract_video_url_via_browser(
         raise DouyinTranscriptionError("服务器缺少抖音解析浏览器组件") from exc
 
     detail_bodies: list[bytes] = []
+    media_urls: list[str] = []
     timeout_ms = max(10, timeout_seconds) * 1000
     try:
         with sync_playwright() as playwright:
@@ -124,25 +238,40 @@ def _extract_video_url_via_browser(
                 context = browser.new_context(
                     user_agent=_BROWSER_UA,
                     locale="zh-CN",
-                    viewport={"width": 430, "height": 932},
+                    viewport={"width": 1440, "height": 900},
                 )
                 page = context.new_page()
 
                 def on_response(response) -> None:
-                    if "aweme/detail" not in response.url or detail_bodies:
-                        return
-                    try:
-                        detail_bodies.append(response.body())
-                    except Exception:
-                        return
+                    if _is_video_cdn_url(response.url):
+                        media_urls.append(response.url)
+                    if _is_aweme_detail_api(response.url) and not detail_bodies:
+                        try:
+                            detail_bodies.append(response.body())
+                        except Exception:
+                            return
+
+                def on_request(request) -> None:
+                    if _is_video_cdn_url(request.url):
+                        media_urls.append(request.url)
 
                 page.on("response", on_response)
+                page.on("request", on_request)
                 try:
                     page.goto(
                         share_url,
                         wait_until="domcontentloaded",
                         timeout=timeout_ms,
                     )
+                except Exception:
+                    pass
+                page.wait_for_timeout(3000)
+                try:
+                    videos = page.locator("video")
+                    if videos.count() > 0:
+                        videos.first.evaluate(
+                            "video => { video.muted = true; return video.play(); }"
+                        )
                 except Exception:
                     pass
                 page.wait_for_timeout(8000)
@@ -159,6 +288,9 @@ def _extract_video_url_via_browser(
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
         if video_url:
+            return video_url
+    for video_url in media_urls:
+        if _is_video_cdn_url(video_url):
             return video_url
     raise DouyinTranscriptionError(
         "没有从抖音分享页解析到视频，链接可能已失效、需要登录或页面结构已变化"
@@ -322,11 +454,17 @@ def transcribe_douyin_share(
         on_progress(2, "任务已进入服务器处理队列")
         with _PIPELINE_LOCK:
             on_progress(8, "正在解析抖音分享链接")
-            video_url = _extract_video_url_via_browser(
-                share_url,
-                chromium_executable=chromium_executable,
-                timeout_seconds=browser_timeout_seconds,
-            )
+            try:
+                video_url = _extract_video_url_via_mobile_share(
+                    share_url,
+                    timeout_seconds=browser_timeout_seconds,
+                )
+            except DouyinTranscriptionError:
+                video_url = _extract_video_url_via_browser(
+                    share_url,
+                    chromium_executable=chromium_executable,
+                    timeout_seconds=browser_timeout_seconds,
+                )
             on_progress(25, "链接解析成功，正在下载视频")
             _download_video(video_url, video_path, max_bytes=max_video_bytes)
             on_progress(45, "视频下载完成，正在提取音频")
