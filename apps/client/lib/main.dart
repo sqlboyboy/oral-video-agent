@@ -3252,11 +3252,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final path = picked?.files.single.path;
     if (path == null) return;
     if (_isAndroidClient) {
+      _stopCloudPolling();
       setState(() {
         mobileDigitalHumanPath = path;
         mobileDigitalHumanName =
             picked?.files.single.name ?? _fileNameFromPath(path);
         selectedDigitalHuman = 'mobile:reference';
+        cloudJob = null;
         cloudOutputUrl = '';
         cloudOutputLocalPath = '';
         outputRefresh++;
@@ -3375,17 +3377,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> uploadVoice() async {
     if (!_ensureSoftwareActivated()) return;
+    const supportedExtensions = ['wav', 'mp3', 'm4a', 'aac', 'flac'];
     final picked = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['wav', 'mp3', 'm4a', 'aac'],
+      // 部分安卓文件提供器会把 M4A 错报为 application/octet-stream，
+      // 使用自定义 MIME 过滤会导致有效文件在系统选择器中被置灰。
+      // 安卓端放开系统选择器后再由应用校验扩展名，兼容微信等来源。
+      type: _isAndroidClient ? FileType.any : FileType.custom,
+      allowedExtensions: _isAndroidClient ? null : supportedExtensions,
     );
-    final path = picked?.files.single.path;
+    final pickedFile = picked?.files.single;
+    final path = pickedFile?.path;
     if (path == null) return;
+    final fileName = pickedFile?.name ?? _fileNameFromPath(path);
+    final lowerName = fileName.toLowerCase();
+    if (!supportedExtensions.any((ext) => lowerName.endsWith('.$ext'))) {
+      showError('暂不支持该文件，请选择 WAV、MP3、M4A、AAC 或 FLAC 音频');
+      return;
+    }
     if (_isAndroidClient) {
       setState(() {
         mobileVoiceReferencePath = path;
-        mobileVoiceReferenceName =
-            picked?.files.single.name ?? _fileNameFromPath(path);
+        mobileVoiceReferenceName = fileName;
         selectedVoice = 'mobile:reference';
         _invalidateGeneratedVoice();
         message = '已选择声音参考文件';

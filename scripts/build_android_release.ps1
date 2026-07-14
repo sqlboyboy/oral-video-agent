@@ -4,9 +4,9 @@
     [int]$MinSupportedVersionCode = 3,
     [switch]$ForceUpdate,
     [string[]]$ReleaseNotes = @(
-        "支持应用内安全检查、下载和安装更新",
-        "登录令牌改用 Android Keystore 加密存储",
-        "启用 HTTPS、正式签名和代码混淆"
+        "修复部分安卓手机无法选择 M4A 声音样本的问题",
+        "视频页只显示数字人原视频，成品生成后自动替换",
+        "保留 HTTPS 安全更新、正式签名和完整性校验"
     )
 )
 

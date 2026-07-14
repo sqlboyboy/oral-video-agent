@@ -163,7 +163,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final points = wallet['available_points'] ?? 0;
     final pages = [
       _mobileStudioPage(),
-      _mobileTasksPage(),
+      _mobileVideoPage(),
       _mobileAccountPage(),
     ];
     return Scaffold(
@@ -220,7 +220,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
         onDestinationSelected: (index) {
           _updateMobile(() => mobileNavigationIndex = index);
           if (index == 1) {
-            loadMobileCloudJobs(silent: true);
+            _refreshMobileVideoPage(silent: true);
           } else if (index == 2) {
             loadCloudMe(silent: true);
             loadCloudLedger(silent: true);
@@ -233,8 +233,9 @@ extension _MobileWorkbench on _WorkbenchPageState {
             label: '创作',
           ),
           NavigationDestination(
-            icon: Icon(Icons.format_list_bulleted_rounded),
-            label: '任务',
+            icon: Icon(Icons.smart_display_outlined),
+            selectedIcon: Icon(Icons.smart_display_rounded),
+            label: '视频',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline_rounded),
@@ -419,7 +420,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
           _mobileCard(
             number: '3',
             title: '克隆声音',
-            subtitle: '建议选择 15–60 秒清晰人声，最长不超过 5 分钟',
+            subtitle: '支持 WAV/MP3/M4A/AAC/FLAC，建议选择 15–60 秒清晰人声',
             icon: Icons.graphic_eq_rounded,
             child: Column(
               children: [
@@ -712,9 +713,25 @@ extension _MobileWorkbench on _WorkbenchPageState {
     );
   }
 
-  Widget _mobileTasksPage() {
+  Widget _mobileVideoPage() {
+    final outputPath = cloudOutputLocalPath.trim();
+    final outputUrl = cloudOutputUrl.trim();
+    final sourcePath = mobileDigitalHumanPath.trim();
+    final hasOutput = outputPath.isNotEmpty || outputUrl.isNotEmpty;
+    final hasSource = sourcePath.isNotEmpty;
+    final status = cloudJob?['status']?.toString() ?? '';
+    final progress = (cloudJob?['progress_percent'] as num?)?.toDouble() ?? 0;
+    final renderActive =
+        const {'uploading', 'queued', 'running'}.contains(status);
+    final title = hasOutput ? '成品视频' : '数字人原视频';
+    final fileName = hasOutput
+        ? _cloudOutputLabel
+        : (mobileDigitalHumanName.isEmpty
+            ? _fileNameFromPath(sourcePath)
+            : mobileDigitalHumanName);
+
     return RefreshIndicator(
-      onRefresh: () => loadMobileCloudJobs(silent: true),
+      onRefresh: () => _refreshMobileVideoPage(silent: true),
       child: ListView(
         padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
         children: [
@@ -725,165 +742,221 @@ extension _MobileWorkbench on _WorkbenchPageState {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '云端任务',
+                      '我的数字人视频',
                       style:
                           TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
                     ),
                     SizedBox(height: 3),
                     Text(
-                      '下拉或点击按钮刷新任务进度',
+                      '生成前显示原视频，生成完成后自动替换为成品视频',
                       style: TextStyle(color: Colors.white54, fontSize: 12),
                     ),
                   ],
                 ),
               ),
               IconButton.filledTonal(
-                onPressed: loading ? null : loadMobileCloudJobs,
+                onPressed: loading
+                    ? null
+                    : () => _refreshMobileVideoPage(silent: false),
                 icon: const Icon(Icons.refresh_rounded),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          if (mobileCloudJobs.isEmpty)
-            _mobileEmptyState('还没有云端任务', '完成声音克隆或提交成片后会显示在这里')
-          else
-            for (final job in mobileCloudJobs) ...[
-              _mobileCloudJobCard(job),
-              const SizedBox(height: 10),
-            ],
+          if (!hasOutput && !hasSource) ...[
+            _mobileEmptyState(
+              '还没有数字人视频',
+              '请先在创作页面选择并上传数字人形象视频',
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => _updateMobile(() => mobileNavigationIndex = 0),
+              icon: const Icon(Icons.upload_file_rounded),
+              label: const Text('去上传数字人视频'),
+            ),
+          ] else ...[
+            _mobileVideoCard(
+              title: title,
+              fileName: fileName,
+              isOutput: hasOutput,
+              renderActive: renderActive,
+              progress: progress,
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _mobileCloudJobCard(Map<String, dynamic> job) {
-    final status = job['status']?.toString() ?? '';
-    final jobId = job['job_id']?.toString() ?? '';
-    final jobType = job['job_type']?.toString() ?? 'render';
-    final progress = (job['progress_percent'] as num?)?.toDouble() ?? 0;
-    final active = const {'uploading', 'queued', 'running'}.contains(status);
-    final color = _mobileCloudStatusColor(status);
-    final payload = (job['payload'] as Map?)?.cast<String, dynamic>();
-    final operation = payload?['operation']?.toString() ?? '';
-    final title = jobType == 'preprocess'
-        ? (operation == 'voice'
-            ? '声音克隆任务'
-            : operation == 'extract'
-                ? '文案提取任务'
-                : '云端预处理任务')
-        : '数字人成片任务';
+  Widget _mobileVideoCard({
+    required String title,
+    required String fileName,
+    required bool isOutput,
+    required bool renderActive,
+    required double progress,
+  }) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF181A27),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: color.withValues(alpha: 0.32)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFF34384D)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.13),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  jobType == 'preprocess'
-                      ? Icons.graphic_eq_rounded
-                      : Icons.movie_outlined,
-                  color: color,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: const TextStyle(fontWeight: FontWeight.w900)),
-                    const SizedBox(height: 2),
-                    Text(
-                      jobId,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style:
-                          const TextStyle(color: Colors.white38, fontSize: 10),
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 300),
+              child: AspectRatio(
+                aspectRatio: 9 / 16,
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: _playMobileVideo,
+                    borderRadius: BorderRadius.circular(18),
+                    child: Ink(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(18),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: isOutput
+                              ? const [Color(0xFF49317B), Color(0xFF171926)]
+                              : const [Color(0xFF283C66), Color(0xFF171926)],
+                        ),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            left: 14,
+                            top: 14,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black38,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                title,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Center(
+                            child: Container(
+                              width: 78,
+                              height: 78,
+                              decoration: const BoxDecoration(
+                                color: Colors.white24,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.play_arrow_rounded,
+                                color: Colors.white,
+                                size: 52,
+                              ),
+                            ),
+                          ),
+                          if (renderActive && !isOutput)
+                            const Positioned(
+                              left: 14,
+                              right: 14,
+                              bottom: 14,
+                              child: Text(
+                                '成品生成中，当前仍显示原视频',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
-                  ],
+                  ),
                 ),
               ),
-              Text(
-                _cloudStatusText(status),
-                style: TextStyle(color: color, fontWeight: FontWeight.w800),
-              ),
-            ],
+            ),
           ),
-          if (active) ...[
-            const SizedBox(height: 12),
+          const SizedBox(height: 14),
+          Text(
+            fileName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            isOutput ? '已生成成品视频' : '用户上传的数字人原视频',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          if (renderActive && !isOutput) ...[
+            const SizedBox(height: 14),
             LinearProgressIndicator(
               value: progress > 0 ? progress.clamp(0, 100) / 100 : null,
-              color: color,
+              color: _WorkbenchPageState.cyan,
               backgroundColor: Colors.white10,
             ),
           ],
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  job['progress_message']?.toString().isNotEmpty == true
-                      ? job['progress_message'].toString()
-                      : '创建于 ${job['created_at'] ?? ''}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white54, fontSize: 11),
-                ),
-              ),
-              if (active)
-                TextButton.icon(
-                  onPressed: () => _mobileCancelCloudJob(job),
-                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                  label: const Text('停止'),
-                )
-              else if (status == 'completed' && jobType == 'render')
-                TextButton.icon(
-                  onPressed: () => _mobileOpenCloudJob(job),
-                  icon: const Icon(Icons.play_circle_outline_rounded, size: 18),
-                  label: const Text('预览'),
-                ),
-            ],
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _playMobileVideo,
+              icon: const Icon(Icons.play_circle_outline_rounded),
+              label: Text(isOutput ? '播放成品视频' : '播放数字人原视频'),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _mobileCancelCloudJob(Map<String, dynamic> job) async {
-    _updateMobile(() => cloudJob = job);
-    await stopCloudRender();
-    await loadMobileCloudJobs(silent: true);
+  Future<void> _refreshMobileVideoPage({required bool silent}) async {
+    final job = cloudJob;
+    final jobId = job?['job_id']?.toString() ?? '';
+    final jobType = job?['job_type']?.toString() ?? '';
+    final status = job?['status']?.toString() ?? '';
+    try {
+      if (jobId.isNotEmpty && jobType != 'preprocess') {
+        if (const {'uploading', 'queued', 'running'}.contains(status)) {
+          await _pollCloudJob(jobId);
+        } else if (status == 'completed' &&
+            cloudOutputLocalPath.isEmpty &&
+            cloudOutputUrl.isEmpty) {
+          await _loadCloudDownload(jobId);
+        }
+      }
+      if (!silent && mounted) showInfo('视频状态已刷新');
+    } catch (error) {
+      if (!silent) showError(_friendlyError(error));
+    }
   }
 
-  Future<void> _mobileOpenCloudJob(Map<String, dynamic> job) async {
-    _updateMobile(() {
-      cloudJob = job;
-      mobileNavigationIndex = 0;
-      message = '正在准备云端成品';
-      messageIsError = false;
-    });
-    final jobId = job['job_id']?.toString() ?? '';
-    if (jobId.isEmpty) return;
-    try {
-      await _loadCloudDownload(jobId);
-      if (!mounted) return;
+  Future<void> _playMobileVideo() async {
+    if (cloudOutputLocalPath.isNotEmpty || cloudOutputUrl.isNotEmpty) {
       await previewOutputVideo();
-    } catch (error) {
-      showError(_friendlyError(error));
+      return;
     }
+    final sourcePath = mobileDigitalHumanPath.trim();
+    if (sourcePath.isEmpty || !await File(sourcePath).exists()) {
+      showError('数字人原视频不存在，请重新选择');
+      return;
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _VideoPlayerDialog(url: sourcePath),
+    );
   }
 
   Widget _mobileAccountPage() {
