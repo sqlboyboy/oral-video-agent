@@ -400,6 +400,78 @@ def test_android_registration_does_not_require_activation_code(monkeypatch, tmp_
     assert desktop_without_activation.status_code == 401
 
 
+def test_android_login_keeps_desktop_and_replaces_previous_phone(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    desktop_fingerprint = "windows-device-for-mobile-login"
+    desktop_token, _ = _activate_software(
+        client,
+        fingerprint=desktop_fingerprint,
+    )
+    sent = client.post(
+        "/api/client/auth/email-code",
+        headers=_device_headers(desktop_token),
+        json={"email": "cross-device@example.com", "purpose": "register"},
+    )
+    assert sent.status_code == 200, sent.text
+    registered = client.post(
+        "/api/client/auth/register",
+        headers=_device_headers(desktop_token),
+        json={
+            "email": "cross-device@example.com",
+            "code": sent.json()["debug_code"],
+            "password": "cross-device-pass-123",
+            "device_fingerprint": desktop_fingerprint,
+            "device_name": "Windows client",
+        },
+    )
+    assert registered.status_code == 200, registered.text
+    desktop_token = registered.json()["device_token"]
+
+    first_phone = client.post(
+        "/api/mobile/auth/password-login",
+        json={
+            "email": "cross-device@example.com",
+            "password": "cross-device-pass-123",
+            "device_fingerprint": "android-installation-first-123456",
+            "device_name": "First Android phone",
+        },
+    )
+    assert first_phone.status_code == 200, first_phone.text
+    first_phone_token = first_phone.json()["device_token"]
+    assert client.get(
+        "/api/client/me",
+        headers=_device_headers(desktop_token),
+    ).status_code == 200
+    assert client.get(
+        "/api/client/me",
+        headers=_device_headers(first_phone_token),
+    ).status_code == 200
+
+    replacement_phone = client.post(
+        "/api/mobile/auth/password-login",
+        json={
+            "email": "cross-device@example.com",
+            "password": "cross-device-pass-123",
+            "device_fingerprint": "android-installation-second-123456",
+            "device_name": "Replacement Android phone",
+        },
+    )
+    assert replacement_phone.status_code == 200, replacement_phone.text
+    replacement_token = replacement_phone.json()["device_token"]
+    assert client.get(
+        "/api/client/me",
+        headers=_device_headers(first_phone_token),
+    ).status_code == 401
+    assert client.get(
+        "/api/client/me",
+        headers=_device_headers(desktop_token),
+    ).status_code == 200
+    assert client.get(
+        "/api/client/me",
+        headers=_device_headers(replacement_token),
+    ).status_code == 200
+
+
 def test_client_rewrite_runs_directly_without_queue(monkeypatch, tmp_path):
     monkeypatch.setenv("REWRITE_PROVIDER", "placeholder")
     client = _client(monkeypatch, tmp_path)

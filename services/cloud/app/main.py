@@ -702,11 +702,26 @@ def _mobile_fingerprint(value: str) -> str:
     return fingerprint
 
 
+def _mobile_device_limit() -> int:
+    # Keep the configured desktop allowance and reserve one additional slot
+    # for the currently active Android installation.
+    return max(2, settings.max_devices_per_user + 1)
+
+
+def _mobile_permission_detail(exc: PermissionError) -> str:
+    return {
+        "device limit reached": "设备数量已达上限，请退出旧设备后重试",
+        "mobile device limit reached": "手机设备数量已达上限，请重新登录后重试",
+        "user account is disabled": "账号已被停用，请联系管理员",
+        "mobile access is disabled": "手机端访问已被停用，请联系管理员",
+    }.get(str(exc), str(exc))
+
+
 def _provision_mobile_session(session: dict[str, Any]) -> dict[str, Any]:
     store.ensure_mobile_access(
         user_id=str(session["user"]["user_id"]),
         device_id=str(session["device"]["device_id"]),
-        max_activations=settings.max_devices_per_user,
+        max_activations=_mobile_device_limit(),
     )
     return session
 
@@ -837,7 +852,8 @@ def register_mobile_with_password(
             device_fingerprint=fingerprint,
             device_name=req.device_name,
             max_attempts=settings.email_code_max_attempts,
-            max_devices=settings.max_devices_per_user,
+            max_devices=_mobile_device_limit(),
+            replace_device_prefix="android-",
         )
         session["user"] = store.set_user_password(
             user_id=session["user"]["user_id"],
@@ -849,7 +865,7 @@ def register_mobile_with_password(
     except KeyError:
         raise HTTPException(status_code=400, detail="验证码无效或已过期")
     except PermissionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=_mobile_permission_detail(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -873,13 +889,14 @@ def login_mobile_with_password(
             password=req.password,
             device_fingerprint=fingerprint,
             device_name=req.device_name,
-            max_devices=settings.max_devices_per_user,
+            max_devices=_mobile_device_limit(),
+            replace_device_prefix="android-",
         )
         return _provision_mobile_session(session)
     except KeyError:
         raise HTTPException(status_code=401, detail="邮箱或密码错误")
     except PermissionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=_mobile_permission_detail(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -899,7 +916,8 @@ def reset_mobile_password(
             device_fingerprint=fingerprint,
             device_name=req.device_name,
             max_attempts=settings.email_code_max_attempts,
-            max_devices=settings.max_devices_per_user,
+            max_devices=_mobile_device_limit(),
+            replace_device_prefix="android-",
         )
         session["user"] = store.set_user_password(
             user_id=session["user"]["user_id"],
@@ -911,7 +929,7 @@ def reset_mobile_password(
     except KeyError:
         raise HTTPException(status_code=400, detail="验证码无效或已过期")
     except PermissionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=_mobile_permission_detail(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

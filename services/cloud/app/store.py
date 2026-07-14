@@ -802,6 +802,7 @@ class QueueStore:
         device_fingerprint: str,
         device_name: str,
         max_devices: int,
+        replace_device_prefix: str = "",
     ) -> dict[str, Any]:
         address = normalize_email(email)
         fingerprint = device_fingerprint.strip()
@@ -818,6 +819,25 @@ class QueueStore:
                 raise KeyError("credentials")
             if user["status"] != "active":
                 raise PermissionError("user account is disabled")
+
+            replacement_prefix = replace_device_prefix.strip()
+            if replacement_prefix and fingerprint.startswith(replacement_prefix):
+                db.execute(
+                    """
+                    UPDATE devices
+                    SET revoked_at = ?
+                    WHERE user_id = ?
+                      AND revoked_at IS NULL
+                      AND device_fingerprint != ?
+                      AND device_fingerprint LIKE ?
+                    """,
+                    (
+                        now,
+                        user["user_id"],
+                        fingerprint,
+                        f"{replacement_prefix}%",
+                    ),
+                )
 
             existing_device = db.execute(
                 """
@@ -890,6 +910,7 @@ class QueueStore:
         device_name: str,
         max_attempts: int,
         max_devices: int,
+        replace_device_prefix: str = "",
     ) -> dict[str, Any]:
         address = normalize_email(email)
         value = code.strip()
@@ -983,6 +1004,25 @@ class QueueStore:
                 user = db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
             if user["status"] != "active":
                 raise PermissionError("user account is disabled")
+
+            replacement_prefix = replace_device_prefix.strip()
+            if replacement_prefix and fingerprint.startswith(replacement_prefix):
+                db.execute(
+                    """
+                    UPDATE devices
+                    SET revoked_at = ?
+                    WHERE user_id = ?
+                      AND revoked_at IS NULL
+                      AND device_fingerprint != ?
+                      AND device_fingerprint LIKE ?
+                    """,
+                    (
+                        now,
+                        user["user_id"],
+                        fingerprint,
+                        f"{replacement_prefix}%",
+                    ),
+                )
 
             existing_device = db.execute(
                 """
