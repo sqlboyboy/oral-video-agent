@@ -1117,11 +1117,11 @@ class QueueStore:
             license_row = db.execute(
                 """
                 SELECT * FROM license_keys
-                WHERE assigned_user_id = ? AND license_key LIKE 'mobile_%'
+                WHERE assigned_user_id = ? AND substr(license_key, 1, 7) = ?
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
-                (user_id,),
+                (user_id, "mobile_"),
             ).fetchone()
             if license_row is None:
                 license_key = f"mobile_{secrets.token_urlsafe(24)}"
