@@ -195,6 +195,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic>? cloudSession;
   Map<String, dynamic>? cloudWallet;
   Map<String, dynamic>? cloudJob;
+  Map<String, dynamic>? cloudDouyinTranscription;
   Map<String, dynamic>? cloudEstimate;
   Map<String, dynamic>? mouthAtlasDiagnosis;
   List<Map<String, dynamic>> cloudLedger = const [];
@@ -2009,6 +2010,90 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _syncEditors(body);
       final taskId = body['task_id'] as String;
       await _pollImport(taskId);
+    });
+  }
+
+  Future<void> createCloudDouyinTranscriptTask() async {
+    if (!_ensureCloudAccountReady()) return;
+    final shareText = urlController.text.trim();
+    if (shareText.isEmpty) {
+      showError('请先粘贴抖音分享链接或完整分享口令');
+      return;
+    }
+    await _runBusy(() async {
+      setState(() {
+        cloudDouyinTranscription = null;
+        message = '正在向服务器提交抖音链接';
+        messageIsError = false;
+      });
+      final created = await http
+          .post(
+            Uri.parse('$_cloudApiBase/api/client/douyin/transcriptions'),
+            headers: _cloudHeaders(),
+            body: jsonEncode({'share_text': shareText}),
+          )
+          .timeout(const Duration(seconds: 30));
+      _check(created);
+      var current = _decodeMap(created);
+      final transcriptionId =
+          current['transcription_id']?.toString().trim() ?? '';
+      if (transcriptionId.isEmpty) {
+        throw Exception('服务器未返回文案提取任务编号');
+      }
+
+      for (var attempt = 0; attempt < 400; attempt++) {
+        if (!mounted) return;
+        final progressMessage =
+            current['progress_message']?.toString().trim() ?? '';
+        setState(() {
+          cloudDouyinTranscription = current;
+          message = progressMessage.isNotEmpty
+              ? progressMessage
+              : '服务器正在处理抖音视频';
+          messageIsError = false;
+        });
+        final status = current['status']?.toString() ?? '';
+        if (status == 'completed') {
+          final transcript = current['transcript']?.toString().trim() ?? '';
+          if (transcript.isEmpty) {
+            throw Exception('服务器没有返回识别出的口播文案');
+          }
+          setState(() {
+            originalScriptController.text = transcript;
+            task = {
+              'task_id': 'douyin-$transcriptionId',
+              'status': 'transcribed',
+              'original_script': transcript,
+              'rewritten_script': rewrittenScriptController.text.trim(),
+              'progress_steps': const [],
+            };
+            output = null;
+            outputRefresh++;
+            coverPath = '';
+            _invalidateGeneratedVoice();
+            message = '服务器已完成抖音视频下载和口播文案提取';
+            messageIsError = false;
+          });
+          return;
+        }
+        if (status == 'failed') {
+          final error = current['error_message']?.toString().trim() ?? '';
+          throw Exception(error.isEmpty ? '抖音文案提取失败' : error);
+        }
+
+        await Future<void>.delayed(const Duration(seconds: 3));
+        final polled = await http
+            .get(
+              Uri.parse(
+                '$_cloudApiBase/api/client/douyin/transcriptions/$transcriptionId',
+              ),
+              headers: _cloudHeaders(),
+            )
+            .timeout(const Duration(seconds: 30));
+        _check(polled);
+        current = _decodeMap(polled);
+      }
+      throw Exception('服务器处理时间过长，请稍后重试');
     });
   }
 

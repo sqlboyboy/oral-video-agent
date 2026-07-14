@@ -68,6 +68,20 @@ class Settings:
     max_devices_per_user: int = _int_env("MAX_DEVICES_PER_USER", 1)
     bonus_daily_spend_limit: int = _int_env("BONUS_DAILY_SPEND_LIMIT", 90)
     max_render_duration_seconds: int = _int_env("MAX_RENDER_DURATION_SECONDS", 600)
+    douyin_whisper_model: str = os.getenv("DOUYIN_WHISPER_MODEL", "small").strip()
+    douyin_work_root: Path = Path(
+        os.getenv("DOUYIN_WORK_ROOT", "/data/douyin-transcriptions")
+    )
+    douyin_model_cache_dir: Path = Path(
+        os.getenv("DOUYIN_MODEL_CACHE_DIR", "/data/huggingface")
+    )
+    douyin_chromium_executable: str = os.getenv(
+        "DOUYIN_CHROMIUM_EXECUTABLE", "/usr/bin/chromium"
+    ).strip()
+    douyin_browser_timeout_seconds: int = _int_env(
+        "DOUYIN_BROWSER_TIMEOUT_SECONDS", 45
+    )
+    douyin_max_video_mb: int = _int_env("DOUYIN_MAX_VIDEO_MB", 500)
     scheduler_interval_seconds: int = _int_env("SCHEDULER_INTERVAL_SECONDS", 60)
     running_job_timeout_seconds: int = _int_env("RUNNING_JOB_TIMEOUT_SECONDS", 7200)
     queued_job_timeout_seconds: int = _int_env("QUEUED_JOB_TIMEOUT_SECONDS", 86400)

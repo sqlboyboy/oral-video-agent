@@ -472,6 +472,66 @@ def test_android_login_keeps_desktop_and_replaces_previous_phone(monkeypatch, tm
     ).status_code == 200
 
 
+def test_douyin_transcription_is_server_job_and_scoped_to_account(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    token = _activate(client)
+    headers = _device_headers(token)
+
+    import app.main as main_module
+
+    monkeypatch.setattr(
+        main_module,
+        "_start_douyin_transcription",
+        lambda transcription_id, share_url: None,
+    )
+
+    invalid = client.post(
+        "/api/client/douyin/transcriptions",
+        headers=headers,
+        json={"share_text": "https://example.com/not-douyin"},
+    )
+    assert invalid.status_code == 400
+
+    created = client.post(
+        "/api/client/douyin/transcriptions",
+        headers=headers,
+        json={
+            "share_text": "复制打开抖音 https://v.douyin.com/AbCdEfG/ 看视频",
+        },
+    )
+    assert created.status_code == 200, created.text
+    body = created.json()
+    transcription_id = body["transcription_id"]
+    assert body["share_url"] == "https://v.douyin.com/AbCdEfG/"
+    assert body["status"] == "queued"
+
+    duplicate = client.post(
+        "/api/client/douyin/transcriptions",
+        headers=headers,
+        json={"share_text": "https://v.douyin.com/AnotherOne/"},
+    )
+    assert duplicate.status_code == 409
+
+    main_module.store.update_douyin_transcription(
+        transcription_id=transcription_id,
+        status="completed",
+        progress_percent=100,
+        progress_message="口播文案提取完成",
+        transcript="这是服务器识别出的口播文案",
+    )
+    completed = client.get(
+        f"/api/client/douyin/transcriptions/{transcription_id}",
+        headers=headers,
+    )
+    assert completed.status_code == 200
+    assert completed.json()["transcript"] == "这是服务器识别出的口播文案"
+
+    anonymous = client.get(
+        f"/api/client/douyin/transcriptions/{transcription_id}",
+    )
+    assert anonymous.status_code == 401
+
+
 def test_client_rewrite_runs_directly_without_queue(monkeypatch, tmp_path):
     monkeypatch.setenv("REWRITE_PROVIDER", "placeholder")
     client = _client(monkeypatch, tmp_path)

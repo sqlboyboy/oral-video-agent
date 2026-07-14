@@ -287,6 +287,13 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final jobStatus = cloudJob?['status']?.toString() ?? '';
     final jobProgress =
         (cloudJob?['progress_percent'] as num?)?.toDouble() ?? 0;
+    final douyinStatus =
+        cloudDouyinTranscription?['status']?.toString() ?? '';
+    final douyinProgress =
+        (cloudDouyinTranscription?['progress_percent'] as num?)?.toDouble() ??
+            0;
+    final douyinProgressMessage =
+        cloudDouyinTranscription?['progress_message']?.toString() ?? '';
     return RefreshIndicator(
       onRefresh: () async {
         await loadCloudMe(silent: true);
@@ -298,29 +305,52 @@ extension _MobileWorkbench on _WorkbenchPageState {
           _mobileCard(
             number: '1',
             title: '准备文案',
-            subtitle: '可直接输入，也可从手机视频提取口播原文',
+            subtitle: '粘贴抖音链接，由服务器下载视频并提取口播原文',
             icon: Icons.edit_note_rounded,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _mobileFileBar(
-                  label: cloudSourceVideoName.isEmpty
-                      ? '尚未选择源视频'
-                      : cloudSourceVideoName,
-                  buttonText: '选择视频',
-                  onPressed: uploadSourceVideo,
+                TextField(
+                  controller: urlController,
+                  minLines: 2,
+                  maxLines: 4,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: _mobileInputDecoration(
+                    '粘贴抖音分享链接或完整分享口令',
+                  ).copyWith(
+                    prefixIcon: const Icon(Icons.link_rounded),
+                    alignLabelWithHint: true,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                const Text(
+                  '解析、视频下载、音频提取和语音识别均在服务器完成。',
+                  style: TextStyle(color: Colors.white54, fontSize: 11),
                 ),
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
-                    onPressed: loading || cloudSourceVideoPath.isEmpty
-                        ? null
-                        : createCloudTranscriptTask,
+                    onPressed:
+                        loading ? null : createCloudDouyinTranscriptTask,
                     icon: const Icon(Icons.auto_fix_high_rounded),
-                    label: const Text('从视频提取文案'),
+                    label: const Text('解析链接并提取文案'),
                   ),
                 ),
+                if (douyinStatus.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  _mobileJobStatus(douyinStatus, douyinProgress),
+                  if (douyinProgressMessage.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      douyinProgressMessage,
+                      style:
+                          const TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ],
+                ],
                 const SizedBox(height: 12),
                 _mobileTextArea(
                   originalScriptController,

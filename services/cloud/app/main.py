@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import secrets
 import mimetypes
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,6 +16,11 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
 from .email_sender import create_email_sender
+from .douyin_transcriber import (
+    DouyinTranscriptionError,
+    extract_douyin_share_url,
+    transcribe_douyin_share,
+)
 from .notifier import WebhookNotifier
 from .object_storage import object_storage
 from .redis_state import RedisState
@@ -25,6 +31,7 @@ from .store import QueueStore, estimate_render_points, validate_password
 
 app = FastAPI(title="Oral Video Agent Cloud", version="0.1.0")
 store = QueueStore(settings.database_path, database_url=settings.database_url)
+store.fail_interrupted_douyin_transcriptions()
 notifier = WebhookNotifier(settings.notify_webhook_url)
 redis_state = RedisState(settings.redis_url)
 email_sender = create_email_sender()
@@ -174,6 +181,10 @@ class ClientRewriteRequest(BaseModel):
     product_info: str = ""
     target_audience: str = ""
     max_chars: int = Field(default=300, ge=20, le=300)
+
+
+class ClientDouyinTranscriptionRequest(BaseModel):
+    share_text: str = Field(min_length=1, max_length=2000)
 
 
 class WorkerHeartbeatRequest(BaseModel):
@@ -387,6 +398,66 @@ def _verify_storage_signature(
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _run_douyin_transcription(transcription_id: str, share_url: str) -> None:
+    try:
+        store.update_douyin_transcription(
+            transcription_id=transcription_id,
+            status="running",
+            progress_percent=1,
+            progress_message="服务器已开始处理",
+        )
+
+        def on_progress(percent: int, message: str) -> None:
+            store.update_douyin_transcription(
+                transcription_id=transcription_id,
+                status="running",
+                progress_percent=percent,
+                progress_message=message,
+            )
+
+        transcript = transcribe_douyin_share(
+            share_url,
+            work_dir=settings.douyin_work_root / transcription_id,
+            model_name=settings.douyin_whisper_model,
+            model_cache_dir=settings.douyin_model_cache_dir,
+            chromium_executable=settings.douyin_chromium_executable,
+            browser_timeout_seconds=settings.douyin_browser_timeout_seconds,
+            max_video_bytes=settings.douyin_max_video_mb * 1024 * 1024,
+            on_progress=on_progress,
+        )
+        store.update_douyin_transcription(
+            transcription_id=transcription_id,
+            status="completed",
+            progress_percent=100,
+            progress_message="口播文案提取完成",
+            transcript=transcript,
+            error_message="",
+        )
+    except DouyinTranscriptionError as exc:
+        store.update_douyin_transcription(
+            transcription_id=transcription_id,
+            status="failed",
+            progress_message="口播文案提取失败",
+            error_message=str(exc),
+        )
+    except Exception as exc:
+        store.update_douyin_transcription(
+            transcription_id=transcription_id,
+            status="failed",
+            progress_message="服务器处理失败",
+            error_message=f"服务器处理失败：{exc}",
+        )
+
+
+def _start_douyin_transcription(transcription_id: str, share_url: str) -> None:
+    threading.Thread(
+        target=_run_douyin_transcription,
+        args=(transcription_id, share_url),
+        name=f"douyin-transcription-{transcription_id[:8]}",
+        daemon=True,
+    ).start()
 
 
 @app.get("/api/health")
@@ -1010,6 +1081,39 @@ def activate_client_license(
 @app.get("/api/client/me")
 def client_me(session: dict[str, Any] = Depends(require_client)) -> dict[str, Any]:
     return session
+
+
+@app.post("/api/client/douyin/transcriptions")
+def create_client_douyin_transcription(
+    req: ClientDouyinTranscriptionRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    share_url = extract_douyin_share_url(req.share_text)
+    if not share_url:
+        raise HTTPException(status_code=400, detail="没有识别到有效的抖音分享链接")
+    try:
+        transcription = store.create_douyin_transcription(
+            user_id=session["user"]["user_id"],
+            share_url=share_url,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    _start_douyin_transcription(transcription["transcription_id"], share_url)
+    return transcription
+
+
+@app.get("/api/client/douyin/transcriptions/{transcription_id}")
+def get_client_douyin_transcription(
+    transcription_id: str,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    try:
+        return store.get_douyin_transcription(
+            transcription_id=transcription_id,
+            user_id=session["user"]["user_id"],
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="抖音文案提取任务不存在")
 
 
 @app.get("/api/client/credits/ledger")

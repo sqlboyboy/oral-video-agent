@@ -445,6 +445,36 @@ class QueueStore:
                 )
                 """
             )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS douyin_transcriptions (
+                    transcription_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    share_url TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    progress_percent INTEGER NOT NULL DEFAULT 0,
+                    progress_message TEXT NOT NULL DEFAULT '',
+                    transcript TEXT NOT NULL DEFAULT '',
+                    error_message TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                )
+                """
+            )
+            db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_douyin_transcriptions_user_created
+                ON douyin_transcriptions(user_id, created_at DESC)
+                """
+            )
+            db.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_douyin_transcriptions_user_active
+                ON douyin_transcriptions(user_id)
+                WHERE status IN ('queued', 'running')
+                """
+            )
 
     def _ensure_columns(
         self,
@@ -3360,6 +3390,126 @@ class QueueStore:
             row = db.execute(
                 "SELECT * FROM worker_nodes WHERE worker_id = ?",
                 (worker_id,),
+            ).fetchone()
+        return dict(row)
+
+    def fail_interrupted_douyin_transcriptions(self) -> int:
+        now = utc_now()
+        with self.connect() as db:
+            cursor = db.execute(
+                """
+                UPDATE douyin_transcriptions
+                SET status = 'failed',
+                    progress_message = '服务器重启，任务已中断，请重新提交',
+                    error_message = '服务器重启，任务已中断，请重新提交',
+                    updated_at = ?,
+                    completed_at = ?
+                WHERE status IN ('queued', 'running')
+                """,
+                (now, now),
+            )
+        return max(0, int(cursor.rowcount))
+
+    def create_douyin_transcription(
+        self,
+        *,
+        user_id: str,
+        share_url: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        transcription_id = uuid4().hex
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            active = db.execute(
+                """
+                SELECT transcription_id
+                FROM douyin_transcriptions
+                WHERE user_id = ? AND status IN ('queued', 'running')
+                LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            if active is not None:
+                raise RuntimeError("已有抖音文案提取任务正在处理，请稍后再试")
+            db.execute(
+                """
+                INSERT INTO douyin_transcriptions (
+                    transcription_id, user_id, share_url, status,
+                    progress_percent, progress_message, transcript,
+                    error_message, created_at, updated_at
+                )
+                VALUES (?, ?, ?, 'queued', 0, '等待服务器处理', '', '', ?, ?)
+                """,
+                (transcription_id, user_id, share_url, now, now),
+            )
+            row = db.execute(
+                "SELECT * FROM douyin_transcriptions WHERE transcription_id = ?",
+                (transcription_id,),
+            ).fetchone()
+        return dict(row)
+
+    def get_douyin_transcription(
+        self,
+        *,
+        transcription_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        sql = "SELECT * FROM douyin_transcriptions WHERE transcription_id = ?"
+        params: tuple[Any, ...] = (transcription_id,)
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params += (user_id,)
+        with self.connect() as db:
+            row = db.execute(sql, params).fetchone()
+        if row is None:
+            raise KeyError(transcription_id)
+        return dict(row)
+
+    def update_douyin_transcription(
+        self,
+        *,
+        transcription_id: str,
+        status: str | None = None,
+        progress_percent: int | None = None,
+        progress_message: str | None = None,
+        transcript: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        if status is not None and status not in {"queued", "running", "completed", "failed"}:
+            raise ValueError("invalid douyin transcription status")
+        now = utc_now()
+        updates: list[str] = ["updated_at = ?"]
+        values: list[Any] = [now]
+        if status is not None:
+            updates.append("status = ?")
+            values.append(status)
+            if status in {"completed", "failed"}:
+                updates.append("completed_at = ?")
+                values.append(now)
+        if progress_percent is not None:
+            updates.append("progress_percent = ?")
+            values.append(max(0, min(100, int(progress_percent))))
+        if progress_message is not None:
+            updates.append("progress_message = ?")
+            values.append(progress_message[:500])
+        if transcript is not None:
+            updates.append("transcript = ?")
+            values.append(transcript)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            values.append(error_message[:1200])
+        values.append(transcription_id)
+        with self.connect() as db:
+            cursor = db.execute(
+                f"UPDATE douyin_transcriptions SET {', '.join(updates)} "
+                "WHERE transcription_id = ?",
+                tuple(values),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(transcription_id)
+            row = db.execute(
+                "SELECT * FROM douyin_transcriptions WHERE transcription_id = ?",
+                (transcription_id,),
             ).fetchone()
         return dict(row)
 
