@@ -1,9 +1,13 @@
 package com.jiesu.oral_video_agent_client
 
-import android.app.Activity
+import android.Manifest
+import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -22,7 +26,8 @@ import javax.crypto.spec.GCMParameterSpec
 
 class MainActivity : FlutterActivity() {
     private val platformChannel = "com.jiesu.oral_video_agent_client/updater"
-    private val saveVideoRequestCode = 7102
+    private val writeStorageRequestCode = 7103
+    private val galleryAlbumName = "杰速口播"
     private val securePreferencesName = "jiesu_secure_cloud_auth_v1"
     private val secureKeyAlias = "jiesu_cloud_auth_keystore_key_v1"
     private val allowedSecureKeys = setOf(
@@ -31,8 +36,8 @@ class MainActivity : FlutterActivity() {
     )
     private var pendingVideoSaveResult: MethodChannel.Result? = null
     private var pendingVideoSaveSource: File? = null
+    private var pendingVideoSaveName: String? = null
 
-    @Suppress("DEPRECATION")
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
@@ -161,15 +166,22 @@ class MainActivity : FlutterActivity() {
                         val safeName = safeVideoFileName(requestedName ?: sourceFile.name)
                         pendingVideoSaveResult = result
                         pendingVideoSaveSource = sourceFile
-                        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                            addCategory(Intent.CATEGORY_OPENABLE)
-                            type = "video/mp4"
-                            putExtra(Intent.EXTRA_TITLE, safeName)
+                        pendingVideoSaveName = safeName
+                        if (
+                            Build.VERSION.SDK_INT in
+                            Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
+                            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+                            PackageManager.PERMISSION_GRANTED
+                        ) {
+                            requestPermissions(
+                                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                                writeStorageRequestCode,
+                            )
+                        } else {
+                            savePendingVideoToGallery()
                         }
-                        startActivityForResult(intent, saveVideoRequestCode)
                     } catch (error: Exception) {
-                        pendingVideoSaveResult = null
-                        pendingVideoSaveSource = null
+                        clearPendingVideoSave()
                         result.error("save_failed", error.message, null)
                     }
                 }
@@ -179,36 +191,102 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != saveVideoRequestCode) return
-        val pendingResult = pendingVideoSaveResult ?: return
-        val sourceFile = pendingVideoSaveSource
-        pendingVideoSaveResult = null
-        pendingVideoSaveSource = null
-        val destination = data?.data
-        if (resultCode != Activity.RESULT_OK || destination == null || sourceFile == null) {
-            pendingResult.success(null)
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != writeStorageRequestCode) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            savePendingVideoToGallery()
             return
         }
+        val result = pendingVideoSaveResult
+        clearPendingVideoSave()
+        result?.error("permission_denied", "需要存储权限才能将视频保存到相册", null)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun savePendingVideoToGallery() {
+        val pendingResult = pendingVideoSaveResult ?: return
+        val sourceFile = pendingVideoSaveSource ?: return
+        val fileName = pendingVideoSaveName ?: sourceFile.name
         Thread {
+            var destination: Uri? = null
             try {
+                val nowSeconds = System.currentTimeMillis() / 1000
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(MediaStore.Video.Media.DATE_ADDED, nowSeconds)
+                    put(MediaStore.Video.Media.DATE_MODIFIED, nowSeconds)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        put(
+                            MediaStore.Video.Media.RELATIVE_PATH,
+                            "${Environment.DIRECTORY_MOVIES}/$galleryAlbumName",
+                        )
+                        put(MediaStore.Video.Media.IS_PENDING, 1)
+                    } else {
+                        val moviesDirectory = Environment.getExternalStoragePublicDirectory(
+                            Environment.DIRECTORY_MOVIES,
+                        )
+                        val albumDirectory = File(moviesDirectory, galleryAlbumName)
+                        if (!albumDirectory.exists() && !albumDirectory.mkdirs()) {
+                            throw IllegalStateException("无法创建杰速口播相册")
+                        }
+                        put(
+                            MediaStore.Video.Media.DATA,
+                            File(albumDirectory, fileName).absolutePath,
+                        )
+                    }
+                }
+                val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaStore.Video.Media.getContentUri(
+                        MediaStore.VOLUME_EXTERNAL_PRIMARY,
+                    )
+                } else {
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                }
+                val destinationUri = contentResolver.insert(collection, values)
+                    ?: throw IllegalStateException("无法创建相册视频")
+                destination = destinationUri
                 sourceFile.inputStream().use { input ->
-                    val output = contentResolver.openOutputStream(destination, "w")
-                        ?: throw IllegalStateException("无法打开所选保存位置")
+                    val output = contentResolver.openOutputStream(destinationUri, "w")
+                        ?: throw IllegalStateException("无法写入相册视频")
                     output.use {
                         input.copyTo(it, DEFAULT_BUFFER_SIZE * 16)
                         it.flush()
                     }
                 }
-                runOnUiThread { pendingResult.success(destination.toString()) }
-            } catch (error: Exception) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val published = ContentValues().apply {
+                        put(MediaStore.Video.Media.IS_PENDING, 0)
+                    }
+                    if (contentResolver.update(destinationUri, published, null, null) <= 0) {
+                        throw IllegalStateException("相册视频发布失败")
+                    }
+                }
                 runOnUiThread {
+                    clearPendingVideoSave()
+                    pendingResult.success(destinationUri.toString())
+                }
+            } catch (error: Exception) {
+                destination?.let {
+                    runCatching { contentResolver.delete(it, null, null) }
+                }
+                runOnUiThread {
+                    clearPendingVideoSave()
                     pendingResult.error("save_failed", error.message, null)
                 }
             }
         }.start()
+    }
+
+    private fun clearPendingVideoSave() {
+        pendingVideoSaveResult = null
+        pendingVideoSaveSource = null
+        pendingVideoSaveName = null
     }
 
     private fun safeVideoFileName(value: String): String {

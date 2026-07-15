@@ -4,9 +4,9 @@
     [int]$MinSupportedVersionCode = 3,
     [switch]$ForceUpdate,
     [string[]]$ReleaseNotes = @(
-        "新增成品视频保存到手机功能",
-        "使用系统文件选择器导出 MP4，无需额外存储权限",
-        "应用更新后自动恢复最近生成的本地成片"
+        "成片一键直接保存到系统相册",
+        "视频统一归档到 Movies/杰速口播，查找更方便",
+        "Android 10 及以上无需额外存储权限"
     )
 )
 

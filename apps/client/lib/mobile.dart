@@ -554,7 +554,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
                                 )
                               : const Icon(Icons.download_rounded),
                           label: Text(
-                            savingVideoToPhone ? '保存中' : '保存到手机',
+                            savingVideoToPhone ? '保存中' : '保存到相册',
                           ),
                         ),
                       ),
@@ -1195,7 +1195,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
                       )
                     : const Icon(Icons.download_rounded),
                 label: Text(
-                  savingVideoToPhone ? '正在保存视频' : '保存到手机',
+                  savingVideoToPhone ? '正在保存视频' : '保存到相册',
                 ),
               ),
             ),
@@ -1257,7 +1257,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
         '${twoDigits(now.hour)}${twoDigits(now.minute)}${twoDigits(now.second)}.mp4';
     _updateMobile(() {
       savingVideoToPhone = true;
-      message = '请在系统窗口中选择视频保存位置';
+      message = '正在保存到“杰速口播”相册';
       messageIsError = false;
     });
     try {
@@ -1267,7 +1267,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
       );
       if (!mounted) return;
       _updateMobile(() {
-        message = savedUri == null ? '已取消保存' : '视频已保存到你选择的位置';
+        message = savedUri == null ? '视频保存失败，请重试' : '视频已保存到“杰速口播”相册';
         messageIsError = false;
       });
     } on PlatformException catch (error) {
