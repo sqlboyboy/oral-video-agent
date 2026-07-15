@@ -119,7 +119,7 @@ class Settings:
     cos_cleanup_hours: int = _int_env("COS_CLEANUP_HOURS", 72)
     cos_download_confirm_delete_delay_hours: int = _int_env(
         "COS_DOWNLOAD_CONFIRM_DELETE_DELAY_HOURS",
-        0,
+        24,
     )
 
 

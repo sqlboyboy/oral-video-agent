@@ -1067,9 +1067,21 @@ def test_upload_session_submit_worker_urls_and_download_link(monkeypatch, tmp_pa
     completed = client.post(
         f"/api/worker/jobs/{job_id}/complete",
         headers=_worker_headers(),
-        json={"worker_id": "worker-1", "result": {"output_cos_key": output_key}},
+        json={
+            "worker_id": "worker-1",
+            "result": {
+                "output_cos_key": output_key,
+                "output_file_name": "result.mp4",
+                "output_content_type": "video/mp4",
+                "output_file_size_bytes": len(b"rendered-mp4-bytes"),
+            },
+        },
     )
     assert completed.status_code == 200
+    output_asset = next(
+        asset for asset in completed.json()["assets"] if asset["kind"] == "output"
+    )
+    assert output_asset["file_size_bytes"] == len(b"rendered-mp4-bytes")
 
     download = client.get(
         f"/api/client/jobs/{job_id}/download",
@@ -1084,7 +1096,7 @@ def test_upload_session_submit_worker_urls_and_download_link(monkeypatch, tmp_pa
     assert output_download.content == b"rendered-mp4-bytes"
 
 
-def test_download_confirmation_deletes_output_immediately(monkeypatch, tmp_path):
+def test_download_confirmation_keeps_output_for_retry_window(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -1118,10 +1130,12 @@ def test_download_confirmation_deletes_output_immediately(monkeypatch, tmp_path)
         for asset in confirmed.json()["job"]["assets"]
         if asset["kind"] == "output"
     )
-    assert confirmed_output["status"] == "deleted"
+    assert confirmed_output["status"] == "downloaded"
     assert confirmed_output["downloaded_at"]
-    assert confirmed_output["deleted_at"]
-    assert confirmed.json()["deleted_outputs"] == 1
+    assert confirmed_output["deleted_at"] is None
+    assert confirmed_output["expires_at"]
+    assert confirmed.json()["delete_delay_hours"] == 1
+    assert confirmed.json()["deleted_outputs"] == 0
 
 
 def test_scheduler_deletes_expired_output_assets(monkeypatch, tmp_path):

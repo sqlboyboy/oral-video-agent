@@ -1417,7 +1417,9 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final outputPath = cloudOutputLocalPath.trim();
     final outputUrl = cloudOutputUrl.trim();
     final sourcePath = mobileDigitalHumanPath.trim();
-    final hasOutput = outputPath.isNotEmpty || outputUrl.isNotEmpty;
+    final hasLocalOutput =
+        outputPath.isNotEmpty && File(outputPath).existsSync();
+    final hasOutput = hasLocalOutput || outputUrl.isNotEmpty;
     final hasSource = sourcePath.isNotEmpty;
     final status = cloudJob?['status']?.toString() ?? '';
     final progress = (cloudJob?['progress_percent'] as num?)?.toDouble() ?? 0;
@@ -1663,18 +1665,18 @@ extension _MobileWorkbench on _WorkbenchPageState {
   }
 
   Future<void> _refreshMobileVideoPage({required bool silent}) async {
-    final job = cloudJob;
-    final jobId = job?['job_id']?.toString() ?? '';
-    final jobType = job?['job_type']?.toString() ?? '';
-    final status = job?['status']?.toString() ?? '';
     try {
+      await loadMobileCloudJobs(silent: true);
+      final job = cloudJob;
+      final jobId = job?['job_id']?.toString() ?? '';
+      final jobType = job?['job_type']?.toString() ?? '';
+      final status = job?['status']?.toString() ?? '';
       if (jobId.isNotEmpty && jobType != 'preprocess') {
         if (const {'uploading', 'queued', 'running'}.contains(status)) {
           await _pollCloudJob(jobId);
-        } else if (status == 'completed' &&
-            cloudOutputLocalPath.isEmpty &&
-            cloudOutputUrl.isEmpty) {
-          await _loadCloudDownload(jobId);
+        } else if (status == 'completed') {
+          final outputPath = await _ensureCloudOutputFile(jobId);
+          if (outputPath == null) throw Exception('云端成品下载失败');
         }
       }
       if (!silent && mounted) showInfo('视频状态已刷新');
@@ -1702,9 +1704,21 @@ extension _MobileWorkbench on _WorkbenchPageState {
 
   Future<void> _saveMobileOutputVideo() async {
     if (!_isAndroidClient || savingVideoToPhone) return;
-    final path = cloudOutputLocalPath.trim();
-    if (path.isEmpty || !await File(path).exists()) {
-      showError('成品视频不存在，请先刷新视频状态');
+    final jobId = _cloudJobId;
+    String? path;
+    try {
+      if (jobId != null &&
+          (cloudJob?['status']?.toString() ?? '') == 'completed') {
+        path = await _ensureCloudOutputFile(jobId);
+      } else if (await _isUsableLocalMp4(cloudOutputLocalPath)) {
+        path = cloudOutputLocalPath.trim();
+      }
+    } catch (_) {
+      showError('成品文件已不在云端，请重新生成；新版本会保留云端副本供失败时重试');
+      return;
+    }
+    if (path == null || !await _isUsableLocalMp4(path)) {
+      showError('成品视频不存在，请刷新状态或重新生成');
       return;
     }
     final now = DateTime.now();

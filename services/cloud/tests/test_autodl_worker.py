@@ -94,6 +94,9 @@ def test_render_command_downloads_inputs_and_uploads_output(monkeypatch, tmp_pat
 
     assert result["mode"] == "render_command"
     assert result["output_cos_key"] == "outputs/user/job-1/result.mp4"
+    assert result["output_file_name"] == "result.mp4"
+    assert result["output_content_type"] == "video/mp4"
+    assert result["output_file_size_bytes"] == len(b"video-output")
     assert downloaded[0][0] == "https://cos.example.com/input"
     assert downloaded[0][1].name == "00-source.mp4"
     assert uploaded[0][0] == "https://cos.example.com/output"

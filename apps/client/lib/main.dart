@@ -1032,11 +1032,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         }
       }
       String? restoredOutputPath;
+      var latestRenderJobId = '';
       if (_isAndroidClient &&
           latestRenderJob?['status']?.toString() == 'completed') {
-        final jobId = latestRenderJob?['job_id']?.toString() ?? '';
-        if (jobId.isNotEmpty) {
-          restoredOutputPath = await _findLocalCloudOutput(jobId);
+        latestRenderJobId = latestRenderJob?['job_id']?.toString() ?? '';
+        if (latestRenderJobId.isNotEmpty) {
+          restoredOutputPath = await _findLocalCloudOutput(latestRenderJobId);
         }
       }
       if (!mounted) return;
@@ -1044,16 +1045,27 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         mobileCloudJobs = jobs;
         if (_isAndroidClient && latestRenderJob != null) {
           cloudJob = latestRenderJob;
-          if (restoredOutputPath != null) {
-            cloudOutputLocalPath = restoredOutputPath;
-            cloudOutputUrl = '';
-          }
+          // Always replace the previous job's output state. Keeping a path from
+          // an older/deleted job makes the UI look playable while the file no
+          // longer exists, which leads to a 00:00 preview and failed save.
+          cloudOutputLocalPath = restoredOutputPath ?? '';
+          cloudOutputUrl = '';
         }
         if (!silent) {
           message = '云端任务已刷新';
           messageIsError = false;
         }
       });
+      if (_isAndroidClient &&
+          latestRenderJobId.isNotEmpty &&
+          restoredOutputPath == null) {
+        try {
+          await _loadCloudDownload(latestRenderJobId);
+        } catch (_) {
+          // The output may have expired in cloud storage. Keep the stale local
+          // state cleared; a manual refresh/play/save will surface a clear error.
+        }
+      }
     } catch (e) {
       if (!silent) showError(_friendlyError(e));
     }
@@ -5003,9 +5015,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _loadCloudDownload(String jobId) async {
-    if (cloudOutputLocalPath.isNotEmpty &&
-        await File(cloudOutputLocalPath).exists()) {
-      return;
+    final currentPath = cloudOutputLocalPath.trim();
+    if (currentPath.isNotEmpty) {
+      if (await _isUsableLocalMp4(currentPath)) return;
+      if (mounted) {
+        setState(() {
+          if (cloudOutputLocalPath.trim() == currentPath) {
+            cloudOutputLocalPath = '';
+            cloudOutputUrl = '';
+          }
+          if (intermediateVideoPath == currentPath) intermediateVideoPath = '';
+          if (finalOutputVideoPath == currentPath) finalOutputVideoPath = '';
+        });
+      }
     }
     final res = await http.get(
       Uri.parse('$_cloudApiBase/api/client/jobs/$jobId/download'),
@@ -5033,7 +5055,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
     if (!mounted) return;
     setState(() {
-      cloudOutputUrl = url;
+      // A presigned URL expires. The validated local file is the durable client
+      // source; request a fresh URL from the API if a re-download is needed.
+      cloudOutputUrl = '';
       cloudOutputLocalPath = localPath;
       intermediateVideoPath = localPath;
       finalOutputVideoPath = '';
@@ -5223,7 +5247,52 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       (left, right) =>
           right.lastModifiedSync().compareTo(left.lastModifiedSync()),
     );
-    return matches.first.path;
+    for (final file in matches) {
+      if (await _isUsableLocalMp4(file.path)) return file.path;
+    }
+    return null;
+  }
+
+  Future<bool> _isUsableLocalMp4(String path) async {
+    final value = path.trim();
+    if (value.isEmpty) return false;
+    final file = File(value);
+    try {
+      if (!await file.exists() || await file.length() < 32) return false;
+      final reader = await file.open();
+      try {
+        final header = await reader.read(64);
+        for (var index = 0; index + 3 < header.length; index++) {
+          if (header[index] == 0x66 &&
+              header[index + 1] == 0x74 &&
+              header[index + 2] == 0x79 &&
+              header[index + 3] == 0x70) {
+            return true;
+          }
+        }
+      } finally {
+        await reader.close();
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
+  }
+
+  Future<String?> _ensureCloudOutputFile(String jobId) async {
+    final currentPath = cloudOutputLocalPath.trim();
+    if (await _isUsableLocalMp4(currentPath)) return currentPath;
+    if (mounted && (currentPath.isNotEmpty || cloudOutputUrl.isNotEmpty)) {
+      setState(() {
+        cloudOutputLocalPath = '';
+        cloudOutputUrl = '';
+        if (intermediateVideoPath == currentPath) intermediateVideoPath = '';
+        if (finalOutputVideoPath == currentPath) finalOutputVideoPath = '';
+      });
+    }
+    await _loadCloudDownload(jobId);
+    final downloadedPath = cloudOutputLocalPath.trim();
+    return await _isUsableLocalMp4(downloadedPath) ? downloadedPath : null;
   }
 
   Future<String> _downloadCloudOutputToLocal({
@@ -5268,12 +5337,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       await sink.close();
       sink = null;
+      if (received < 32 || await tmp.length() != received) {
+        throw Exception('云端成品下载不完整，请重试');
+      }
+      if (total > 0 && received != total) {
+        throw Exception(
+          '云端成品下载不完整：应为 ${_formatBytes(total)}，实际 ${_formatBytes(received)}',
+        );
+      }
+      if (!await _isUsableLocalMp4(tmp.path)) {
+        throw Exception('云端返回的文件不是有效 MP4，请刷新后重试');
+      }
       if (await dest.exists()) {
         await dest.delete();
       }
       await tmp.rename(dest.path);
       final saved = File(dest.path);
-      if (!await saved.exists() || await saved.length() == 0) {
+      if (!await _isUsableLocalMp4(saved.path)) {
         throw Exception('本地成品文件保存失败');
       }
       return saved.path;
@@ -5378,14 +5458,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Future<void> previewOutputVideo() async {
     if (generationMode == 'cloud') {
       final jobId = _cloudJobId;
-      if (cloudOutputLocalPath.isEmpty &&
-          jobId != null &&
-          (cloudJob?['status'] as String?) == 'completed') {
-        await _loadCloudDownload(jobId);
+      String? localPath;
+      if (jobId != null && (cloudJob?['status'] as String?) == 'completed') {
+        try {
+          localPath = await _ensureCloudOutputFile(jobId);
+        } catch (_) {
+          showError('成品文件已不在云端，请重新生成；新版本会保留云端副本供失败时重试');
+          return;
+        }
       }
-      final url = cloudOutputLocalPath.isNotEmpty
-          ? cloudOutputLocalPath
-          : cloudOutputUrl;
+      final url = localPath ?? cloudOutputUrl.trim();
       if (url.isEmpty) {
         showError('请先完成云端生成任务');
         return;

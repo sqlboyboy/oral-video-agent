@@ -3286,13 +3286,18 @@ class QueueStore:
                     str(result.get("output_file_name") or Path(str(output_cos_key)).name or "result.mp4")
                 )
                 output_content_type = str(result.get("output_content_type") or "video/mp4")
+                output_file_size_bytes = max(
+                    0,
+                    int(result.get("output_file_size_bytes") or 0),
+                )
                 db.execute(
                     """
                     INSERT INTO job_assets (
                         asset_id, job_id, user_id, kind, cos_key, file_name,
-                        content_type, status, created_at, updated_at, uploaded_at, expires_at
+                        content_type, file_size_bytes, status, created_at,
+                        updated_at, uploaded_at, expires_at
                     )
-                    VALUES (?, ?, ?, 'output', ?, ?, ?, 'uploaded', ?, ?, ?, ?)
+                    VALUES (?, ?, ?, 'output', ?, ?, ?, ?, 'uploaded', ?, ?, ?, ?)
                     """,
                     (
                         str(uuid4()),
@@ -3301,6 +3306,7 @@ class QueueStore:
                         str(output_cos_key),
                         output_file_name,
                         output_content_type,
+                        output_file_size_bytes,
                         now,
                         now,
                         now,

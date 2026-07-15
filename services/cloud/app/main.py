@@ -1429,26 +1429,22 @@ def confirm_client_job_downloaded(
     job_id: str,
     session: dict[str, Any] = Depends(require_cloud_account),
 ) -> dict[str, Any]:
+    effective_delete_delay_hours = max(
+        1,
+        settings.cos_download_confirm_delete_delay_hours,
+    )
     try:
         job = store.confirm_output_downloaded(
             user_id=session["user"]["user_id"],
             job_id=job_id,
-            delete_delay_hours=settings.cos_download_confirm_delete_delay_hours,
+            delete_delay_hours=effective_delete_delay_hours,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="output not found")
-    deleted_outputs = 0
-    if settings.cos_download_confirm_delete_delay_hours <= 0:
-        deleted_outputs = _delete_job_assets(job, output_only=True)
-        if deleted_outputs:
-            job = store.get_client_job_with_assets(
-                user_id=session["user"]["user_id"],
-                job_id=job_id,
-            )
     return {
         "job": job,
-        "delete_delay_hours": settings.cos_download_confirm_delete_delay_hours,
-        "deleted_outputs": deleted_outputs,
+        "delete_delay_hours": effective_delete_delay_hours,
+        "deleted_outputs": 0,
     }
 
 

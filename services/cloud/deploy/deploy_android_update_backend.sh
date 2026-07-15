@@ -6,7 +6,7 @@ DEPLOY_ROOT="${2:-/opt/oral-video-agent/cloud}"
 PUBLIC_BASE_URL="https://api.example.com"
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 
-for file in app/main.py app/settings.py; do
+for file in app/main.py app/settings.py app/store.py; do
   if [[ ! -f "$STAGING_DIR/$file" ]]; then
     echo "Missing staged file: $file" >&2
     exit 2
@@ -18,8 +18,11 @@ cp "$DEPLOY_ROOT/app/main.py" \
   "$DEPLOY_ROOT/backups/security-update-$TIMESTAMP/main.py"
 cp "$DEPLOY_ROOT/app/settings.py" \
   "$DEPLOY_ROOT/backups/security-update-$TIMESTAMP/settings.py"
+cp "$DEPLOY_ROOT/app/store.py" \
+  "$DEPLOY_ROOT/backups/security-update-$TIMESTAMP/store.py"
 install -m 0644 "$STAGING_DIR/app/main.py" "$DEPLOY_ROOT/app/main.py"
 install -m 0644 "$STAGING_DIR/app/settings.py" "$DEPLOY_ROOT/app/settings.py"
+install -m 0644 "$STAGING_DIR/app/store.py" "$DEPLOY_ROOT/app/store.py"
 
 ENV_FILE="$DEPLOY_ROOT/deploy/.env"
 set_env() {
@@ -34,6 +37,7 @@ set_env() {
 set_env CLOUD_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
 set_env ADMIN_COOKIE_SECURE true
 set_env ANDROID_RELEASE_DIR /data/releases/android
+set_env COS_DOWNLOAD_CONFIRM_DELETE_DELAY_HOURS 24
 
 cd "$DEPLOY_ROOT/deploy"
 docker compose up -d --build cloud-api scheduler

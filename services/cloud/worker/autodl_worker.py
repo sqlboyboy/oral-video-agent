@@ -204,6 +204,7 @@ class AutoDlWorker:
                         (local_job.get("payload") or {}).get("output_content_type")
                         or "application/octet-stream"
                     )
+                    result["output_file_size_bytes"] = output_path.stat().st_size
                 else:
                     self.progress(job["job_id"], 90, "云端文案处理完成")
                 return result
@@ -217,6 +218,15 @@ class AutoDlWorker:
                 "stdout_tail": completed.stdout[-1200:],
                 "job_json": str(payload_path),
                 "output_path": str(output_path),
+                "output_file_name": (
+                    (local_job.get("payload") or {}).get("output_file_name")
+                    or output_path.name
+                ),
+                "output_content_type": (
+                    (local_job.get("payload") or {}).get("output_content_type")
+                    or "video/mp4"
+                ),
+                "output_file_size_bytes": output_path.stat().st_size,
             }
             output_cos_key = (local_job.get("payload") or {}).get("output_cos_key")
             if output_cos_key:
