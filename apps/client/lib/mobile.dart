@@ -529,13 +529,36 @@ extension _MobileWorkbench on _WorkbenchPageState {
                 ],
                 if (cloudOutputLocalPath.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: previewOutputVideo,
-                      icon: const Icon(Icons.play_circle_outline_rounded),
-                      label: const Text('预览成品视频'),
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: previewOutputVideo,
+                          icon: const Icon(Icons.play_circle_outline_rounded),
+                          label: const Text('预览成品'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          onPressed: savingVideoToPhone
+                              ? null
+                              : _saveMobileOutputVideo,
+                          icon: savingVideoToPhone
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.download_rounded),
+                          label: Text(
+                            savingVideoToPhone ? '保存中' : '保存到手机',
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ],
@@ -1158,6 +1181,25 @@ extension _MobileWorkbench on _WorkbenchPageState {
               label: Text(isOutput ? '播放成品视频' : '播放数字人原视频'),
             ),
           ),
+          if (isOutput) ...[
+            const SizedBox(height: 9),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: savingVideoToPhone ? null : _saveMobileOutputVideo,
+                icon: savingVideoToPhone
+                    ? const SizedBox(
+                        width: 17,
+                        height: 17,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.download_rounded),
+                label: Text(
+                  savingVideoToPhone ? '正在保存视频' : '保存到手机',
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -1199,6 +1241,41 @@ extension _MobileWorkbench on _WorkbenchPageState {
       context: context,
       builder: (_) => _VideoPlayerDialog(url: sourcePath),
     );
+  }
+
+  Future<void> _saveMobileOutputVideo() async {
+    if (!_isAndroidClient || savingVideoToPhone) return;
+    final path = cloudOutputLocalPath.trim();
+    if (path.isEmpty || !await File(path).exists()) {
+      showError('成品视频不存在，请先刷新视频状态');
+      return;
+    }
+    final now = DateTime.now();
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    final fileName = 'jiesu-video-${now.year}'
+        '${twoDigits(now.month)}${twoDigits(now.day)}-'
+        '${twoDigits(now.hour)}${twoDigits(now.minute)}${twoDigits(now.second)}.mp4';
+    _updateMobile(() {
+      savingVideoToPhone = true;
+      message = '请在系统窗口中选择视频保存位置';
+      messageIsError = false;
+    });
+    try {
+      final savedUri = await _androidPlatformChannel.invokeMethod<String>(
+        'saveVideo',
+        {'path': path, 'file_name': fileName},
+      );
+      if (!mounted) return;
+      _updateMobile(() {
+        message = savedUri == null ? '已取消保存' : '视频已保存到你选择的位置';
+        messageIsError = false;
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      showError('视频保存失败：${error.message ?? error.code}');
+    } finally {
+      if (mounted) _updateMobile(() => savingVideoToPhone = false);
+    }
   }
 
   Widget _mobileAccountPage() {

@@ -265,6 +265,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String cloudAuthMode = 'login';
   int mobileNavigationIndex = 0;
   bool mobileUpdateChecking = false;
+  bool savingVideoToPhone = false;
   String mobileAppVersion = '';
   int studioStep = 0;
   final Set<String> selectedTaskIds = <String>{};
@@ -845,10 +846,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       );
       _check(res);
       final body = _decodeMap(res);
+      final jobs =
+          (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+      Map<String, dynamic>? latestRenderJob;
+      for (final item in jobs) {
+        if (item['job_type']?.toString() != 'preprocess') {
+          latestRenderJob = item;
+          break;
+        }
+      }
+      String? restoredOutputPath;
+      if (_isAndroidClient &&
+          latestRenderJob?['status']?.toString() == 'completed') {
+        final jobId = latestRenderJob?['job_id']?.toString() ?? '';
+        if (jobId.isNotEmpty) {
+          restoredOutputPath = await _findLocalCloudOutput(jobId);
+        }
+      }
       if (!mounted) return;
       setState(() {
-        mobileCloudJobs =
-            (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+        mobileCloudJobs = jobs;
+        if (_isAndroidClient && latestRenderJob != null) {
+          cloudJob = latestRenderJob;
+          if (restoredOutputPath != null) {
+            cloudOutputLocalPath = restoredOutputPath;
+            cloudOutputUrl = '';
+          }
+        }
         if (!silent) {
           message = '云端任务已刷新';
           messageIsError = false;
@@ -4796,6 +4820,26 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final outputDir = Directory('${dir.path}${Platform.pathSeparator}outputs');
     await outputDir.create(recursive: true);
     return File('${outputDir.path}${Platform.pathSeparator}$fileName');
+  }
+
+  Future<String?> _findLocalCloudOutput(String jobId) async {
+    final dir = await getApplicationSupportDirectory();
+    final outputDir = Directory('${dir.path}${Platform.pathSeparator}outputs');
+    if (!await outputDir.exists()) return null;
+    final matches = <File>[];
+    await for (final entity in outputDir.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = _fileNameFromPath(entity.path).toLowerCase();
+      if (name.startsWith('${jobId.toLowerCase()}-') && name.endsWith('.mp4')) {
+        matches.add(entity);
+      }
+    }
+    if (matches.isEmpty) return null;
+    matches.sort(
+      (left, right) =>
+          right.lastModifiedSync().compareTo(left.lastModifiedSync()),
+    );
+    return matches.first.path;
   }
 
   Future<String> _downloadCloudOutputToLocal({
