@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import shutil
 import struct
 import subprocess
 import threading
@@ -18,7 +19,12 @@ from fastapi.responses import FileResponse
 from .asset_store import asset_store, ensure_voice_reference_wav, save_upload
 from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PostprocessVideoRequest, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, project_root, storage_dir
 from .mouth_quality import build_mouth_quality_report, collect_mouth_quality_signals
-from .pipeline.cover import extract_first_frame_cover_png, generate_cover_png
+from .pipeline.cover import (
+    COVER_TEMPLATES,
+    DEFAULT_COVER_TEMPLATE,
+    extract_first_frame_cover_png,
+    generate_cover_png,
+)
 from .pipeline.renderer import (
     Renderer,
     _ffmpeg_executable,
@@ -28,6 +34,7 @@ from .pipeline.renderer import (
 )
 from .progress import complete_progress, fail_progress, start_progress
 from .pipeline.subtitles import generate_srt, preview_subtitles, subtitle_time_range_for_text
+from .pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
 from .providers.digital_human import create_digital_human_provider
@@ -1207,6 +1214,16 @@ def subtitle_preview(req: SubtitlePreviewRequest):
     }
 
 
+@app.get("/api/subtitles/templates", tags=["subtitles"])
+def list_subtitle_templates():
+    return {
+        "items": [
+            {"template_id": template_id, **metadata}
+            for template_id, metadata in SUBTITLE_TEMPLATES.items()
+        ]
+    }
+
+
 @app.delete("/api/assets/{asset_id}", tags=["assets"])
 def delete_asset(asset_id: str):
     try:
@@ -1452,6 +1469,8 @@ def delete_task(task_id: str):
         task.output_video_path,
         task.cover_path,
     ]
+    if task.output_video_path:
+        paths.append(str(_cover_source_video_path(Path(task.output_video_path))))
     if task.mouth_quality:
         paths.extend([
             task.mouth_quality.mouth_state_path,
@@ -1517,12 +1536,60 @@ def generate_task_publish_content(task_id: str) -> PublishContentSuggestion:
     return suggestion
 
 
-def _generate_task_cover_file(task: OralVideoTask, script: str, cover_path: Path) -> Path:
+def _cover_source_video_path(video_path: Path) -> Path:
+    return video_path.with_name(f"{video_path.stem}_cover_source{video_path.suffix}")
+
+
+def _cover_background_video_path(video_path: Path) -> Path:
+    source_path = _cover_source_video_path(video_path)
+    return source_path if source_path.exists() else video_path
+
+
+def _apply_cover_to_video_first_frame(
+    video_path: Path,
+    cover_path: Path,
+    *,
+    refresh_source: bool = False,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    if not video_path.exists():
+        raise FileNotFoundError(video_path)
+    if not cover_path.exists():
+        raise FileNotFoundError(cover_path)
+
+    source_path = _cover_source_video_path(video_path)
+    if refresh_source or not source_path.exists():
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(video_path, source_path)
+
+    temporary_path = video_path.with_name(f"{video_path.stem}_covering{video_path.suffix}")
+    temporary_path.unlink(missing_ok=True)
+    try:
+        renderer.apply_cover_first_frame(
+            source_path,
+            cover_path,
+            temporary_path,
+            cancel_event=cancel_event,
+        )
+        temporary_path.replace(video_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return video_path
+
+
+def _generate_task_cover_file(
+    task: OralVideoTask,
+    script: str,
+    cover_path: Path,
+    *,
+    template_id: str | None = None,
+) -> Path:
     frame_path: Path | None = None
     if task.output_video_path and Path(task.output_video_path).exists():
         frame_path = cover_path.with_name(f"{cover_path.stem}_frame.png")
         try:
-            extract_first_frame_cover_png(Path(task.output_video_path), frame_path)
+            output_path = Path(task.output_video_path)
+            extract_first_frame_cover_png(_cover_background_video_path(output_path), frame_path)
         except Exception:
             frame_path = None
     try:
@@ -1531,10 +1598,21 @@ def _generate_task_cover_file(task: OralVideoTask, script: str, cover_path: Path
             script,
             cover_path,
             background_image_path=frame_path,
+            template_id=template_id or task.cover_template_id or DEFAULT_COVER_TEMPLATE,
         )
     finally:
         if frame_path is not None:
             frame_path.unlink(missing_ok=True)
+
+
+@app.get("/api/covers/templates", tags=["tasks"])
+def list_cover_templates():
+    return {
+        "items": [
+            {"template_id": template_id, **metadata}
+            for template_id, metadata in COVER_TEMPLATES.items()
+        ]
+    }
 
 
 @app.post("/api/covers/generate", tags=["tasks"])
@@ -1542,6 +1620,7 @@ def generate_standalone_cover(payload: dict) -> Dict[str, str]:
     title = str(payload.get("title") or "").strip()
     script = str(payload.get("script") or "").strip()
     background = str(payload.get("background_path") or "").strip()
+    template_id = str(payload.get("template_id") or DEFAULT_COVER_TEMPLATE).strip()
     if not title and not script:
         raise HTTPException(status_code=400, detail="没有可生成封面的标题或文案")
     cover_path = storage_dir("covers") / f"{uuid4()}.png"
@@ -1553,22 +1632,34 @@ def generate_standalone_cover(payload: dict) -> Dict[str, str]:
             if candidate.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
                 frame_path = cover_path.with_name(f"{cover_path.stem}_frame.png")
                 try:
-                    extract_first_frame_cover_png(candidate, frame_path)
+                    extract_first_frame_cover_png(_cover_background_video_path(candidate), frame_path)
                     background_path = frame_path
                 except Exception:
                     background_path = None
             elif candidate.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                 background_path = candidate
     try:
-        generate_cover_png(title, script, cover_path, background_image_path=background_path)
+        generate_cover_png(
+            title,
+            script,
+            cover_path,
+            background_image_path=background_path,
+            template_id=template_id,
+        )
     finally:
         if frame_path is not None:
             frame_path.unlink(missing_ok=True)
-    return {"cover_path": str(cover_path)}
+    return {
+        "cover_path": str(cover_path),
+        "template_id": template_id if template_id in COVER_TEMPLATES else DEFAULT_COVER_TEMPLATE,
+    }
 
 
 @app.post("/api/tasks/{task_id}/cover", tags=["tasks"])
-def generate_task_cover(task_id: str) -> OralVideoTask:
+def generate_task_cover(
+    task_id: str,
+    template_id: str = DEFAULT_COVER_TEMPLATE,
+) -> OralVideoTask:
     try:
         task = repo.get(task_id)
     except KeyError:
@@ -1582,7 +1673,13 @@ def generate_task_cover(task_id: str) -> OralVideoTask:
         task.title = task.video_title
         complete_progress(task, "title")
     cover_path = storage_dir("covers") / f"{task_id}.png"
-    _generate_task_cover_file(task, script, cover_path)
+    task.cover_template_id = template_id if template_id in COVER_TEMPLATES else DEFAULT_COVER_TEMPLATE
+    _generate_task_cover_file(
+        task,
+        script,
+        cover_path,
+        template_id=task.cover_template_id,
+    )
     task.cover_path = str(cover_path)
     complete_progress(task, "cover")
     return repo.put(task)
@@ -1600,6 +1697,7 @@ def upload_task_cover(task_id: str, file: UploadFile = File(...)) -> OralVideoTa
         raise HTTPException(status_code=400, detail=str(exc))
     start_progress(task, "cover")
     task.cover_path = str(Path(asset.path))
+    task.cover_template_id = "custom"
     if not task.video_title:
         script = task.rewritten_script or task.original_script
         if script:
@@ -1607,6 +1705,31 @@ def upload_task_cover(task_id: str, file: UploadFile = File(...)) -> OralVideoTa
             task.title = task.video_title
     complete_progress(task, "cover")
     return repo.put(task)
+
+
+@app.post("/api/videos/cover-first-frame", tags=["tasks"])
+def apply_video_cover_first_frame(payload: dict):
+    video_path = Path(str(payload.get("source_video_path") or "")).expanduser()
+    cover_path = Path(str(payload.get("cover_path") or "")).expanduser()
+    if not video_path.exists() or not video_path.is_file():
+        raise HTTPException(status_code=404, detail="待设置封面的视频不存在")
+    if not is_playable_mp4(video_path):
+        raise HTTPException(status_code=400, detail="待设置封面的视频不是可播放的 MP4")
+    if not cover_path.exists() or not cover_path.is_file():
+        raise HTTPException(status_code=404, detail="封面图片不存在")
+    if cover_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="封面图片格式不受支持")
+    try:
+        rendered_path = _apply_cover_to_video_first_frame(video_path, cover_path)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=500, detail=f"封面写入视频失败：{exc.returncode}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"封面写入视频失败：{exc}") from exc
+    return {
+        "ready": is_playable_mp4(rendered_path),
+        "path": str(rendered_path),
+        "size_bytes": rendered_path.stat().st_size,
+    }
 
 
 @app.post("/api/tasks/{task_id}/publish", tags=["tasks"])
@@ -1634,6 +1757,17 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     script = options.script or task.rewritten_script or task.original_script
     if not script:
         raise HTTPException(status_code=400, detail="没有可合成的文案")
+    if options.defer_packaging:
+        options = options.model_copy(
+            update={
+                "bgm_id": "none",
+                "bgm_volume": 0,
+                "subtitle_enabled": False,
+                "pip_enabled": False,
+                "pip_asset_id": None,
+                "cover_path": None,
+            }
+        )
     selected_engine, active_digital_human_provider = selected_digital_human_provider(
         options.digital_human_engine
     )
@@ -1655,10 +1789,26 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
 
     try:
         ensure_not_cancelled(task, cancel_event)
-        audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
+        generated_audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
+        existing_audio_path = (
+            Path(task.extracted_audio_path)
+            if options.defer_packaging and task.extracted_audio_path
+            else None
+        )
+        audio_path = (
+            existing_audio_path
+            if existing_audio_path is not None and existing_audio_path.exists()
+            else generated_audio_path
+        )
         start_progress(task, "voice")
         repo.put(task)
-        voice_provider.synthesize(script, options.voice_id, audio_path, reference_audio=voice_ref)
+        if audio_path == generated_audio_path:
+            voice_provider.synthesize(
+                script,
+                options.voice_id,
+                audio_path,
+                reference_audio=voice_ref,
+            )
         ensure_not_cancelled(task, cancel_event)
         task.extracted_audio_path = str(audio_path)
         complete_progress(task, "voice")
@@ -1756,11 +1906,33 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         task.title = task.video_title
         complete_progress(task, "title")
         repo.put(task)
+        if options.defer_packaging:
+            task.status = TaskStatus.completed
+            return repo.put(task)
         start_progress(task, "cover")
         repo.put(task)
-        cover_path = storage_dir("covers") / f"{task_id}.png"
-        _generate_task_cover_file(task, script, cover_path)
+        existing_cover = Path(task.cover_path) if task.cover_path else None
+        if (
+            task.cover_template_id == "custom"
+            and existing_cover is not None
+            and existing_cover.exists()
+        ):
+            cover_path = existing_cover
+        else:
+            cover_path = storage_dir("covers") / f"{task_id}.png"
+            _generate_task_cover_file(
+                task,
+                script,
+                cover_path,
+                template_id=task.cover_template_id,
+            )
         task.cover_path = str(cover_path)
+        _apply_cover_to_video_first_frame(
+            Path(task.output_video_path),
+            cover_path,
+            refresh_source=True,
+            cancel_event=cancel_event,
+        )
         complete_progress(task, "cover")
         repo.put(task)
         task.status = TaskStatus.completed
@@ -1986,6 +2158,13 @@ def postprocess_video(request: PostprocessVideoRequest):
             bgm_audio=bgm_audio,
             pip_asset=pip_asset,
         )
+        cover_path = Path(options.cover_path).expanduser() if options.cover_path else None
+        if cover_path is not None and cover_path.exists():
+            _apply_cover_to_video_first_frame(
+                rendered_path,
+                cover_path,
+                refresh_source=True,
+            )
     except subprocess.CalledProcessError as exc:
         raise HTTPException(status_code=500, detail=f"本地后处理合成失败：{exc.returncode}") from exc
     except Exception as exc:

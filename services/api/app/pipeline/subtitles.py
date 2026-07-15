@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from typing import List
 
 from ..models import SubtitleStyle
@@ -70,6 +71,17 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+def _apply_keyword_color(caption: str, style: SubtitleStyle) -> str:
+    color = (style.keyword_color or "").strip()
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+        return caption
+    lines = caption.splitlines()
+    if len(lines) < 2:
+        return caption
+    lines[-1] = f'<font color="{color.upper()}">{lines[-1]}</font>'
+    return "\n".join(lines)
+
+
 def generate_srt(
     script: str,
     style: SubtitleStyle,
@@ -89,10 +101,11 @@ def generate_srt(
             end = max(end, duration_seconds)
         start_ts = _format_timestamp(start)
         end_ts = _format_timestamp(end)
+        rendered_line = _apply_keyword_color(line, style)
         blocks.append(
             f"{idx}\n"
             f"{start_ts} --> {end_ts}\n"
-            f"{line}\n"
+            f"{rendered_line}\n"
         )
     output_path.write_text("\n".join(blocks), encoding="utf-8")
     return output_path

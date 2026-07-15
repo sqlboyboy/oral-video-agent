@@ -10,6 +10,7 @@ import wave
 
 from fastapi.testclient import TestClient
 import imageio_ffmpeg
+from PIL import Image
 
 from app import main as main_module
 from app.main import app
@@ -93,11 +94,12 @@ def test_bootstrap_catalog_returns_client_startup_data():
     assert any(item["name"] == "同款口播" for item in body["rewrite_styles"])
 
 
-def test_subtitle_style_defaults_to_douyin_yellow():
+def test_subtitle_style_defaults_to_first_template():
     style = SubtitleStyle()
 
-    assert style.color == "#FFE600"
-    assert style.outline_color == "#000000"
+    assert style.template_id == "renovation_pitfall_yellow"
+    assert style.color == "#FFFFFF"
+    assert style.outline_color == "#111111"
 
 
 def test_task_subtitle_generation_writes_srt():
@@ -641,6 +643,40 @@ def test_upload_rewrite_and_render_flow():
     assert progress_by_key["cover"] == "completed"
 
 
+def test_deferred_render_creates_unpacked_digital_human_video():
+    task = _create_task_via_upload()
+
+    rendered = client.post(
+        f"/api/tasks/{task['task_id']}/render",
+        json={
+            "script": "先生成数字人中间视频，再选择封面、字幕和背景音乐。",
+            "voice_id": "classic-female",
+            "bgm_id": "default-light",
+            "subtitle_enabled": True,
+            "pip_enabled": True,
+            "pip_asset_id": None,
+            "cover_path": "not-applied.png",
+            "defer_packaging": True,
+        },
+    )
+
+    assert rendered.status_code == 200
+    rendered_task = rendered.json()
+    assert rendered_task["status"] == "completed"
+    assert rendered_task["output_video_path"]
+    assert rendered_task["subtitle_path"] is None
+    assert rendered_task["cover_path"] is None
+    assert rendered_task["render_options"]["defer_packaging"] is True
+    assert rendered_task["render_options"]["bgm_id"] == "none"
+    assert rendered_task["render_options"]["subtitle_enabled"] is False
+    assert rendered_task["render_options"]["pip_enabled"] is False
+    progress_by_key = {
+        step["key"]: step["status"] for step in rendered_task["progress_steps"]
+    }
+    assert progress_by_key["digital_human"] == "completed"
+    assert progress_by_key["cover"] != "completed"
+
+
 def test_render_records_internal_mouth_quality_artifacts():
     task = _create_task_via_upload()
     diagnosis_payload = {
@@ -752,10 +788,13 @@ def test_title_cover_and_publish_endpoints():
     assert titled_task["video_title"]
     assert titled_task["title"] == titled_task["video_title"]
 
-    covered = client.post(f"/api/tasks/{task_id}/cover")
+    covered = client.post(
+        f"/api/tasks/{task_id}/cover?template_id=blue-white-clear"
+    )
     assert covered.status_code == 200
     covered_task = covered.json()
     assert covered_task["cover_path"]
+    assert covered_task["cover_template_id"] == "blue-white-clear"
     assert Path(covered_task["cover_path"]).exists()
 
     cover = client.get(f"/api/tasks/{task_id}/cover")
@@ -768,6 +807,33 @@ def test_title_cover_and_publish_endpoints():
     )
     assert published.status_code == 200
     assert set(published.json()["publish_results"]) == {"douyin", "xiaohongshu"}
+
+
+def test_apply_cover_endpoint_writes_cover_to_video_first_frame(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    cover = tmp_path / "cover.png"
+    video.write_bytes(_mp4_bytes())
+    Image.new("RGB", (720, 1280), (12, 34, 56)).save(cover)
+    calls = []
+
+    def fake_apply(source_video, cover_image, output_path, *, cancel_event=None):
+        calls.append((source_video, cover_image, output_path, cancel_event))
+        output_path.write_bytes(source_video.read_bytes())
+        return output_path
+
+    monkeypatch.setattr(main_module.renderer, "apply_cover_first_frame", fake_apply)
+
+    response = client.post(
+        "/api/videos/cover-first-frame",
+        json={"source_video_path": str(video), "cover_path": str(cover)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ready"] is True
+    assert response.json()["path"] == str(video)
+    assert len(calls) == 1
+    assert calls[0][1] == cover
+    assert video.with_name("video_cover_source.mp4").exists()
 
 
 def test_placeholder_rewrite_uses_original_script_content():

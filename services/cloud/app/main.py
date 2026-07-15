@@ -28,6 +28,7 @@ from .redis_state import RedisState
 from .rewrite import RewriteInput, rewrite_script
 from .settings import settings
 from .store import QueueStore, estimate_render_points, validate_password
+from .video_templates import resolve_render_template_payload, video_template_catalog
 
 
 app = FastAPI(title="Oral Video Agent Cloud", version="0.1.0")
@@ -1239,6 +1240,21 @@ def redeem_client_credit_code(
         raise HTTPException(status_code=404, detail="credit code not found or already redeemed")
 
 
+def _resolved_client_render_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return resolve_render_template_payload(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/client/video-templates")
+def client_video_templates(
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> dict[str, Any]:
+    del session
+    return video_template_catalog()
+
+
 @app.post("/api/client/jobs/estimate")
 def estimate_client_job(
     req: ClientRenderEstimateRequest,
@@ -1281,10 +1297,15 @@ def create_client_job(
     req: ClientJobCreateRequest,
     session: dict[str, Any] = Depends(require_cloud_account),
 ) -> dict[str, Any]:
+    payload = (
+        _resolved_client_render_payload(req.payload)
+        if req.job_type == "render"
+        else req.payload
+    )
     try:
         job = store.create_client_job(
             user_id=session["user"]["user_id"],
-            payload=req.payload,
+            payload=payload,
             duration_seconds=req.duration_seconds,
             resolution=req.resolution,
             max_duration_seconds=settings.max_render_duration_seconds,
@@ -1305,11 +1326,16 @@ def create_client_upload_session(
     req: ClientUploadSessionRequest,
     session: dict[str, Any] = Depends(require_cloud_account),
 ) -> dict[str, Any]:
+    payload = (
+        _resolved_client_render_payload(req.payload)
+        if req.job_type == "render"
+        else req.payload
+    )
     try:
         job = store.create_upload_session(
             user_id=session["user"]["user_id"],
             assets=[asset.model_dump() for asset in req.assets],
-            payload=req.payload,
+            payload=payload,
             job_type=req.job_type,
         )
     except ValueError as exc:
@@ -1355,11 +1381,12 @@ def submit_client_job(
     req: ClientJobSubmitRequest,
     session: dict[str, Any] = Depends(require_cloud_account),
 ) -> dict[str, Any]:
+    payload = _resolved_client_render_payload(req.payload)
     try:
         job = store.submit_uploaded_job(
             job_id=job_id,
             user_id=session["user"]["user_id"],
-            payload=req.payload,
+            payload=payload,
             duration_seconds=req.duration_seconds,
             resolution=req.resolution,
             max_duration_seconds=settings.max_render_duration_seconds,

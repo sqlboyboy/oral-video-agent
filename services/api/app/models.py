@@ -19,14 +19,16 @@ class TaskStatus(str, Enum):
 
 
 class SubtitleStyle(BaseModel):
-    font_size: int = Field(default=12, ge=8, le=96)
-    color: str = "#FFE600"
-    outline_color: str = "#000000"
-    outline_width: int = Field(default=2, ge=0, le=8)
+    template_id: str = "renovation_pitfall_yellow"
+    font_size: int = Field(default=64, ge=8, le=96)
+    color: str = "#FFFFFF"
+    keyword_color: Optional[str] = "#FFE23B"
+    outline_color: str = "#111111"
+    outline_width: int = Field(default=5, ge=0, le=8)
     font_family: str = "Microsoft YaHei"
     position: str = "bottom"
-    margin_v: int = Field(default=70, ge=0, le=500)
-    max_chars_per_line: int = Field(default=12, ge=6, le=40)
+    margin_v: int = Field(default=390, ge=0, le=500)
+    max_chars_per_line: int = Field(default=9, ge=6, le=40)
 
 
 class SubtitlePreviewRequest(BaseModel):
@@ -66,6 +68,8 @@ class RenderOptions(BaseModel):
     pip_start_seconds: Optional[float] = Field(default=None, ge=0)
     pip_end_seconds: Optional[float] = Field(default=None, ge=0)
     pip_trigger_text: Optional[str] = None
+    cover_path: Optional[str] = None
+    defer_packaging: bool = False
 
 
 class CreateTaskRequest(BaseModel):
@@ -164,6 +168,7 @@ class OralVideoTask(BaseModel):
     subtitle_path: Optional[str] = None
     video_title: Optional[str] = None
     cover_path: Optional[str] = None
+    cover_template_id: str = "bold-yellow-white"
     publish_results: Dict[str, str] = Field(default_factory=dict)
     output_video_path: Optional[str] = None
     mouth_quality: Optional[MouthQualitySignals] = None

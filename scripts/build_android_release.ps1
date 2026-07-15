@@ -4,9 +4,9 @@
     [int]$MinSupportedVersionCode = 3,
     [switch]$ForceUpdate,
     [string[]]$ReleaseNotes = @(
-        "成片一键直接保存到系统相册",
-        "视频统一归档到 Movies/杰速口播，查找更方便",
-        "Android 10 及以上无需额外存储权限"
+        "新增 10 套云端字幕模板，手机端可直接预览和选择",
+        "新增 10 套纯文字封面模板，封面写入视频首帧",
+        "修复云端字幕比例、重点色和封面合成问题"
     )
 )
 

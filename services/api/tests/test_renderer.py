@@ -5,6 +5,26 @@ from app.models import RenderOptions
 from app.pipeline.renderer import Renderer
 
 
+def test_build_cover_first_frame_command_replaces_only_frame_zero(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    cover = tmp_path / "cover.png"
+    output = tmp_path / "covered.mp4"
+    monkeypatch.setattr(renderer_module, "_ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr(renderer_module, "_canvas_dimensions", lambda _: (720, 1280))
+
+    command = Renderer().build_cover_first_frame_command(source, cover, output)
+
+    assert command[:4] == ["ffmpeg", "-y", "-i", str(source)]
+    assert str(cover) in command
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "scale=720:1280" in filter_complex
+    assert "overlay=0:0:enable='eq(n\\,0)'" in filter_complex
+    assert command[command.index("-map") + 1] == "[vout]"
+    assert "0:a?" in command
+    assert command[command.index("-c:a") + 1] == "copy"
+    assert command[-1] == str(output)
+
+
 def test_build_ffmpeg_command_maps_video_voice_bgm_and_subtitles(tmp_path):
     renderer = Renderer()
     source = tmp_path / "source.mp4"
@@ -38,8 +58,9 @@ def test_build_ffmpeg_command_maps_video_voice_bgm_and_subtitles(tmp_path):
     assert "amix=inputs=2" in filter_complex
     assert "normalize=0" in filter_complex
     assert "subtitles=" in filter_complex
-    assert "Outline=2" in filter_complex
-    assert "MarginV=70" in filter_complex
+    assert "FontSize=9.6" in filter_complex
+    assert "Outline=0.75" in filter_complex
+    assert "MarginV=59" in filter_complex
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-crf") + 1] == "18"
     assert "-r" not in command

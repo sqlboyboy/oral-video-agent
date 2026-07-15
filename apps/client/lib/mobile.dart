@@ -1,6 +1,197 @@
 part of 'main.dart';
 
+Future<Map<String, dynamic>>? _mobileVideoTemplateCatalogFuture;
+
+const _mobileFallbackCoverTemplates = <Map<String, dynamic>>[
+  {
+    'id': 'bold-yellow-white',
+    'name': '黄白重磅',
+    'description': '黄色重点 · 黑描边',
+    'preview_copy': ['爆款标题', '这样写'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#FFD400'},
+  },
+  {
+    'id': 'red-white-emphasis',
+    'name': '红白强调',
+    'description': '红色重点 · 居中',
+    'preview_copy': ['别再这样做', '正确方法'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#FF3B30'},
+  },
+  {
+    'id': 'black-white-clean',
+    'name': '黑白极简',
+    'description': '纯白粗体 · 紧凑',
+    'preview_copy': ['真正的高手', '都很简单'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#FFFFFF'},
+  },
+  {
+    'id': 'blue-white-clear',
+    'name': '蓝白清晰',
+    'description': '蓝色方法词 · 居中',
+    'preview_copy': ['3个方法', '立刻学会'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#35B8FF'},
+  },
+  {
+    'id': 'green-keyword',
+    'name': '荧光绿重点',
+    'description': '绿色关键词 · 左对齐',
+    'preview_copy': ['抓住重点', '效率翻倍'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#58E36D'},
+  },
+  {
+    'id': 'orange-black-impact',
+    'name': '橙黑冲击',
+    'description': '橙色主标题 · 白重点',
+    'preview_copy': ['生意增长', '关键一步'],
+    'style': {'fill': '#FF7A22', 'keyword_fill': '#FFFFFF'},
+  },
+  {
+    'id': 'purple-yellow-outline',
+    'name': '紫黄双描边',
+    'description': '紫描边 · 黄色重点',
+    'preview_copy': ['流量密码', '马上告诉你'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#FFE65A'},
+  },
+  {
+    'id': 'offset-shadow',
+    'name': '黑白错位',
+    'description': '白字 · 硬阴影',
+    'preview_copy': ['你以为', '其实不是'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#FFFFFF'},
+  },
+  {
+    'id': 'gold-kaiti',
+    'name': '金色楷体',
+    'description': '楷体 · 金色层次',
+    'preview_copy': ['东方智慧', '尽在其中'],
+    'style': {'fill': '#E7C36A', 'keyword_fill': '#FFF3C4'},
+  },
+  {
+    'id': 'vertical-kaiti',
+    'name': '竖排楷体',
+    'description': '双列竖排 · 白金',
+    'preview_copy': ['答案', '藏在细节'],
+    'style': {'fill': '#FFFFFF', 'keyword_fill': '#D9B45B'},
+  },
+];
+
 extension _MobileWorkbench on _WorkbenchPageState {
+  Future<Map<String, dynamic>> _mobileVideoTemplateCatalog() {
+    return _mobileVideoTemplateCatalogFuture ??=
+        _loadMobileVideoTemplateCatalog();
+  }
+
+  Future<Map<String, dynamic>> _loadMobileVideoTemplateCatalog() async {
+    try {
+      final response = await http
+          .get(
+            Uri.parse('$_cloudApiBase/api/client/video-templates'),
+            headers: _cloudHeaders(),
+          )
+          .timeout(const Duration(seconds: 5));
+      _check(response);
+      final catalog = jsonDecode(utf8.decode(response.bodyBytes));
+      if (catalog is Map<String, dynamic> &&
+          catalog['cover_templates'] is List &&
+          catalog['subtitle_templates'] is List) {
+        return catalog;
+      }
+    } catch (_) {
+      // The bundled templates keep the editor usable while an older cloud
+      // service is being upgraded or the phone is temporarily offline.
+    }
+    return _mobileFallbackVideoTemplateCatalog();
+  }
+
+  Map<String, dynamic> _mobileFallbackVideoTemplateCatalog() {
+    final subtitleTemplates = _WorkbenchPageState._subtitleTemplates
+        .map(
+          (template) => <String, dynamic>{
+            'id': template.id,
+            'name': template.name,
+            'industry': template.industry,
+            'preview_copy': [template.first, template.second],
+            'style': {
+              'font_size': template.fontSize,
+              'color': _colorHex(template.color),
+              'keyword_color': _colorHex(template.keywordColor),
+              'outline_color': _colorHex(template.outline),
+              'outline_width': template.outlineWidth,
+              'font_family': template.font,
+              'position': template.position,
+              'margin_v': template.marginV,
+              'max_chars_per_line': template.maxChars,
+            },
+          },
+        )
+        .toList(growable: false);
+    return {
+      'version': '内置备用',
+      'cover_templates': _mobileFallbackCoverTemplates,
+      'subtitle_templates': subtitleTemplates,
+    };
+  }
+
+  Color _mobileTemplateColor(dynamic value, Color fallback) {
+    final hex = value?.toString().trim().replaceFirst('#', '') ?? '';
+    final parsed = int.tryParse(hex, radix: 16);
+    if (parsed == null || (hex.length != 6 && hex.length != 8)) {
+      return fallback;
+    }
+    return Color(hex.length == 6 ? 0xFF000000 | parsed : parsed);
+  }
+
+  List<Map<String, dynamic>> _mobileTemplateItems(
+    Map<String, dynamic> catalog,
+    String key,
+  ) {
+    return (catalog[key] as List? ?? const [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList(growable: false);
+  }
+
+  void _applyMobileSubtitleTemplate(Map<String, dynamic> template) {
+    final style =
+        Map<String, dynamic>.from(template['style'] as Map? ?? const {});
+    _updateMobile(() {
+      selectedSubtitleTemplate =
+          template['id']?.toString() ?? selectedSubtitleTemplate;
+      subtitlesEnabled = true;
+      subtitleSize = (style['font_size'] as num?)?.toDouble() ?? subtitleSize;
+      subtitleColor = _mobileTemplateColor(style['color'], subtitleColor);
+      subtitleKeywordColor = _mobileTemplateColor(
+        style['keyword_color'],
+        subtitleKeywordColor,
+      );
+      subtitleOutlineColor = _mobileTemplateColor(
+        style['outline_color'],
+        subtitleOutlineColor,
+      );
+      subtitleOutlineWidth =
+          (style['outline_width'] as num?)?.round() ?? subtitleOutlineWidth;
+      selectedSubtitleFont =
+          style['font_family']?.toString() ?? selectedSubtitleFont;
+      subtitlePosition = style['position']?.toString() ?? subtitlePosition;
+      subtitleMarginV = (style['margin_v'] as num?)?.round() ?? subtitleMarginV;
+      subtitleMaxCharsPerLine =
+          (style['max_chars_per_line'] as num?)?.round() ??
+              subtitleMaxCharsPerLine;
+      finalOutputVideoPath = '';
+      finalVideoKey = '';
+    });
+  }
+
+  void _selectMobileCoverTemplate(Map<String, dynamic> template) {
+    _updateMobile(() {
+      selectedCoverTemplate =
+          template['id']?.toString() ?? selectedCoverTemplate;
+      coverPath = '';
+      finalOutputVideoPath = '';
+      finalVideoKey = '';
+    });
+  }
+
   Future<String> _mobileDeviceFingerprint() async {
     final dir = await getApplicationSupportDirectory();
     await dir.create(recursive: true);
@@ -569,6 +760,308 @@ extension _MobileWorkbench on _WorkbenchPageState {
     );
   }
 
+  Widget _mobileSubtitleTemplatePicker() {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _mobileVideoTemplateCatalog(),
+      builder: (context, snapshot) {
+        final catalog = snapshot.data;
+        if (catalog == null) {
+          return const SizedBox(
+            height: 56,
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        final templates = _mobileTemplateItems(catalog, 'subtitle_templates');
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '选择字幕模板',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                _mobileCloudTemplateBadge(catalog['version']?.toString()),
+              ],
+            ),
+            const SizedBox(height: 9),
+            SizedBox(
+              height: 142,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: templates.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 9),
+                itemBuilder: (_, index) =>
+                    _mobileSubtitleTemplateCard(templates[index]),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _mobileSubtitleTemplateCard(Map<String, dynamic> template) {
+    final id = template['id']?.toString() ?? '';
+    final selected = selectedSubtitleTemplate == id;
+    final style =
+        Map<String, dynamic>.from(template['style'] as Map? ?? const {});
+    final preview = (template['preview_copy'] as List? ?? const [])
+        .map((item) => item.toString())
+        .toList(growable: false);
+    final color = _mobileTemplateColor(style['color'], Colors.white);
+    final keywordColor = _mobileTemplateColor(style['keyword_color'], color);
+    final outline = _mobileTemplateColor(style['outline_color'], Colors.black);
+    final shadows = [
+      Shadow(color: outline, offset: const Offset(-1, 0)),
+      Shadow(color: outline, offset: const Offset(1, 0)),
+      Shadow(color: outline, offset: const Offset(0, -1)),
+      Shadow(color: outline, offset: const Offset(0, 1)),
+    ];
+    return SizedBox(
+      width: 194,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(13),
+          onTap: loading ? null : () => _applyMobileSubtitleTemplate(template),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: selected
+                  ? _WorkbenchPageState.purpleLine.withValues(alpha: 0.18)
+                  : const Color(0xFF11131E),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: selected ? const Color(0xFFB99AFF) : Colors.white12,
+                width: selected ? 1.6 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        template['name']?.toString() ?? id,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    if (selected)
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: Color(0xFFB99AFF),
+                        size: 17,
+                      ),
+                  ],
+                ),
+                const Spacer(),
+                Center(
+                  child: Column(
+                    children: [
+                      Text(
+                        preview.isEmpty ? '字幕预览' : preview.first,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          shadows: shadows,
+                        ),
+                      ),
+                      if (preview.length > 1)
+                        Text(
+                          preview[1],
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: keywordColor,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            shadows: shadows,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  template['industry']?.toString() ?? '通用',
+                  style: const TextStyle(color: Colors.white38, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _mobileCoverTemplatePicker() {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _mobileVideoTemplateCatalog(),
+      builder: (context, snapshot) {
+        final catalog = snapshot.data;
+        if (catalog == null) {
+          return const SizedBox(
+            height: 56,
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          );
+        }
+        final templates = _mobileTemplateItems(catalog, 'cover_templates');
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    '选择封面模板',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                _mobileCloudTemplateBadge(catalog['version']?.toString()),
+              ],
+            ),
+            const SizedBox(height: 9),
+            SizedBox(
+              height: 132,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: templates.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 9),
+                itemBuilder: (_, index) =>
+                    _mobileCoverTemplateCard(templates[index]),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _mobileCoverTemplateCard(Map<String, dynamic> template) {
+    final id = template['id']?.toString() ?? '';
+    final selected = selectedCoverTemplate == id;
+    final style =
+        Map<String, dynamic>.from(template['style'] as Map? ?? const {});
+    final preview = (template['preview_copy'] as List? ?? const [])
+        .map((item) => item.toString())
+        .toList(growable: false);
+    final fill = _mobileTemplateColor(style['fill'], Colors.white);
+    final keyword = _mobileTemplateColor(style['keyword_fill'], fill);
+    const shadows = [
+      Shadow(color: Colors.black, offset: Offset(-1.2, 0)),
+      Shadow(color: Colors.black, offset: Offset(1.2, 0)),
+      Shadow(color: Colors.black, offset: Offset(0, 1.2)),
+    ];
+    return SizedBox(
+      width: 194,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(13),
+          onTap: loading ? null : () => _selectMobileCoverTemplate(template),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: selected
+                  ? _WorkbenchPageState.purpleLine.withValues(alpha: 0.18)
+                  : const Color(0xFF11131E),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: selected ? const Color(0xFFB99AFF) : Colors.white12,
+                width: selected ? 1.6 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        template['name']?.toString() ?? id,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    if (selected)
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: Color(0xFFB99AFF),
+                        size: 17,
+                      ),
+                  ],
+                ),
+                const Spacer(),
+                Text(
+                  preview.isEmpty ? '视频标题' : preview.first,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: fill,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                    shadows: shadows,
+                  ),
+                ),
+                if (preview.length > 1)
+                  Text(
+                    preview[1],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: keyword,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                      shadows: shadows,
+                    ),
+                  ),
+                const Spacer(),
+                Text(
+                  template['description']?.toString() ?? '透明纯文字',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white38, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _mobileCloudTemplateBadge(String? version) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFB99AFF).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '云端 ${version ?? ''}'.trim(),
+        style: const TextStyle(color: Color(0xFFCAB6FF), fontSize: 9),
+      ),
+    );
+  }
+
   Widget _mobilePackagingControls() {
     final hasBgm = selectedBgm != 'none' && mobileBgmPath.isNotEmpty;
     final currentCover = _currentCoverPath;
@@ -587,45 +1080,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
           subtitle: const Text('默认黄字黑边，位于画面下方'),
         ),
         if (subtitlesEnabled) ...[
-          Row(
-            children: [
-              const Text('字幕大小', style: TextStyle(color: Colors.white70)),
-              Expanded(
-                child: Slider(
-                  min: 10,
-                  max: 24,
-                  divisions: 14,
-                  value: subtitleSize.clamp(10.0, 24.0).toDouble(),
-                  onChanged: loading
-                      ? null
-                      : (value) => _updateMobile(() => subtitleSize = value),
-                ),
-              ),
-              Text('${subtitleSize.round()}'),
-            ],
-          ),
-          Wrap(
-            spacing: 8,
-            children: [
-              ChoiceChip(
-                label: const Text('黄字'),
-                selected: subtitleColor.toARGB32() ==
-                    const Color(0xFFFFE600).toARGB32(),
-                onSelected: loading
-                    ? null
-                    : (_) => _updateMobile(
-                          () => subtitleColor = const Color(0xFFFFE600),
-                        ),
-              ),
-              ChoiceChip(
-                label: const Text('白字'),
-                selected: subtitleColor.toARGB32() == Colors.white.toARGB32(),
-                onSelected: loading
-                    ? null
-                    : (_) => _updateMobile(() => subtitleColor = Colors.white),
-              ),
-            ],
-          ),
+          _mobileSubtitleTemplatePicker(),
         ],
         const Divider(height: 28),
         const Text('背景音乐', style: TextStyle(fontWeight: FontWeight.w800)),
@@ -729,9 +1184,11 @@ extension _MobileWorkbench on _WorkbenchPageState {
         const Text('视频封面', style: TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 5),
         const Text(
-          '可一键生成，也可选择 9:16 图片',
+          '纯文字模板写入视频首帧，也可选择 9:16 图片',
           style: TextStyle(color: Colors.white54, fontSize: 12),
         ),
+        const SizedBox(height: 9),
+        _mobileCoverTemplatePicker(),
         const SizedBox(height: 9),
         Wrap(
           spacing: 8,

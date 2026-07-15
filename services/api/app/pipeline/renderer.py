@@ -300,18 +300,29 @@ def _subtitle_alignment(position: str) -> int:
 
 def _subtitle_force_style(options: RenderOptions) -> str:
     style = options.subtitle_style
+    # libass parses SRT files on its 384 x 288 logical canvas and then scales
+    # that canvas to the output video. Product presets are authored against a
+    # 1080 x 1920 portrait canvas, so vertical sizes must be converted first.
+    scale = 288 / 1920
+    font_size = max(1.0, style.font_size * scale)
+    outline_width = max(0.0, style.outline_width * scale)
+    margin_v = max(0, int(style.margin_v * scale + 0.5))
+
+    def ass_number(value: float) -> str:
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
     return ",".join(
         [
             f"FontName={style.font_family}",
-            f"FontSize={style.font_size}",
+            f"FontSize={ass_number(font_size)}",
             "Bold=1",
             "BorderStyle=1",
-            f"Outline={style.outline_width}",
+            f"Outline={ass_number(outline_width)}",
             "Shadow=0",
             f"PrimaryColour={_ass_color(style.color, '#FFE600')}",
             f"OutlineColour={_ass_color(style.outline_color, '#000000')}",
             f"Alignment={_subtitle_alignment(style.position)}",
-            f"MarginV={style.margin_v}",
+            f"MarginV={margin_v}",
         ]
     )
 
@@ -485,6 +496,83 @@ def prepare_video_for_audio_duration(
 
 
 class Renderer:
+    def build_cover_first_frame_command(
+        self,
+        source_video: Path,
+        cover_image: Path,
+        output_path: Path,
+    ) -> List[str]:
+        ffmpeg = _ffmpeg_executable()
+        if ffmpeg is None:
+            raise ValueError("ffmpeg is required to apply the video cover")
+
+        canvas_width, canvas_height = _canvas_dimensions(source_video)
+        filter_complex = (
+            "[0:v]setpts=PTS-STARTPTS[basev];"
+            f"[1:v]scale={canvas_width}:{canvas_height}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{canvas_height},setsar=1[coverv];"
+            "[basev][coverv]overlay=0:0:enable='eq(n\\,0)':eof_action=pass[vout]"
+        )
+        return [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_video),
+            "-loop",
+            "1",
+            "-i",
+            str(cover_image),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[vout]",
+            "-map",
+            "0:a?",
+            "-map_metadata",
+            "0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            _ffmpeg_preset(),
+            "-crf",
+            _ffmpeg_crf(),
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+
+    def apply_cover_first_frame(
+        self,
+        source_video: Path,
+        cover_image: Path,
+        output_path: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> Path:
+        command = self.build_cover_first_frame_command(
+            source_video,
+            cover_image,
+            output_path,
+        )
+        process = subprocess.Popen(command)
+        while process.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                process.terminate()
+                time.sleep(0.5)
+                if process.poll() is None:
+                    process.kill()
+                output_path.unlink(missing_ok=True)
+                raise RuntimeError("用户已停止生成")
+            time.sleep(0.2)
+        if process.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            raise subprocess.CalledProcessError(process.returncode, command)
+        return output_path
+
     def build_ffmpeg_command(
         self,
         source_video: Optional[Path],

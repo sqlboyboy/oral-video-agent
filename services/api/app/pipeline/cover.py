@@ -1,30 +1,207 @@
+import math
 import re
 import subprocess
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 COVER_SIZE = (720, 1280)
-TITLE_COLOR = "#FFE600"
-STROKE_COLOR = "#050505"
-ACCENT_COLOR = "#FF4FB8"
+DEFAULT_COVER_TEMPLATE = "bold-yellow-white"
+COVER_TEMPLATES = {
+    "bold-yellow-white": {
+        "name": "黄白重磅",
+        "description": "白字、黄色重点、粗黑描边",
+    },
+    "red-white-emphasis": {
+        "name": "红白强调",
+        "description": "白字、红色重点、粗黑描边",
+    },
+    "black-white-clean": {
+        "name": "黑白极简",
+        "description": "纯白粗体、加重黑描边",
+    },
+    "blue-white-clear": {
+        "name": "蓝白清晰",
+        "description": "蓝色数字或方法词、深蓝描边",
+    },
+    "green-keyword": {
+        "name": "荧光绿重点",
+        "description": "白字、绿色关键词、黑色轮廓",
+    },
+    "orange-black-impact": {
+        "name": "橙黑冲击",
+        "description": "橙色主标题、白色重点句",
+    },
+    "purple-yellow-outline": {
+        "name": "紫黄双描边",
+        "description": "紫色内描边、白色外轮廓",
+    },
+    "offset-shadow": {
+        "name": "黑白错位",
+        "description": "白字、黑色错位硬阴影",
+    },
+    "gold-kaiti": {
+        "name": "金色楷体",
+        "description": "金色楷体、深色描边",
+    },
+    "vertical-kaiti": {
+        "name": "竖排楷体",
+        "description": "双列竖排、白金配色",
+    },
+}
 
 
-def _font_candidates() -> list[Path]:
+# The values below are the 1080 x 1920 research templates scaled to the
+# 720 x 1280 render canvas used by the current video pipeline.
+_TEMPLATE_STYLES = {
+    "bold-yellow-white": {
+        "alignment": "left",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#FFD400",
+        "stroke": "#111111",
+        "stroke_width": 7,
+        "shadow": ("#111111", 7, 9),
+        "sizes": (87, 69),
+        "title_box": (56, 287, 608, 347),
+        "max_chars": 14,
+        "highlight": "last_line",
+    },
+    "red-white-emphasis": {
+        "alignment": "center",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#FF3B30",
+        "stroke": "#111111",
+        "stroke_width": 7,
+        "shadow": ("#111111", 5, 8),
+        "sizes": (97, 79),
+        "title_box": (47, 287, 627, 373),
+        "max_chars": 10,
+        "highlight": "last_line",
+    },
+    "black-white-clean": {
+        "alignment": "left",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#FFFFFF",
+        "stroke": "#111111",
+        "stroke_width": 9,
+        "shadow": ("#FFFFFF", 0, 0),
+        "sizes": (70, 70),
+        "title_box": (56, 293, 608, 347),
+        "max_chars": 15,
+        "highlight": "none",
+        "line_gap": 15,
+    },
+    "blue-white-clear": {
+        "alignment": "center",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#35B8FF",
+        "stroke": "#08253F",
+        "stroke_width": 8,
+        "shadow": ("#08253F", 6, 9),
+        "sizes": (88, 80),
+        "title_box": (47, 287, 627, 373),
+        "max_chars": 12,
+        "highlight": "number_or_first_line",
+    },
+    "green-keyword": {
+        "alignment": "left",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#58E36D",
+        "stroke": "#101514",
+        "stroke_width": 7,
+        "shadow": ("#101514", 5, 8),
+        "sizes": (72, 77),
+        "title_box": (56, 287, 608, 360),
+        "max_chars": 14,
+        "highlight": "first_line_tail",
+    },
+    "orange-black-impact": {
+        "alignment": "left",
+        "fill": "#FF7A22",
+        "keyword_fill": "#FFFFFF",
+        "stroke": "#17110D",
+        "stroke_width": 8,
+        "shadow": ("#17110D", 7, 9),
+        "sizes": (87, 64),
+        "title_box": (56, 287, 608, 373),
+        "max_chars": 15,
+        "highlight": "last_line",
+    },
+    "purple-yellow-outline": {
+        "alignment": "center",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#FFE65A",
+        "stroke": "#4D267F",
+        "stroke_width": 10,
+        "outer_stroke": ("#FFFFFF", 3),
+        "shadow": ("#25123E", 6, 9),
+        "sizes": (71, 63),
+        "title_box": (47, 280, 627, 387),
+        "max_chars": 15,
+        "highlight": "first_line_tail",
+    },
+    "offset-shadow": {
+        "alignment": "center",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#FFFFFF",
+        "stroke": "#111111",
+        "stroke_width": 5,
+        "shadow": ("#111111", 12, 13),
+        "sizes": (83, 97),
+        "title_box": (47, 293, 627, 360),
+        "max_chars": 11,
+        "highlight": "none",
+    },
+    "gold-kaiti": {
+        "alignment": "center",
+        "fill": "#E7C36A",
+        "keyword_fill": "#FFF3C4",
+        "stroke": "#182A35",
+        "stroke_width": 6,
+        "shadow": ("#182A35", 5, 7),
+        "sizes": (81, 68),
+        "title_box": (47, 287, 627, 373),
+        "max_chars": 14,
+        "highlight": "last_line_tail",
+        "font_kind": "kai",
+    },
+    "vertical-kaiti": {
+        "alignment": "vertical_center",
+        "fill": "#FFFFFF",
+        "keyword_fill": "#D9B45B",
+        "stroke": "#17241F",
+        "stroke_width": 5,
+        "shadow": ("#17241F", 5, 7),
+        "sizes": (77, 77),
+        "title_box": (173, 247, 373, 600),
+        "max_chars": 9,
+        "highlight": "last_column_tail",
+        "font_kind": "kai",
+    },
+}
+
+
+def _font_candidates(font_kind: str = "bold") -> list[Path]:
+    if font_kind == "kai":
+        return [
+            Path("C:/Windows/Fonts/STKAITI.TTF"),
+            Path("C:/Windows/Fonts/simkai.ttf"),
+            Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"),
+            Path("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"),
+        ]
     return [
         Path("C:/Windows/Fonts/msyhbd.ttc"),
         Path("C:/Windows/Fonts/msyh.ttc"),
         Path("C:/Windows/Fonts/simhei.ttf"),
-        Path("C:/Windows/Fonts/simkai.ttf"),
-        Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
         Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"),
+        Path("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
     ]
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for path in _font_candidates():
+def _load_font(size: int, font_kind: str = "bold") -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in _font_candidates(font_kind):
         if path.exists():
             try:
                 return ImageFont.truetype(str(path), size=size)
@@ -34,8 +211,9 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def _clean_text(value: str) -> str:
-    text = re.sub(r"\s+", "", value or "").strip()
-    return text or "爆款口播视频"
+    text = re.sub(r"[\t\r ]+", "", value or "").strip()
+    text = re.sub(r"\n+", "\n", text)
+    return text
 
 
 def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
@@ -43,54 +221,201 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont)
     return right - left
 
 
-def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> list[str]:
-    lines: list[str] = []
-    current = ""
-    for char in _clean_text(text):
-        candidate = current + char
-        if current and _text_width(draw, candidate, font) > max_width:
-            lines.append(current)
-            current = char
-        else:
-            current = candidate
-        if len(lines) >= 3:
-            break
-    if current and len(lines) < 3:
-        lines.append(current)
-    return lines or ["爆款口播视频"]
+def _balanced_lines(value: str, max_chars: int) -> list[str]:
+    text = _clean_text(value).replace("\n", "")
+    text = re.sub(r"^[，。！？、；：,.!?;:]+|[，。！？、；：,.!?;:]+$", "", text)
+    text = text[:max_chars]
+    if not text:
+        return ["视频标题"]
+    if len(text) <= 6:
+        return [text]
+
+    ideal = math.ceil(len(text) / 2)
+    punctuation = "，。！？、；：,.!?;:"
+    candidates = [index + 1 for index, char in enumerate(text[:-1]) if char in punctuation]
+    split_at = min(candidates, key=lambda index: abs(index - ideal)) if candidates else ideal
+    first = text[:split_at].strip(punctuation)
+    second = text[split_at:].strip(punctuation)
+    return [line for line in (first, second) if line]
+
+
+def _fit_font(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    desired_size: int,
+    max_width: int,
+    font_kind: str,
+) -> ImageFont.ImageFont:
+    size = desired_size
+    while size > 38:
+        font = _load_font(size, font_kind)
+        if _text_width(draw, text, font) <= max_width:
+            return font
+        size -= 2
+    return _load_font(size, font_kind)
+
+
+def _highlight_text(template_id: str, lines: list[str]) -> str:
+    style = _TEMPLATE_STYLES[template_id]
+    mode = style["highlight"]
+    if mode == "none":
+        return ""
+    if mode == "last_line":
+        return lines[-1]
+    if mode == "number_or_first_line":
+        number = re.search(r"\d+[个条种步招点项]?", "".join(lines))
+        return number.group(0) if number else lines[0]
+    if mode == "first_line_tail":
+        return lines[0][-min(3, len(lines[0])) :]
+    if mode in {"last_line_tail", "last_column_tail"}:
+        return lines[-1][-min(2, len(lines[-1])) :]
+    return ""
+
+
+def _split_highlight(line: str, keyword: str) -> list[tuple[str, bool]]:
+    if not keyword or keyword not in line:
+        return [(line, False)]
+    before, after = line.split(keyword, 1)
+    parts: list[tuple[str, bool]] = []
+    if before:
+        parts.append((before, False))
+    parts.append((keyword, True))
+    if after:
+        parts.append((after, False))
+    return parts
+
+
+def _draw_effect_line(
+    overlay: Image.Image,
+    template_id: str,
+    line: str,
+    keyword: str,
+    *,
+    y: int,
+    desired_size: int,
+    left: int,
+    width: int,
+) -> int:
+    style = _TEMPLATE_STYLES[template_id]
+    draw = ImageDraw.Draw(overlay)
+    font_kind = style.get("font_kind", "bold")
+    font = _fit_font(draw, line, desired_size, width, font_kind)
+    parts = _split_highlight(line, keyword)
+    widths = [_text_width(draw, value, font) for value, _ in parts]
+    total_width = sum(widths)
+    x = left if style["alignment"] == "left" else left + (width - total_width) // 2
+    stroke_width = style["stroke_width"]
+    shadow_color, shadow_x, shadow_y = style["shadow"]
+
+    for (value, highlighted), part_width in zip(parts, widths):
+        fill = style["keyword_fill"] if highlighted else style["fill"]
+        if shadow_x or shadow_y:
+            draw.text(
+                (x + shadow_x, y + shadow_y),
+                value,
+                font=font,
+                fill=shadow_color,
+                stroke_width=stroke_width,
+                stroke_fill=shadow_color,
+            )
+        outer = style.get("outer_stroke")
+        if outer:
+            outer_color, outer_width = outer
+            draw.text(
+                (x, y),
+                value,
+                font=font,
+                fill=fill,
+                stroke_width=stroke_width + outer_width,
+                stroke_fill=outer_color,
+            )
+        draw.text(
+            (x, y),
+            value,
+            font=font,
+            fill=fill,
+            stroke_width=stroke_width,
+            stroke_fill=style["stroke"],
+        )
+        x += part_width
+
+    box = draw.textbbox((0, 0), line, font=font, stroke_width=stroke_width)
+    return box[3] - box[1]
+
+
+def _draw_horizontal_template(overlay: Image.Image, template_id: str, title: str) -> None:
+    style = _TEMPLATE_STYLES[template_id]
+    left, top, width, _ = style["title_box"]
+    lines = _balanced_lines(title, style["max_chars"])
+    keyword = _highlight_text(template_id, lines)
+    sizes = style["sizes"]
+    line_gap = style.get("line_gap", 23)
+    y = top
+    for index, line in enumerate(lines):
+        desired_size = sizes[min(index, len(sizes) - 1)]
+        line_height = _draw_effect_line(
+            overlay,
+            template_id,
+            line,
+            keyword,
+            y=y,
+            desired_size=desired_size,
+            left=left,
+            width=width,
+        )
+        y += line_height + line_gap
+
+
+def _draw_vertical_template(overlay: Image.Image, template_id: str, title: str) -> None:
+    style = _TEMPLATE_STYLES[template_id]
+    text = _clean_text(title).replace("\n", "")[: style["max_chars"]] or "视频标题"
+    split_at = min(2, max(1, len(text) // 2))
+    columns = [text[:split_at], text[split_at:]]
+    columns = [column for column in columns if column]
+    keyword = _highlight_text(template_id, columns)
+    draw = ImageDraw.Draw(overlay)
+    font = _load_font(style["sizes"][0], "kai")
+    stroke_width = style["stroke_width"]
+    shadow_color, shadow_x, shadow_y = style["shadow"]
+    column_x = [413, 293]
+
+    for column_index, column in enumerate(columns):
+        x = column_x[column_index]
+        y = 287 if column_index == 0 else 340
+        for char in column:
+            fill = style["keyword_fill"] if char in keyword else style["fill"]
+            draw.text(
+                (x + shadow_x, y + shadow_y),
+                char,
+                font=font,
+                fill=shadow_color,
+                stroke_width=stroke_width,
+                stroke_fill=shadow_color,
+            )
+            draw.text(
+                (x, y),
+                char,
+                font=font,
+                fill=fill,
+                stroke_width=stroke_width,
+                stroke_fill=style["stroke"],
+            )
+            y += 88
 
 
 def _cover_background(background_image_path: Path | None) -> Image.Image:
     if background_image_path and background_image_path.exists():
         try:
-            image = Image.open(background_image_path).convert("RGB")
-            image.thumbnail(COVER_SIZE, Image.Resampling.LANCZOS)
-            canvas = Image.new("RGB", COVER_SIZE, (20, 22, 32))
-            x = (COVER_SIZE[0] - image.width) // 2
-            y = (COVER_SIZE[1] - image.height) // 2
-            canvas.paste(image, (x, y))
-            image = canvas.filter(ImageFilter.GaussianBlur(radius=1.0))
-            overlay = Image.new("RGBA", COVER_SIZE, (0, 0, 0, 92))
-            return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+            with Image.open(background_image_path) as source:
+                image = ImageOps.fit(
+                    source.convert("RGBA"),
+                    COVER_SIZE,
+                    Image.Resampling.LANCZOS,
+                )
+            return image
         except Exception:
             pass
-
-    width, height = COVER_SIZE
-    image = Image.new("RGB", COVER_SIZE)
-    pixels = image.load()
-    for y in range(height):
-        ratio = y / max(1, height - 1)
-        r = int(18 + 34 * ratio)
-        g = int(22 + 10 * ratio)
-        b = int(38 + 38 * ratio)
-        for x in range(width):
-            glow = max(0, 1 - ((x - width * 0.56) ** 2 + (y - height * 0.22) ** 2) / (width * height * 0.22))
-            pixels[x, y] = (
-                min(255, int(r + 34 * glow)),
-                min(255, int(g + 12 * glow)),
-                min(255, int(b + 42 * glow)),
-            )
-    return image
+    return Image.new("RGBA", COVER_SIZE, (0, 0, 0, 0))
 
 
 def generate_cover_png(
@@ -99,64 +424,19 @@ def generate_cover_png(
     output_path: Path,
     *,
     background_image_path: Path | None = None,
+    template_id: str = DEFAULT_COVER_TEMPLATE,
 ) -> Path:
-    image = _cover_background(background_image_path).convert("RGBA")
-    draw = ImageDraw.Draw(image)
-    title_source = _clean_text(title) if title else _clean_text(script)[:32]
-    title_font = _load_font(62)
-    tag_font = _load_font(25)
-    lines = _wrap_text(draw, title_source, title_font, 620)
+    template_id = template_id if template_id in COVER_TEMPLATES else DEFAULT_COVER_TEMPLATE
+    title_source = _clean_text(title) or _clean_text(script)[:32] or "视频标题"
+    overlay = Image.new("RGBA", COVER_SIZE, (0, 0, 0, 0))
+    if _TEMPLATE_STYLES[template_id]["alignment"] == "vertical_center":
+        _draw_vertical_template(overlay, template_id, title_source)
+    else:
+        _draw_horizontal_template(overlay, template_id, title_source)
 
-    total_height = len(lines) * 74
-    start_y = 168 if len(lines) <= 2 else 136
-    panel_padding_x = 30
-    panel_padding_y = 18
-    widest = max(_text_width(draw, line, title_font) for line in lines)
-    panel_w = min(660, widest + panel_padding_x * 2)
-    panel_h = total_height + panel_padding_y * 2
-    panel_x = (COVER_SIZE[0] - panel_w) // 2
-    panel_y = start_y - panel_padding_y
-    draw.rounded_rectangle(
-        [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
-        radius=30,
-        fill=(0, 0, 0, 142),
-        outline=(255, 79, 184, 190),
-        width=3,
-    )
-
-    for index, line in enumerate(lines):
-        line_w = _text_width(draw, line, title_font)
-        x = (COVER_SIZE[0] - line_w) // 2
-        y = start_y + index * 74
-        draw.text(
-            (x, y),
-            line,
-            font=title_font,
-            fill=TITLE_COLOR,
-            stroke_width=7,
-            stroke_fill=STROKE_COLOR,
-        )
-
-    tag = "口播干货"
-    tag_w = _text_width(draw, tag, tag_font) + 42
-    tag_x = (COVER_SIZE[0] - tag_w) // 2
-    tag_y = panel_y - 58
-    draw.rounded_rectangle(
-        [tag_x, tag_y, tag_x + tag_w, tag_y + 40],
-        radius=20,
-        fill=ACCENT_COLOR,
-    )
-    draw.text(
-        (tag_x + 21, tag_y + 6),
-        tag,
-        font=tag_font,
-        fill="white",
-        stroke_width=1,
-        stroke_fill=STROKE_COLOR,
-    )
-
+    image = Image.alpha_composite(_cover_background(background_image_path), overlay)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.convert("RGB").save(output_path, "PNG", optimize=True)
+    image.save(output_path, "PNG", optimize=True)
     return output_path
 
 

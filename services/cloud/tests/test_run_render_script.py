@@ -13,10 +13,12 @@ from worker.run_render import (
     bounded_rewrite_chars,
     compose_final_video,
     find_bgm_audio_asset,
+    find_cover_asset,
     find_pip_asset,
     find_source_asset,
     find_voice_audio_asset,
     find_voice_reference_asset,
+    generate_srt_file,
     pip_enable_expression,
     prepare_cosyvoice_reference_audio,
     run_job,
@@ -157,6 +159,9 @@ def test_build_render_payload_keeps_composition_options():
             "pip_height": 0.12,
             "pip_timing_mode": "sentence",
             "pip_trigger_text": "这里出现画中画",
+            "cover_template_id": "bold-yellow-white",
+            "subtitle_template_id": "renovation_pitfall_yellow",
+            "template_catalog_version": "2026.07.15.1",
             "source_file_name": "source.mp4",
         }
     )
@@ -173,6 +178,9 @@ def test_build_render_payload_keeps_composition_options():
     assert payload["pip_height"] == 0.12
     assert payload["pip_timing_mode"] == "sentence"
     assert payload["pip_trigger_text"] == "这里出现画中画"
+    assert payload["cover_template_id"] == "bold-yellow-white"
+    assert payload["subtitle_template_id"] == "renovation_pitfall_yellow"
+    assert payload["template_catalog_version"] == "2026.07.15.1"
 
 
 def test_cloud_subtitles_default_to_small_wrapped_captions():
@@ -182,6 +190,37 @@ def test_cloud_subtitles_default_to_small_wrapped_captions():
     assert "Outline=2" in force_style
     assert "MarginV=70" in force_style
     assert wrap_text("開直播後臺觀眾", 20) == ["开直播后台观众"]
+
+
+def test_cloud_subtitle_template_scales_from_portrait_design_canvas():
+    force_style = subtitle_force_style(
+        {
+            "font_size": 64,
+            "outline_width": 5,
+            "margin_v": 390,
+            "position": "middle",
+            "design_height": 1920,
+        }
+    )
+
+    assert "FontSize=9.6" in force_style
+    assert "Outline=0.75" in force_style
+    assert "MarginV=59" in force_style
+    assert "Alignment=5" in force_style
+
+
+def test_generate_srt_file_marks_last_line_with_keyword_color(tmp_path):
+    output = tmp_path / "template.srt"
+
+    generate_srt_file(
+        "第一行第二行",
+        {"max_chars_per_line": 3, "keyword_color": "#FFE23B"},
+        output,
+        2.0,
+    )
+
+    content = output.read_text(encoding="utf-8")
+    assert '<font color="#FFE23B">第二行</font>' in content
 
 
 def test_cloud_rewrite_prompt_constraint_stays_at_300_chars():
@@ -287,6 +326,23 @@ def test_find_pip_asset_by_kind(tmp_path):
     assert find_pip_asset(job)["local_path"] == str(pip)
 
 
+def test_find_cover_asset_by_kind(tmp_path):
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"\x89PNG\r\n\x1a\n")
+    job = {
+        "input_assets": [
+            {
+                "kind": "thumbnail",
+                "file_name": "cover.png",
+                "content_type": "image/png",
+                "local_path": str(cover),
+            }
+        ]
+    }
+
+    assert find_cover_asset(job)["local_path"] == str(cover)
+
+
 def test_pip_sentence_timing_uses_audio_duration():
     payload = {
         "script": "第一句。第二句。第三句。",
@@ -389,6 +445,49 @@ def test_compose_final_video_uses_custom_pip_rect(monkeypatch, tmp_path):
     filter_complex = commands[0][commands[0].index("-filter_complex") + 1]
     assert "[2:v]scale=360:256:force_original_aspect_ratio=increase,crop=360:256,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
     assert "[mainv][pip]overlay=72:256:eof_action=pass" in filter_complex
+
+
+def test_compose_final_video_places_cover_on_frame_zero_after_subtitles(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    voice = tmp_path / "voice.wav"
+    cover = tmp_path / "cover.png"
+    output = tmp_path / "output.mp4"
+    source.write_bytes(b"video")
+    voice.write_bytes(b"voice")
+    cover.write_bytes(b"image")
+    commands = []
+
+    def fake_run(command, check=False):
+        commands.append(command)
+        return type("Completed", (), {"returncode": 0})()
+
+    monkeypatch.setattr(run_render_module, "ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr(run_render_module, "media_duration_seconds", lambda path: 5.0)
+    monkeypatch.setattr(run_render_module, "media_video_dimensions", lambda path: (720, 1280))
+    monkeypatch.setattr(run_render_module, "media_video_frame_rate", lambda path: "25")
+    monkeypatch.setattr(run_render_module.subprocess, "run", fake_run)
+
+    compose_final_video(
+        source_video=source,
+        voice_audio=voice,
+        render_payload={
+            "script": "第一行第二行",
+            "subtitle_enabled": True,
+            "subtitle_style": {"max_chars_per_line": 3},
+        },
+        output_path=output,
+        bgm_audio=None,
+        pip_asset=None,
+        cover_image=cover,
+    )
+
+    command = commands[0]
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "subtitles=" in filter_complex
+    assert "[2:v]scale=720:1280" in filter_complex
+    assert "trim=end_frame=1" in filter_complex
+    assert "[subv][coverv]overlay=0:0:enable='eq(n\\,0)'" in filter_complex
+    assert compose_final_video.last_diagnostics["cover_composed"] is True
 
 
 def test_preprocess_rewrite_can_return_placeholder_result(monkeypatch, tmp_path):

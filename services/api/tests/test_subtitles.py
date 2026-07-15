@@ -1,5 +1,6 @@
 from app.models import SubtitleStyle
 from app.pipeline.subtitles import generate_srt, preview_subtitles
+from app.pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -8,13 +9,14 @@ from app.main import app
 client = TestClient(app)
 
 
-def test_subtitle_style_defaults_to_small_wrapped_captions():
+def test_subtitle_style_defaults_to_first_template():
     style = SubtitleStyle()
 
-    assert style.font_size == 12
-    assert style.max_chars_per_line == 12
-    assert style.outline_width == 2
-    assert style.margin_v == 70
+    assert style.template_id == "renovation_pitfall_yellow"
+    assert style.font_size == 64
+    assert style.max_chars_per_line == 9
+    assert style.outline_width == 5
+    assert style.margin_v == 390
 
 
 def test_preview_subtitles_wraps_long_sentence_inside_caption():
@@ -39,6 +41,19 @@ def test_generate_srt_keeps_separate_sentences_as_separate_cues(tmp_path):
     assert "2\n00:00:01,000 --> 00:00:02,000\nsecond。\n" in text
 
 
+def test_generate_srt_applies_template_keyword_color_to_second_line(tmp_path):
+    output = tmp_path / "subtitle-highlight.srt"
+
+    generate_srt(
+        "abcdefghijkl",
+        SubtitleStyle(max_chars_per_line=6, keyword_color="#FFE23B"),
+        output,
+    )
+
+    text = output.read_text(encoding="utf-8")
+    assert 'abcdef\n<font color="#FFE23B">ghijkl</font>' in text
+
+
 def test_subtitle_preview_endpoint_returns_multiline_caption_and_style():
     res = client.post(
         "/api/subtitles/preview",
@@ -58,3 +73,22 @@ def test_subtitle_preview_endpoint_returns_multiline_caption_and_style():
     body = res.json()
     assert body["lines"] == ["abcdefgh\nijklmnop", "qr"]
     assert body["style"]["font_size"] == 12
+
+
+def test_subtitle_templates_endpoint_returns_researched_presets():
+    res = client.get("/api/subtitles/templates")
+
+    assert res.status_code == 200
+    items = res.json()["items"]
+    assert len(items) == 10
+    assert {item["industry"] for item in items} == {"装修", "餐饮", "培训", "国学"}
+    assert items[0]["template_id"] == "renovation_pitfall_yellow"
+
+
+def test_all_subtitle_template_base_styles_are_valid():
+    for template_id, item in SUBTITLE_TEMPLATES.items():
+        style = SubtitleStyle(template_id=template_id, **item["style"])
+
+        assert style.template_id == template_id
+        assert style.font_size >= 54
+        assert style.max_chars_per_line in {8, 9, 10}

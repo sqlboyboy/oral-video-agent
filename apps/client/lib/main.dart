@@ -144,6 +144,168 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     'KaiTi': '楷体',
     'Arial': 'Arial',
   };
+  static const _subtitleTemplates = [
+    (
+      id: 'renovation_pitfall_yellow',
+      name: '避坑警示黄',
+      industry: '装修',
+      first: '这3个装修坑',
+      second: '千万别踩',
+      fontSize: 64.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFFFFE23B),
+      outline: Color(0xFF111111),
+      outlineWidth: 5,
+      font: 'Microsoft YaHei',
+      position: 'bottom',
+      marginV: 390,
+      maxChars: 9,
+    ),
+    (
+      id: 'renovation_editorial_gray',
+      name: '设计高级灰',
+      industry: '装修',
+      first: '高级感不靠堆钱',
+      second: '靠的是细节',
+      fontSize: 54.0,
+      color: Color(0xFFF7F3EA),
+      keywordColor: Color(0xFFD8895B),
+      outline: Color(0xFF232323),
+      outlineWidth: 2,
+      font: 'Microsoft YaHei UI',
+      position: 'bottom',
+      marginV: 360,
+      maxChars: 10,
+    ),
+    (
+      id: 'renovation_inspection_blueprint',
+      name: '工地验收蓝',
+      industry: '装修',
+      first: '水电验收',
+      second: '先看这4点',
+      fontSize: 60.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFF43B8FF),
+      outline: Color(0xFF0B2239),
+      outlineWidth: 4,
+      font: 'SimHei',
+      position: 'bottom',
+      marginV: 380,
+      maxChars: 9,
+    ),
+    (
+      id: 'restaurant_owner_billboard',
+      name: '老板大字报',
+      industry: '餐饮',
+      first: '菜品好吃',
+      second: '不等于生意好',
+      fontSize: 68.0,
+      color: Color(0xFFFFD82E),
+      keywordColor: Color(0xFFFFFFFF),
+      outline: Color(0xFF16100A),
+      outlineWidth: 6,
+      font: 'SimHei',
+      position: 'middle',
+      marginV: 0,
+      maxChars: 8,
+    ),
+    (
+      id: 'restaurant_price_tag_red',
+      name: '红火价签',
+      industry: '餐饮',
+      first: '工作日午市',
+      second: '只要29.9元',
+      fontSize: 58.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFFFFE873),
+      outline: Color(0xFF6E130F),
+      outlineWidth: 2,
+      font: 'Microsoft YaHei',
+      position: 'bottom',
+      marginV: 370,
+      maxChars: 9,
+    ),
+    (
+      id: 'restaurant_wok_fire_warm',
+      name: '烟火探店暖白',
+      industry: '餐饮',
+      first: '这口锅气',
+      second: '才是老店灵魂',
+      fontSize: 56.0,
+      color: Color(0xFFFFF8E7),
+      keywordColor: Color(0xFFFFB547),
+      outline: Color(0xFF27160D),
+      outlineWidth: 4,
+      font: 'Microsoft YaHei UI',
+      position: 'bottom',
+      marginV: 400,
+      maxChars: 9,
+    ),
+    (
+      id: 'training_key_conclusion',
+      name: '重点结论黄',
+      industry: '培训',
+      first: '孩子学不会',
+      second: '往往不是不努力',
+      fontSize: 60.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFFFFE042),
+      outline: Color(0xFF111111),
+      outlineWidth: 5,
+      font: 'Microsoft YaHei',
+      position: 'bottom',
+      marginV: 380,
+      maxChars: 10,
+    ),
+    (
+      id: 'training_framework_blue',
+      name: '知识框架蓝',
+      industry: '培训',
+      first: '提分关键',
+      second: '是建立知识框架',
+      fontSize: 54.0,
+      color: Color(0xFFF8FBFF),
+      keywordColor: Color(0xFF59BFFF),
+      outline: Color(0xFF0F2841),
+      outlineWidth: 3,
+      font: 'Microsoft YaHei UI',
+      position: 'bottom',
+      marginV: 360,
+      maxChars: 10,
+    ),
+    (
+      id: 'sinology_ink_gold',
+      name: '墨韵雅金',
+      industry: '国学',
+      first: '心若安定',
+      second: '万事从容',
+      fontSize: 58.0,
+      color: Color(0xFFF6E7C7),
+      keywordColor: Color(0xFFD9B45B),
+      outline: Color(0xFF1A1712),
+      outlineWidth: 2,
+      font: 'SimSun',
+      position: 'bottom',
+      marginV: 390,
+      maxChars: 8,
+    ),
+    (
+      id: 'sinology_minimal_vermilion',
+      name: '留白朱砂',
+      industry: '国学',
+      first: '知止不殆',
+      second: '可以长久',
+      fontSize: 54.0,
+      color: Color(0xFFF8F1E2),
+      keywordColor: Color(0xFFB6382B),
+      outline: Color(0xFF241F19),
+      outlineWidth: 1,
+      font: 'KaiTi',
+      position: 'bottom',
+      marginV: 420,
+      maxChars: 8,
+    ),
+  ];
   static const _pipPositionOptions = [
     'top_right',
     'fullscreen',
@@ -241,6 +403,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String cloudSourceVideoName = '';
   String cloudOutputUrl = '';
   String cloudOutputLocalPath = '';
+  String intermediateVideoPath = '';
+  String finalOutputVideoPath = '';
   String cloudVoiceAudioPath = '';
   String mobileVoiceReferencePath = '';
   String mobileVoiceReferenceName = '';
@@ -250,7 +414,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String mobileBgmName = '';
   String cloudVoiceJobId = '';
   String generatedVoiceKey = '';
+  String generatedVideoKey = '';
+  String finalVideoKey = '';
   String coverPath = '';
+  String selectedCoverTemplate = 'bold-yellow-white';
+  String selectedSubtitleTemplate = 'renovation_pitfall_yellow';
   String selectedStyle = '同款口播';
   String selectedVoice = '';
   String selectedBgm = 'none';
@@ -266,6 +434,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   int mobileNavigationIndex = 0;
   bool mobileUpdateChecking = false;
   bool savingVideoToPhone = false;
+  bool finalizingVideo = false;
   String mobileAppVersion = '';
   int studioStep = 0;
   final Set<String> selectedTaskIds = <String>{};
@@ -275,11 +444,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   double speechRate = 1.0;
   double voicePreviewVolume = 0.45;
   double bgmVolume = 0.35;
-  double subtitleSize = 12;
+  double subtitleSize = 64;
   bool subtitlesEnabled = true;
   String selectedSubtitleFont = 'Microsoft YaHei';
-  Color subtitleColor = const Color(0xFFFFE600);
-  Color subtitleOutlineColor = const Color(0xFF000000);
+  Color subtitleColor = const Color(0xFFFFFFFF);
+  Color subtitleKeywordColor = const Color(0xFFFFE23B);
+  Color subtitleOutlineColor = const Color(0xFF111111);
+  int subtitleOutlineWidth = 5;
+  String subtitlePosition = 'bottom';
+  int subtitleMarginV = 390;
+  int subtitleMaxCharsPerLine = 9;
   List<String> subtitlePreviewLines = const [];
   bool pipEnabled = false;
   String pipAssetId = '';
@@ -1944,6 +2118,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先创建视频任务');
       return;
     }
+    if (!_hasFreshFinalVideo(_renderScript)) {
+      showError('请先在第 5 步合成最终成品视频');
+      return;
+    }
     if (selectedPublisherAccount.isEmpty) {
       showError('请先选择发布账号');
       return;
@@ -2496,14 +2674,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
     await _runBusy(() async {
       if (taskId != null && !taskId.startsWith('cloud-')) {
-        final res =
-            await http.post(Uri.parse('$apiBase/api/tasks/$taskId/cover'));
+        final res = await http.post(
+          Uri.parse('$apiBase/api/tasks/$taskId/cover').replace(
+            queryParameters: {'template_id': selectedCoverTemplate},
+          ),
+        );
         _check(res);
         final body =
             jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
         setState(() {
           task = body;
           coverPath = body['cover_path'] as String? ?? coverPath;
+          finalOutputVideoPath = '';
+          finalVideoKey = '';
           outputRefresh++;
           message = '封面已生成';
           messageIsError = false;
@@ -2517,7 +2700,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'title':
               (task?['title'] as String? ?? publishTitleController.text).trim(),
           'script': script,
-          'background_path': _outputVideoPath ?? '',
+          'background_path': intermediateVideoPath.isNotEmpty
+              ? intermediateVideoPath
+              : _outputVideoPath ?? '',
+          'template_id': selectedCoverTemplate,
         }),
       );
       _check(res);
@@ -2525,6 +2711,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() {
         coverPath = body['cover_path'] as String? ?? '';
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         outputRefresh++;
         message = '封面已生成';
         messageIsError = false;
@@ -2551,6 +2739,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (taskId == null || taskId.startsWith('cloud-')) {
       setState(() {
         coverPath = path;
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         outputRefresh++;
         message = '已选择自定义封面';
         messageIsError = false;
@@ -2571,6 +2761,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() {
         task = body;
         coverPath = body['cover_path'] as String? ?? path;
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         outputRefresh++;
         message = '已上传自定义封面';
         messageIsError = false;
@@ -2583,110 +2775,203 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     const height = 1280;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    const bounds = Rect.fromLTWH(0, 0, 720, 1280);
-    final background = Paint()
-      ..shader = ui.Gradient.linear(
-        const Offset(0, 0),
-        const Offset(720, 1280),
-        const [Color(0xFF15182A), Color(0xFF4B2C78), Color(0xFF161724)],
-        const [0, 0.52, 1],
-      );
-    canvas.drawRect(bounds, background);
-    canvas.drawCircle(
-      const Offset(565, 215),
-      230,
-      Paint()..color = const Color(0xFF36A8FF).withValues(alpha: 0.18),
-    );
-    canvas.drawCircle(
-      const Offset(105, 1080),
-      260,
-      Paint()..color = const Color(0xFFFF4FB8).withValues(alpha: 0.16),
-    );
-
-    final panel = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(48, 160, 624, 520),
-      const Radius.circular(34),
-    );
-    canvas.drawRRect(
-        panel, Paint()..color = Colors.black.withValues(alpha: 0.48));
-    canvas.drawRRect(
-      panel,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..color = const Color(0xFFFF67C8).withValues(alpha: 0.8),
-    );
-
     final sourceTitle = publishTitleController.text.trim().isNotEmpty
         ? publishTitleController.text.trim()
         : script.trim().replaceAll(RegExp(r'\s+'), '');
-    final title = sourceTitle.isEmpty ? '爆款口播视频' : sourceTitle;
-    final titlePainter = TextPainter(
-      text: TextSpan(
-        text: title,
-        style: const TextStyle(
-          color: Color(0xFFFFE600),
-          fontSize: 62,
-          height: 1.28,
-          fontWeight: FontWeight.w900,
-          shadows: [
-            Shadow(color: Colors.black, blurRadius: 8, offset: Offset(0, 3)),
-          ],
-        ),
-      ),
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-      maxLines: 3,
-      ellipsis: '…',
-    )..layout(maxWidth: 560);
-    titlePainter.paint(
-      canvas,
-      Offset((width - titlePainter.width) / 2, 275),
-    );
+    final title = sourceTitle.isEmpty ? '视频标题' : sourceTitle;
+    final maxChars = switch (selectedCoverTemplate) {
+      'red-white-emphasis' => 10,
+      'blue-white-clear' => 12,
+      'offset-shadow' => 11,
+      'vertical-kaiti' => 9,
+      'bold-yellow-white' || 'green-keyword' || 'gold-kaiti' => 14,
+      _ => 15,
+    };
+    final compactTitle = title.replaceAll(RegExp(r'\s+'), '');
+    final cappedTitle = compactTitle.length > maxChars
+        ? compactTitle.substring(0, maxChars)
+        : compactTitle;
+    final splitAt = cappedTitle.length <= 6
+        ? cappedTitle.length
+        : (cappedTitle.length / 2).ceil();
+    final lines = cappedTitle.length <= 6
+        ? <String>[cappedTitle]
+        : <String>[
+            cappedTitle.substring(0, splitAt),
+            cappedTitle.substring(splitAt),
+          ];
+    final serif = selectedCoverTemplate == 'gold-kaiti' ||
+        selectedCoverTemplate == 'vertical-kaiti';
+    final strokeColor = switch (selectedCoverTemplate) {
+      'blue-white-clear' => const Color(0xFF08253F),
+      'green-keyword' => const Color(0xFF101514),
+      'orange-black-impact' => const Color(0xFF17110D),
+      'purple-yellow-outline' => const Color(0xFF4D267F),
+      'gold-kaiti' => const Color(0xFF182A35),
+      'vertical-kaiti' => const Color(0xFF17241F),
+      _ => const Color(0xFF111111),
+    };
+    final strokeWidth = switch (selectedCoverTemplate) {
+      'purple-yellow-outline' => 10.0,
+      'black-white-clean' => 9.0,
+      'blue-white-clear' || 'orange-black-impact' => 8.0,
+      'offset-shadow' || 'vertical-kaiti' => 5.0,
+      'gold-kaiti' => 6.0,
+      _ => 7.0,
+    };
+    final shadowOffset = switch (selectedCoverTemplate) {
+      'offset-shadow' => const Offset(12, 13),
+      'purple-yellow-outline' => const Offset(6, 9),
+      'black-white-clean' => Offset.zero,
+      _ => const Offset(5, 8),
+    };
 
-    final tagPainter = TextPainter(
-      text: const TextSpan(
-        text: '杰速口播',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 30,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 3,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    final tagRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(
-        (width - tagPainter.width - 64) / 2,
-        105,
-        tagPainter.width + 64,
-        58,
-      ),
-      const Radius.circular(29),
-    );
-    canvas.drawRRect(tagRect, Paint()..color = const Color(0xFFFF4FB8));
-    tagPainter.paint(
-      canvas,
-      Offset((width - tagPainter.width) / 2, 114),
-    );
+    Color lineColor(int index) => switch (selectedCoverTemplate) {
+          'bold-yellow-white' =>
+            index == lines.length - 1 ? const Color(0xFFFFD400) : Colors.white,
+          'red-white-emphasis' =>
+            index == lines.length - 1 ? const Color(0xFFFF3B30) : Colors.white,
+          'blue-white-clear' =>
+            index == 0 ? const Color(0xFF35B8FF) : Colors.white,
+          'green-keyword' =>
+            index == 0 ? const Color(0xFF58E36D) : Colors.white,
+          'orange-black-impact' =>
+            index == 0 ? const Color(0xFFFF7A22) : Colors.white,
+          'purple-yellow-outline' =>
+            index == 0 ? const Color(0xFFFFE65A) : Colors.white,
+          'gold-kaiti' => index == lines.length - 1
+              ? const Color(0xFFFFF3C4)
+              : const Color(0xFFE7C36A),
+          'vertical-kaiti' =>
+            index == lines.length - 1 ? const Color(0xFFD9B45B) : Colors.white,
+          _ => Colors.white,
+        };
 
-    final footerPainter = TextPainter(
-      text: const TextSpan(
-        text: '让好内容更容易被看见',
-        style: TextStyle(
-          color: Colors.white70,
-          fontSize: 27,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 2,
+    TextPainter painter(
+      String value,
+      double fontSize, {
+      Color? color,
+      Paint? foreground,
+    }) {
+      return TextPainter(
+        text: TextSpan(
+          text: value,
+          style: TextStyle(
+            color: foreground == null ? color : null,
+            foreground: foreground,
+            fontSize: fontSize,
+            height: 1,
+            fontWeight: FontWeight.w900,
+            fontFamily: serif ? 'serif' : null,
+          ),
         ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    footerPainter.paint(
-      canvas,
-      Offset((width - footerPainter.width) / 2, 1130),
-    );
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      );
+    }
+
+    void paintLine(
+      String value, {
+      required Offset offset,
+      required double fontSize,
+      required double maxWidth,
+      required Color fill,
+    }) {
+      var fittedSize = fontSize;
+      var fillPainter = painter(value, fittedSize, color: fill)..layout();
+      while (fillPainter.width > maxWidth && fittedSize > 38) {
+        fittedSize -= 2;
+        fillPainter = painter(value, fittedSize, color: fill)..layout();
+      }
+      if (shadowOffset != Offset.zero) {
+        final shadowPaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth
+          ..color = strokeColor;
+        (painter(value, fittedSize, foreground: shadowPaint)..layout())
+            .paint(canvas, offset + shadowOffset);
+      }
+      if (selectedCoverTemplate == 'purple-yellow-outline') {
+        final outerPaint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth + 6
+          ..color = Colors.white;
+        (painter(value, fittedSize, foreground: outerPaint)..layout())
+            .paint(canvas, offset);
+      }
+      final strokePaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..color = strokeColor;
+      (painter(value, fittedSize, foreground: strokePaint)..layout())
+          .paint(canvas, offset);
+      fillPainter.paint(canvas, offset);
+    }
+
+    if (selectedCoverTemplate == 'vertical-kaiti') {
+      final columns = lines;
+      final xPositions =
+          columns.length == 1 ? const [350.0] : const [413.0, 293.0];
+      for (var columnIndex = 0; columnIndex < columns.length; columnIndex++) {
+        var y = columnIndex == 0 ? 287.0 : 340.0;
+        for (final char in columns[columnIndex].split('')) {
+          paintLine(
+            char,
+            offset: Offset(xPositions[columnIndex], y),
+            fontSize: 77,
+            maxWidth: 95,
+            fill: lineColor(columnIndex),
+          );
+          y += 88;
+        }
+      }
+    } else {
+      final layout = switch (selectedCoverTemplate) {
+        'bold-yellow-white' => (left: 56.0, top: 287.0, width: 608.0),
+        'black-white-clean' => (left: 56.0, top: 293.0, width: 608.0),
+        'green-keyword' => (left: 56.0, top: 287.0, width: 608.0),
+        'orange-black-impact' => (left: 56.0, top: 287.0, width: 608.0),
+        'purple-yellow-outline' => (left: 47.0, top: 280.0, width: 627.0),
+        'offset-shadow' => (left: 47.0, top: 293.0, width: 627.0),
+        _ => (left: 47.0, top: 287.0, width: 627.0),
+      };
+      final fontSizes = switch (selectedCoverTemplate) {
+        'bold-yellow-white' => const [87.0, 69.0],
+        'red-white-emphasis' => const [97.0, 79.0],
+        'black-white-clean' => const [70.0, 70.0],
+        'blue-white-clear' => const [88.0, 80.0],
+        'green-keyword' => const [72.0, 77.0],
+        'orange-black-impact' => const [87.0, 64.0],
+        'purple-yellow-outline' => const [71.0, 63.0],
+        'offset-shadow' => const [83.0, 97.0],
+        'gold-kaiti' => const [81.0, 68.0],
+        _ => const [78.0, 72.0],
+      };
+      final centered = selectedCoverTemplate == 'red-white-emphasis' ||
+          selectedCoverTemplate == 'blue-white-clear' ||
+          selectedCoverTemplate == 'purple-yellow-outline' ||
+          selectedCoverTemplate == 'offset-shadow' ||
+          selectedCoverTemplate == 'gold-kaiti';
+      var y = layout.top;
+      for (var index = 0; index < lines.length; index++) {
+        final size = fontSizes[index.clamp(0, fontSizes.length - 1)];
+        final measure = painter(lines[index], size, color: lineColor(index))
+          ..layout();
+        final x = centered
+            ? layout.left + (layout.width - measure.width) / 2
+            : layout.left;
+        paintLine(
+          lines[index],
+          offset: Offset(x, y),
+          fontSize: size,
+          maxWidth: layout.width,
+          fill: lineColor(index),
+        );
+        y += measure.height +
+            (selectedCoverTemplate == 'black-white-clean' ? 15 : 23);
+      }
+    }
+    ;
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(width, height);
@@ -2700,7 +2985,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
     await coverDir.create(recursive: true);
     final file = File(
-      '${coverDir.path}${Platform.pathSeparator}cover-${DateTime.now().millisecondsSinceEpoch}.png',
+      '${coverDir.path}${Platform.pathSeparator}cover-$selectedCoverTemplate-${DateTime.now().millisecondsSinceEpoch}.png',
     );
     await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
     return file.path;
@@ -3789,6 +4074,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         title: const Text('字幕 启用'),
                       ),
                       const SizedBox(height: 8),
+                      _subtitleTemplatePicker(updateDialog: updateDialog),
+                      const SizedBox(height: 8),
                       Row(
                         children: [
                           Expanded(
@@ -3797,8 +4084,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                               _subtitleFontOptions,
                               (value) {
                                 if (value == null) return;
-                                updateDialog(
-                                    () => selectedSubtitleFont = value);
+                                updateDialog(() {
+                                  selectedSubtitleFont = value;
+                                  selectedSubtitleTemplate = 'custom';
+                                });
                               },
                               labels: _subtitleFontLabels,
                             ),
@@ -3823,9 +4112,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       _labeledSlider(
                         '字号',
                         subtitleSize,
-                        12,
-                        56,
-                        (value) => updateDialog(() => subtitleSize = value),
+                        24,
+                        72,
+                        (value) => updateDialog(() {
+                          subtitleSize = value;
+                          selectedSubtitleTemplate = 'custom';
+                        }),
                         subtitleSize.round().toString(),
                       ),
                       const SizedBox(height: 12),
@@ -4022,18 +4314,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() => message = '请先生成或填写文案');
       return;
     }
-    if (!_validateCompositionSettings()) return;
+    if (!_hasFreshGeneratedVoice(script)) {
+      showError('请先完成第 2 步“克隆声音”');
+      return;
+    }
+    if (selectedDigitalHuman.isEmpty) {
+      showError('请先上传或选择数字人形象');
+      return;
+    }
     setState(() {
       loading = true;
       renderingVideo = true;
-      message = '正在生成视频，可以点击停止生成中断任务';
+      intermediateVideoPath = '';
+      finalOutputVideoPath = '';
+      generatedVideoKey = '';
+      finalVideoKey = '';
+      message = '正在合成文案、克隆声音和数字人画面';
     });
     _startRenderPolling(taskId);
     try {
       final res = await http.post(
         Uri.parse('$apiBase/api/tasks/$taskId/render'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(_renderPayload(script)),
+        body: jsonEncode(_intermediateRenderPayload(script)),
       );
       _check(res);
       final body =
@@ -4048,6 +4351,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         return;
       }
       await loadOutput();
+      final path = output?['path'] as String? ??
+          task?['output_video_path'] as String? ??
+          '';
+      if (path.isNotEmpty && mounted) {
+        setState(() {
+          intermediateVideoPath = path;
+          generatedVideoKey = _digitalVideoKeyFor(script);
+          message = '数字人视频已生成，请继续选择封面';
+          messageIsError = false;
+        });
+      }
     } catch (e) {
       setState(() => message = e.toString());
     } finally {
@@ -4184,7 +4498,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先生成或填写文案');
       return;
     }
-    if (!_validateCompositionSettings()) return;
+    if (!_hasFreshGeneratedVoice(script)) {
+      showError('请先完成第 2 步“克隆声音”');
+      return;
+    }
     final duration = _cloudDurationSeconds();
     if (duration == null) {
       showError('请输入云端任务时长');
@@ -4197,6 +4514,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudJob = null;
       cloudOutputUrl = '';
       cloudOutputLocalPath = '';
+      intermediateVideoPath = '';
+      finalOutputVideoPath = '';
+      generatedVideoKey = '';
+      finalVideoKey = '';
       outputRefresh++;
       message = '正在上传云端素材';
       messageIsError = false;
@@ -4227,7 +4548,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         }
       }
       if (!hasVoiceAudio) {
-        throw Exception('请先点击“克隆声音”，声音生成完成后再生成成品视频');
+        throw Exception('请先点击“克隆声音”，声音生成完成后再生成数字人视频');
       }
       if (pipEnabled && pipAssetId.isEmpty) {
         throw Exception('请先上传画中画素材');
@@ -4288,7 +4609,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         });
       }
       final cloudBasePayload = {
-        ..._renderPayload(script),
+        ...(_isAndroidClient
+            ? _renderPayload(script)
+            : _intermediateRenderPayload(script)),
         if (!_isAndroidClient) ...{
           'bgm_id': 'none',
           'bgm_volume': 0,
@@ -4296,8 +4619,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           'pip_enabled': false,
           'pip_asset_id': null,
         },
-        'cover_file_name':
-            currentCover == null ? null : _fileNameFromPath(currentCover),
+        'cover_file_name': _isAndroidClient && currentCover != null
+            ? _fileNameFromPath(currentCover)
+            : null,
         'source_file_name': fileName,
         'original_script': originalScriptController.text.trim(),
         'rewritten_script': rewrittenScriptController.text.trim(),
@@ -4648,7 +4972,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         setState(() {
           loading = false;
           renderingVideo = false;
-          message = '云端视频已生成';
+          message = '云端数字人视频已生成，请继续选择封面';
           messageIsError = false;
         });
       } else if (status == 'failed' ||
@@ -4688,7 +5012,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final fileName = _cloudOutputFileName(jobId, cosKey);
     if (mounted) {
       setState(() {
-        message = '正在保存云端成品到本地';
+        message = '正在保存数字人视频到本地';
         messageIsError = false;
       });
     }
@@ -4697,13 +5021,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       headers: headers,
       fileName: fileName,
     );
-    final finalPath = await _postprocessCloudOutputIfNeeded(localPath);
     if (!mounted) return;
     setState(() {
       cloudOutputUrl = url;
-      cloudOutputLocalPath = finalPath;
+      cloudOutputLocalPath = localPath;
+      intermediateVideoPath = localPath;
+      finalOutputVideoPath = '';
+      generatedVideoKey = _digitalVideoKeyFor(_renderScript);
+      finalVideoKey = '';
       outputRefresh++;
-      message = finalPath == localPath ? '云端成品已保存到本地' : '云端成品已完成本地合成';
+      message = '数字人视频已保存到本地，请继续选择封面';
       messageIsError = false;
     });
     try {
@@ -4713,19 +5040,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
-  bool get _needsLocalCloudPostprocess {
-    if (_isAndroidClient) return false;
-    return subtitlesEnabled || selectedBgm != 'none' || pipEnabled;
-  }
-
-  Future<String> _postprocessCloudOutputIfNeeded(String sourcePath) async {
-    if (!_needsLocalCloudPostprocess) return sourcePath;
+  Future<String> _postprocessVideo(String sourcePath) async {
     if (pipEnabled && pipAssetId.isEmpty) {
       throw Exception('请先上传画中画素材');
     }
     if (mounted) {
       setState(() {
-        message = '正在本地合成字幕、BGM和画中画';
+        message = '正在合成封面、字幕、BGM和最终成品';
         messageIsError = false;
       });
     }
@@ -4746,6 +5067,59 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final path = body['path'] as String? ?? '';
     if (path.isEmpty) throw Exception('本地后处理没有返回成品路径');
     return path;
+  }
+
+  Future<void> finalizeVideo() async {
+    if (_isAndroidClient) {
+      showError('当前分步最终合成功能先在桌面端使用');
+      return;
+    }
+    final script = _renderScript;
+    if (!_hasFreshIntermediateVideo(script)) {
+      showError('请先完成第 3 步，生成数字人视频');
+      return;
+    }
+    if (_currentCoverPath == null) {
+      showError('请先完成第 4 步，选择或生成视频封面');
+      return;
+    }
+    if (!_validateCompositionSettings()) return;
+    final sourcePath = intermediateVideoPath;
+    setState(() {
+      loading = true;
+      finalizingVideo = true;
+      finalOutputVideoPath = '';
+      finalVideoKey = '';
+      message = '正在合成最终成品视频';
+      messageIsError = false;
+    });
+    try {
+      final renderedPath = await _postprocessVideo(sourcePath);
+      if (!mounted) return;
+      setState(() {
+        finalOutputVideoPath = renderedPath;
+        finalVideoKey = _finalVideoKeyFor(script);
+        if (generationMode == 'cloud') {
+          cloudOutputLocalPath = renderedPath;
+        }
+        outputRefresh++;
+        message = '最终成品视频已合成，可以预览或继续发布';
+        messageIsError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        message = e.toString();
+        messageIsError = true;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+          finalizingVideo = false;
+        });
+      }
+    }
   }
 
   Future<String> _downloadCloudJobOutputToLocal(
@@ -5144,6 +5518,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return File(cloudVoiceAudioPath).existsSync();
   }
 
+  bool _hasFreshGeneratedVoice(String script) {
+    if (script.trim().isEmpty || generatedVoiceKey != _voiceKeyFor(script)) {
+      return false;
+    }
+    if (generationMode == 'cloud') return _hasFreshCloudVoice(script);
+    final path = task?['extracted_audio_path'] as String? ?? '';
+    return path.isNotEmpty && File(path).existsSync();
+  }
+
+  String _digitalVideoKeyFor(String script) =>
+      '${_taskId ?? ''}:${_voiceKeyFor(script)}:$selectedDigitalHuman';
+
+  bool _hasFreshIntermediateVideo(String script) {
+    return intermediateVideoPath.isNotEmpty &&
+        generatedVideoKey == _digitalVideoKeyFor(script) &&
+        File(intermediateVideoPath).existsSync();
+  }
+
+  String _finalVideoKeyFor(String script) =>
+      '${_digitalVideoKeyFor(script)}:${jsonEncode(_renderPayload(script)).hashCode}';
+
+  bool _hasFreshFinalVideo(String script) {
+    return finalOutputVideoPath.isNotEmpty &&
+        finalVideoKey == _finalVideoKeyFor(script) &&
+        File(finalOutputVideoPath).existsSync();
+  }
+
   void _invalidateGeneratedVoice() {
     cloudVoiceAudioPath = '';
     cloudVoiceJobId = '';
@@ -5152,6 +5553,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Map<String, dynamic> _renderPayload(String script) {
     final pipRect = _pipNormalizedRect();
+    final currentCoverPath = _currentCoverPath;
+    final generatedCoverUsesTemplate = currentCoverPath != null &&
+        _fileNameFromPath(currentCoverPath)
+            .startsWith('cover-$selectedCoverTemplate-');
     return {
       'script': script,
       'voice_id': selectedVoice,
@@ -5166,6 +5571,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'bgm_id': selectedBgm,
       'bgm_volume': bgmVolume,
       'subtitle_enabled': subtitlesEnabled,
+      'subtitle_template_id': selectedSubtitleTemplate == 'custom'
+          ? null
+          : selectedSubtitleTemplate,
       'subtitle_style': _subtitleStylePayload(),
       'pip_enabled': pipEnabled,
       'pip_asset_id': pipAssetId.isEmpty ? null : pipAssetId,
@@ -5181,8 +5589,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'pip_trigger_text': pipTriggerController.text.trim().isEmpty
           ? null
           : pipTriggerController.text.trim(),
+      'cover_template_id':
+          generatedCoverUsesTemplate ? selectedCoverTemplate : null,
+      'cover_path': currentCoverPath,
     };
   }
+
+  Map<String, dynamic> _intermediateRenderPayload(String script) => {
+        ..._renderPayload(script),
+        'defer_packaging': true,
+        'bgm_id': 'none',
+        'bgm_volume': 0,
+        'subtitle_enabled': false,
+        'pip_enabled': false,
+        'pip_asset_id': null,
+        'cover_path': null,
+      };
 
   double? _optionalSeconds(String value) {
     final trimmed = value.trim();
@@ -5218,14 +5640,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Map<String, dynamic> _subtitleStylePayload() {
     return {
+      'template_id': selectedSubtitleTemplate,
       'font_size': subtitleSize.round(),
       'color': _colorHex(subtitleColor),
+      'keyword_color': _colorHex(subtitleKeywordColor),
       'outline_color': _colorHex(subtitleOutlineColor),
-      'outline_width': 2,
+      'outline_width': subtitleOutlineWidth,
       'font_family': selectedSubtitleFont,
-      'position': 'bottom',
-      'margin_v': 70,
-      'max_chars_per_line': 12,
+      'position': subtitlePosition,
+      'margin_v': subtitleMarginV,
+      'max_chars_per_line': subtitleMaxCharsPerLine,
     };
   }
 
@@ -5263,6 +5687,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String get _cloudOutputLabel {
+    if (_hasFreshFinalVideo(_renderScript)) {
+      return _fileNameFromPath(finalOutputVideoPath);
+    }
+    if (_hasFreshIntermediateVideo(_renderScript)) {
+      return '${_fileNameFromPath(intermediateVideoPath)}（数字人视频）';
+    }
     if (cloudOutputLocalPath.isNotEmpty) {
       return _fileNameFromPath(cloudOutputLocalPath);
     }
@@ -5297,6 +5727,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String? get _outputVideoUrl {
+    if (_hasFreshFinalVideo(_renderScript)) return finalOutputVideoPath;
+    if (_hasFreshIntermediateVideo(_renderScript)) return intermediateVideoPath;
     if (generationMode == 'cloud') {
       if (cloudOutputLocalPath.isNotEmpty) return cloudOutputLocalPath;
       return cloudOutputUrl.isEmpty ? null : cloudOutputUrl;
@@ -5333,6 +5765,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String? get _outputVideoPath {
+    if (_hasFreshFinalVideo(_renderScript)) return finalOutputVideoPath;
+    if (_hasFreshIntermediateVideo(_renderScript)) return intermediateVideoPath;
     if (generationMode == 'cloud') {
       return cloudOutputLocalPath.isEmpty ? null : cloudOutputLocalPath;
     }
@@ -5524,17 +5958,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ),
         (
           title: '数字人生成',
-          subtitle: '选择形象并生成视频',
+          subtitle: '上传形象并生成数字人视频',
           icon: Icons.face_retouching_natural_rounded,
         ),
         (
           title: '视频封面',
-          subtitle: '生成或上传竖版封面',
+          subtitle: '选择或上传最终封面',
           icon: Icons.image_outlined,
         ),
         (
           title: 'BGM 与字幕',
-          subtitle: '完善声音和字幕样式',
+          subtitle: '选择样式并合成最终成品',
           icon: Icons.subtitles_rounded,
         ),
         (
@@ -5543,6 +5977,51 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           icon: Icons.rocket_launch_rounded,
         ),
       ];
+
+  bool _isStudioStepComplete(int index) {
+    final script = _renderScript;
+    return switch (index) {
+      0 => script.isNotEmpty,
+      1 => _hasFreshGeneratedVoice(script),
+      2 => _hasFreshIntermediateVideo(script),
+      3 => _currentCoverPath != null,
+      4 => _hasFreshFinalVideo(script),
+      _ => false,
+    };
+  }
+
+  String _studioStepRequirementMessage(int index) {
+    return switch (index) {
+      0 => '请先完成第 1 步，生成或填写文案',
+      1 => '请先完成第 2 步，克隆声音',
+      2 => '请先完成第 3 步，生成数字人视频',
+      3 => '请先完成第 4 步，选择或生成视频封面',
+      4 => '请先完成第 5 步，合成最终成品视频',
+      _ => '请先完成前面的步骤',
+    };
+  }
+
+  bool _canOpenStudioStep(int index) {
+    for (var prerequisite = 0; prerequisite < index; prerequisite++) {
+      if (!_isStudioStepComplete(prerequisite)) return false;
+    }
+    return true;
+  }
+
+  void _openStudioStep(int index) {
+    if (!_canOpenStudioStep(index)) {
+      for (var prerequisite = 0; prerequisite < index; prerequisite++) {
+        if (!_isStudioStepComplete(prerequisite)) {
+          showError(_studioStepRequirementMessage(prerequisite));
+          return;
+        }
+      }
+    }
+    setState(() {
+      selectedSection = _WorkspaceSection.studio;
+      studioStep = index;
+    });
+  }
 
   Widget _studioWorkflowRail({bool embedded = false}) {
     final steps = _studioSteps;
@@ -5690,16 +6169,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   ) {
     final active =
         selectedSection == _WorkspaceSection.studio && studioStep == index;
-    final completed = index < studioStep;
+    final completed = _isStudioStepComplete(index);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: () => setState(() {
-            selectedSection = _WorkspaceSection.studio;
-            studioStep = index;
-          }),
+          onTap: () => _openStudioStep(index),
           borderRadius: BorderRadius.circular(12),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
@@ -5782,9 +6258,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final active = studioStep == index;
-          final completed = index < studioStep;
+          final completed = _isStudioStepComplete(index);
           return InkWell(
-            onTap: () => setState(() => studioStep = index),
+            onTap: () => _openStudioStep(index),
             borderRadius: BorderRadius.circular(12),
             child: Container(
               width: 138,
@@ -5911,48 +6387,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             content
           else
             Expanded(child: SingleChildScrollView(child: content)),
-          const Divider(height: 1),
-          _studioStepFooter(),
-        ],
-      ),
-    );
-  }
-
-  Widget _studioStepFooter() {
-    final lastStep = studioStep == _studioSteps.length - 1;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
-      child: Row(
-        children: [
-          TextButton.icon(
-            onPressed:
-                studioStep == 0 ? null : () => setState(() => studioStep -= 1),
-            icon: const Icon(Icons.arrow_back_rounded, size: 18),
-            label: const Text('上一步'),
-          ),
-          const Spacer(),
-          FilledButton.icon(
-            onPressed: loading
-                ? null
-                : lastStep
-                    ? createPublishJobs
-                    : () => setState(() => studioStep += 1),
-            style: FilledButton.styleFrom(
-              backgroundColor: studioPrimary,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(132, 44),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            icon: Icon(
-              lastStep
-                  ? Icons.rocket_launch_rounded
-                  : Icons.arrow_forward_rounded,
-              size: 18,
-            ),
-            label: Text(lastStep ? '创建发布任务' : '保存并继续'),
-          ),
         ],
       ),
     );
@@ -6150,7 +6584,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _studioTip('选择已授权的数字人形象，系统会将改写文案、声音和画面合成为竖版视频。'),
+        _studioTip('选择数字人形象，将第 1 步文案和第 2 步克隆声音合成为数字人视频。本步不加入封面、BGM 或字幕。'),
         const SizedBox(height: 18),
         _studioFieldCard(
           title: '数字人形象',
@@ -6181,7 +6615,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               ),
               const SizedBox(height: 14),
               _stepButton(
-                renderingVideo ? '停止生成' : '生成数字人成品视频',
+                renderingVideo ? '停止生成' : '合成数字人视频',
                 renderingVideo ? stopRender : render,
                 allowWhileLoading: renderingVideo,
               ),
@@ -6196,7 +6630,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _studioTip('根据文案智能生成竖版封面，也可以上传已经设计好的 9:16 图片。'),
+        _studioTip('选择字体与排版模板生成封面，封面会写入成片第 1 帧，不增加片头时长。'),
         const SizedBox(height: 18),
         _studioFieldCard(
           title: '视频封面',
@@ -6205,6 +6639,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _coverTemplatePicker(),
+              const SizedBox(height: 16),
               _coverTools(),
               const SizedBox(height: 14),
               _coverPreview(),
@@ -6233,6 +6669,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             ],
           ),
         ),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '最终合成',
+          subtitle: '以第 3 步的数字人视频为底片，统一加入第 4 步封面和当前 BGM、字幕设置',
+          icon: Icons.movie_filter_outlined,
+          child: _stepButton(
+            finalizingVideo ? '正在合成最终成品...' : '合成 BGM / 字幕 / 封面',
+            finalizeVideo,
+          ),
+        ),
       ],
     );
   }
@@ -6255,6 +6701,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         ? null
         : _digitalHumanThumbnailUrl(selectedDigitalHuman);
     final status = task?['status']?.toString() ?? '';
+    final finalReady = _hasFreshFinalVideo(_renderScript);
+    final intermediateReady = _hasFreshIntermediateVideo(_renderScript);
     return Container(
       margin: const EdgeInsets.fromLTRB(8, 16, 16, 16),
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
@@ -6282,8 +6730,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 ),
               ),
               _studioStatusPill(
-                status.isEmpty ? '待生成' : _statusText(status),
-                status == 'completed'
+                finalReady
+                    ? '最终成品'
+                    : intermediateReady
+                        ? '数字人视频'
+                        : status.isEmpty
+                            ? '待生成'
+                            : _statusText(status),
+                finalReady || intermediateReady || status == 'completed'
                     ? studioSuccess
                     : status == 'failed'
                         ? const Color(0xFFFF5D73)
@@ -6347,7 +6801,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        outputUrl != null ? '成品视频已就绪' : '竖版视频 · 9:16',
+                        finalReady
+                            ? '最终成品视频已就绪'
+                            : intermediateReady
+                                ? '数字人视频已就绪'
+                                : '竖版视频 · 9:16',
                         style: const TextStyle(
                           color: studioInk,
                           fontSize: 12,
@@ -6356,7 +6814,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        outputUrl != null ? _cloudOutputLabel : '等待生成后可预览与下载',
+                        outputUrl != null
+                            ? _cloudOutputLabel
+                            : '等待生成后可预览与下载',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style:
@@ -6366,7 +6826,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   ),
                 ),
                 IconButton(
-                  tooltip: '预览成品',
+                  tooltip: finalReady ? '预览最终成品' : '预览数字人视频',
                   onPressed: outputUrl == null ? null : previewOutputVideo,
                   icon: const Icon(Icons.play_circle_outline_rounded),
                   color: studioPrimary,
@@ -8725,17 +9185,314 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         const Expanded(
           child: Text('封面', style: TextStyle(fontWeight: FontWeight.w800)),
         ),
-        _ghostButton('生成封面', generateCover),
+        _ghostButton('按模板生成', generateCover),
         const SizedBox(width: 8),
         _ghostButton('自定义封面', uploadCover),
       ],
     );
   }
 
+  Widget _coverTemplatePicker() {
+    const templates = [
+      (id: 'bold-yellow-white', name: '黄白重磅', hint: '黄色重点 · 黑描边'),
+      (id: 'red-white-emphasis', name: '红白强调', hint: '红色重点 · 居中'),
+      (id: 'black-white-clean', name: '黑白极简', hint: '纯白粗体 · 紧凑'),
+      (id: 'blue-white-clear', name: '蓝白清晰', hint: '蓝色方法词 · 居中'),
+      (id: 'green-keyword', name: '荧光绿重点', hint: '绿色关键词 · 左对齐'),
+      (id: 'orange-black-impact', name: '橙黑冲击', hint: '橙色主标题 · 白重点'),
+      (id: 'purple-yellow-outline', name: '紫黄双描边', hint: '紫描边 · 黄色重点'),
+      (id: 'offset-shadow', name: '黑白错位', hint: '白字 · 硬阴影'),
+      (id: 'gold-kaiti', name: '金色楷体', hint: '楷体 · 金色层次'),
+      (id: 'vertical-kaiti', name: '竖排楷体', hint: '双列竖排 · 白金'),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          children: [
+            Text(
+              '透明纯文字模板',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+            ),
+            SizedBox(width: 8),
+            Text(
+              '10 套',
+              style: TextStyle(
+                color: studioPrimary,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '只改变字体、断句、颜色、描边和排版，不添加背景、色块或品牌元素',
+          style: TextStyle(color: studioMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final template in templates)
+              _coverTemplateCard(
+                template.id,
+                template.name,
+                template.hint,
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _coverTemplateCard(String id, String name, String hint) {
+    final selected = selectedCoverTemplate == id;
+    return SizedBox(
+      width: 180,
+      height: 92,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() => selectedCoverTemplate = id),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFFF0F1FF) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? studioPrimary : studioBorder,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                _coverTemplateMockup(id),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: TextStyle(
+                          color: selected ? studioPrimaryDark : studioInk,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        hint,
+                        maxLines: 2,
+                        style: const TextStyle(
+                          color: studioMuted,
+                          fontSize: 8.5,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _coverTemplateMockup(String id) {
+    final config = switch (id) {
+      'red-white-emphasis' => (
+          first: '别再',
+          second: '这样做',
+          firstColor: Colors.white,
+          secondColor: const Color(0xFFFF3B30),
+          outline: const Color(0xFF111111),
+          left: false,
+          serif: false,
+          vertical: false,
+        ),
+      'black-white-clean' => (
+          first: '为什么努力',
+          second: '没有结果',
+          firstColor: Colors.white,
+          secondColor: Colors.white,
+          outline: const Color(0xFF111111),
+          left: true,
+          serif: false,
+          vertical: false,
+        ),
+      'blue-white-clear' => (
+          first: '3个方法',
+          second: '一次讲清',
+          firstColor: const Color(0xFF35B8FF),
+          secondColor: Colors.white,
+          outline: const Color(0xFF08253F),
+          left: false,
+          serif: false,
+          vertical: false,
+        ),
+      'green-keyword' => (
+          first: '真正的差距',
+          second: '就在这里',
+          firstColor: const Color(0xFF58E36D),
+          secondColor: Colors.white,
+          outline: const Color(0xFF101514),
+          left: true,
+          serif: false,
+          vertical: false,
+        ),
+      'orange-black-impact' => (
+          first: '普通人',
+          second: '容易忽略',
+          firstColor: const Color(0xFFFF7A22),
+          secondColor: Colors.white,
+          outline: const Color(0xFF17110D),
+          left: true,
+          serif: false,
+          vertical: false,
+        ),
+      'purple-yellow-outline' => (
+          first: '看懂这一点',
+          second: '少走弯路',
+          firstColor: const Color(0xFFFFE65A),
+          secondColor: Colors.white,
+          outline: const Color(0xFF4D267F),
+          left: false,
+          serif: false,
+          vertical: false,
+        ),
+      'offset-shadow' => (
+          first: '先别急着',
+          second: '下结论',
+          firstColor: Colors.white,
+          secondColor: Colors.white,
+          outline: const Color(0xFF111111),
+          left: false,
+          serif: false,
+          vertical: false,
+        ),
+      'gold-kaiti' => (
+          first: '高手做事',
+          second: '都有逻辑',
+          firstColor: const Color(0xFFE7C36A),
+          secondColor: const Color(0xFFFFF3C4),
+          outline: const Color(0xFF182A35),
+          left: false,
+          serif: true,
+          vertical: false,
+        ),
+      'vertical-kaiti' => (
+          first: '答案',
+          second: '藏在细节',
+          firstColor: Colors.white,
+          secondColor: const Color(0xFFD9B45B),
+          outline: const Color(0xFF17241F),
+          left: false,
+          serif: true,
+          vertical: true,
+        ),
+      _ => (
+          first: '这件事',
+          second: '越早知道',
+          firstColor: Colors.white,
+          secondColor: const Color(0xFFFFD400),
+          outline: const Color(0xFF111111),
+          left: true,
+          serif: false,
+          vertical: false,
+        ),
+    };
+    final shadows = [
+      Shadow(color: config.outline, offset: const Offset(-1, 0)),
+      Shadow(color: config.outline, offset: const Offset(1, 0)),
+      Shadow(color: config.outline, offset: const Offset(0, -1)),
+      Shadow(color: config.outline, offset: const Offset(1.5, 1.5)),
+    ];
+    final style = TextStyle(
+      height: 1.05,
+      fontSize: config.serif ? 8.5 : 8,
+      fontWeight: FontWeight.w900,
+      fontFamily: config.serif ? 'serif' : null,
+      shadows: shadows,
+    );
+    final preview = config.vertical
+        ? Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                config.second.split('').join('\n'),
+                style: style.copyWith(color: config.secondColor),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(width: 2),
+              Text(
+                config.first.split('').join('\n'),
+                style: style.copyWith(color: config.firstColor),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          )
+        : Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: config.left
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.center,
+            children: [
+              Text(config.first,
+                  style: style.copyWith(color: config.firstColor)),
+              Text(
+                config.second,
+                style: style.copyWith(color: config.secondColor),
+              ),
+            ],
+          );
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: SizedBox(
+        width: 48,
+        height: 74,
+        child: Stack(
+          children: [
+            const Positioned.fill(
+              child: ColoredBox(color: Color(0xFFE6E7EA)),
+            ),
+            const Positioned(
+              left: 0,
+              top: 0,
+              width: 24,
+              height: 37,
+              child: ColoredBox(color: Color(0xFFF4F5F6)),
+            ),
+            const Positioned(
+              right: 0,
+              bottom: 0,
+              width: 24,
+              height: 37,
+              child: ColoredBox(color: Color(0xFFF4F5F6)),
+            ),
+            Align(
+              alignment: config.left
+                  ? const Alignment(-0.78, -0.22)
+                  : Alignment.center,
+              child: preview,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _coverPreview() {
     final light = _studioLightControls;
     final path = _currentCoverPath;
-    final label = path == null ? '封面将自动生成' : _fileNameFromPath(path);
+    final label = path == null ? '尚未选择封面' : _fileNameFromPath(path);
     return Column(
       children: [
         Align(
@@ -9734,12 +10491,211 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     ];
   }
 
+  void _selectSubtitleTemplate(
+    String id, {
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final template = _subtitleTemplates.firstWhere((item) => item.id == id);
+    void applyTemplate() {
+      selectedSubtitleTemplate = template.id;
+      subtitleSize = template.fontSize;
+      subtitleColor = template.color;
+      subtitleKeywordColor = template.keywordColor;
+      subtitleOutlineColor = template.outline;
+      subtitleOutlineWidth = template.outlineWidth;
+      selectedSubtitleFont = template.font;
+      subtitlePosition = template.position;
+      subtitleMarginV = template.marginV;
+      subtitleMaxCharsPerLine = template.maxChars;
+    }
+
+    if (updateDialog != null) {
+      updateDialog(applyTemplate);
+    } else {
+      setState(applyTemplate);
+    }
+    refreshSubtitlePreview(silent: true);
+  }
+
+  Widget _subtitleTemplatePicker({
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Row(
+          children: [
+            Text(
+              '字幕样式模板',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+            ),
+            SizedBox(width: 8),
+            Text(
+              '10 套',
+              style: TextStyle(
+                color: studioPrimary,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '只展示字幕样式；选择后同步字号、字体、颜色、描边、位置和断句长度',
+          style: TextStyle(color: studioMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final template in _subtitleTemplates)
+              _subtitleTemplateCard(
+                id: template.id,
+                name: template.name,
+                industry: template.industry,
+                first: template.first,
+                second: template.second,
+                color: template.color,
+                keywordColor: template.keywordColor,
+                outline: template.outline,
+                font: template.font,
+                updateDialog: updateDialog,
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _subtitleTemplateCard({
+    required String id,
+    required String name,
+    required String industry,
+    required String first,
+    required String second,
+    required Color color,
+    required Color keywordColor,
+    required Color outline,
+    required String font,
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final selected = selectedSubtitleTemplate == id;
+    final textShadows = [
+      Shadow(color: outline, offset: const Offset(-1, 0)),
+      Shadow(color: outline, offset: const Offset(1, 0)),
+      Shadow(color: outline, offset: const Offset(0, -1)),
+      Shadow(color: outline, offset: const Offset(0, 1)),
+      Shadow(color: outline, offset: const Offset(1.5, 1.5)),
+    ];
+    final textStyle = TextStyle(
+      fontSize: 11,
+      height: 1.08,
+      fontWeight: FontWeight.w900,
+      fontFamily: font,
+      shadows: textShadows,
+    );
+    return SizedBox(
+      width: 190,
+      height: 112,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => _selectSubtitleTemplate(
+            id,
+            updateDialog: updateDialog,
+          ),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFFF0F1FF) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? studioPrimary : studioBorder,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? studioPrimary.withValues(alpha: 0.12)
+                            : const Color(0xFFF3F4F7),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        industry,
+                        style: TextStyle(
+                          color: selected ? studioPrimaryDark : studioMuted,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        name,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: selected ? studioPrimaryDark : studioInk,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 7),
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF24262D),
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(first, style: textStyle.copyWith(color: color)),
+                          Text(
+                            second,
+                            style: textStyle.copyWith(color: keywordColor),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _subtitlePanel() {
     final subtitleSummary = subtitlePreviewLines.isEmpty
         ? '字幕文件将自动生成'
         : subtitlePreviewLines.take(2).join(' / ');
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _subtitleTemplatePicker(),
+        const SizedBox(height: 16),
         Row(
           children: [
             Expanded(child: _readonlyBox(subtitleSummary)),
@@ -9776,7 +10732,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 _subtitleFontOptions,
                 (value) {
                   if (value == null) return;
-                  setState(() => selectedSubtitleFont = value);
+                  setState(() {
+                    selectedSubtitleFont = value;
+                    selectedSubtitleTemplate = 'custom';
+                  });
                 },
                 labels: _subtitleFontLabels,
               ),
@@ -9803,9 +10762,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _labeledSlider(
           '字号',
           subtitleSize,
-          12,
-          56,
-          (v) => setState(() => subtitleSize = v),
+          24,
+          72,
+          (v) => setState(() {
+            subtitleSize = v;
+            selectedSubtitleTemplate = 'custom';
+          }),
           subtitleSize.round().toString(),
         ),
         const SizedBox(height: 8),
@@ -9842,7 +10804,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return OutlinedButton(
       onPressed: () => updateDialog(() {
         subtitleColor = color;
+        subtitleKeywordColor = color;
         subtitleOutlineColor = outlineColor;
+        selectedSubtitleTemplate = 'custom';
       }),
       style: OutlinedButton.styleFrom(
         foregroundColor: Colors.white,
@@ -9999,50 +10963,100 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 return Stack(
                   clipBehavior: Clip.none,
                   children: [
-                    Center(
-                      child: Icon(
-                        Icons.person,
-                        size: 78,
-                        color: Colors.white.withValues(alpha: 0.45),
-                      ),
-                    ),
                     if (pipEnabled)
                       _pipPreviewLayer(canvasSize, updateDialog: updateDialog),
-                    Positioned(
-                      left: 10,
-                      right: 10,
-                      bottom: 14,
-                      child: Opacity(
-                        opacity: subtitlesEnabled ? 1 : 0.35,
-                        child: Text(
-                          previewText,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: subtitleColor,
-                            fontSize: subtitleSize.clamp(12, 56).toDouble(),
-                            fontFamily: selectedSubtitleFont,
-                            fontWeight: FontWeight.w900,
-                            height: 1.08,
-                            shadows: [
-                              Shadow(
-                                offset: const Offset(1.8, 1.8),
-                                color: subtitleOutlineColor,
-                              ),
-                              Shadow(
-                                offset: const Offset(-1.8, 1.8),
-                                color: subtitleOutlineColor,
-                              ),
-                              Shadow(
-                                offset: const Offset(1.8, -1.8),
-                                color: subtitleOutlineColor,
-                              ),
-                              Shadow(
-                                offset: const Offset(-1.8, -1.8),
-                                color: subtitleOutlineColor,
-                              ),
-                            ],
+                    Positioned.fill(
+                      child: Align(
+                        alignment: subtitlePosition == 'middle'
+                            ? Alignment.center
+                            : Alignment.bottomCenter,
+                        child: Padding(
+                          padding: EdgeInsets.only(
+                            left: 10,
+                            right: 10,
+                            bottom: subtitlePosition == 'middle'
+                                ? 0
+                                : subtitleMarginV * canvasSize.height / 1920,
+                          ),
+                          child: Opacity(
+                            opacity: subtitlesEnabled ? 1 : 0.35,
+                            child: Builder(
+                              builder: (context) {
+                                final previewFontSize =
+                                    (subtitleSize * canvasSize.height / 1920)
+                                        .clamp(8.0, 22.0)
+                                        .toDouble();
+                                final outlineOffset = (subtitleOutlineWidth *
+                                        canvasSize.height /
+                                        1920)
+                                    .clamp(0.7, 2.4)
+                                    .toDouble();
+                                final previewLines = previewText
+                                    .split('\n')
+                                    .take(2)
+                                    .toList(growable: false);
+                                final spans = <InlineSpan>[];
+                                for (var index = 0;
+                                    index < previewLines.length;
+                                    index++) {
+                                  if (index > 0)
+                                    spans.add(const TextSpan(text: '\n'));
+                                  spans.add(
+                                    TextSpan(
+                                      text: previewLines[index],
+                                      style: TextStyle(
+                                        color: previewLines.length > 1 &&
+                                                index == previewLines.length - 1
+                                            ? subtitleKeywordColor
+                                            : subtitleColor,
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return Text.rich(
+                                  TextSpan(children: spans),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: previewFontSize,
+                                    fontFamily: selectedSubtitleFont,
+                                    fontWeight: FontWeight.w900,
+                                    height: 1.08,
+                                    shadows: [
+                                      Shadow(
+                                        offset: Offset(
+                                          outlineOffset,
+                                          outlineOffset,
+                                        ),
+                                        color: subtitleOutlineColor,
+                                      ),
+                                      Shadow(
+                                        offset: Offset(
+                                          -outlineOffset,
+                                          outlineOffset,
+                                        ),
+                                        color: subtitleOutlineColor,
+                                      ),
+                                      Shadow(
+                                        offset: Offset(
+                                          outlineOffset,
+                                          -outlineOffset,
+                                        ),
+                                        color: subtitleOutlineColor,
+                                      ),
+                                      Shadow(
+                                        offset: Offset(
+                                          -outlineOffset,
+                                          -outlineOffset,
+                                        ),
+                                        color: subtitleOutlineColor,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
                           ),
                         ),
                       ),

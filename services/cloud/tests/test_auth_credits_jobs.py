@@ -1395,3 +1395,79 @@ def test_queued_job_times_out_after_24_hours_and_leaves_queue(monkeypatch, tmp_p
     assert main_module.store.queue_stats(worker_stale_seconds=600)["queued"] == 0
     wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
     assert wallet["frozen_points"] == 0
+
+
+def test_video_template_catalog_is_versioned_and_requires_account(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+
+    unauthorized = client.get("/api/client/video-templates")
+    assert unauthorized.status_code == 401
+
+    token = _activate(client)
+    response = client.get(
+        "/api/client/video-templates",
+        headers=_device_headers(token),
+    )
+
+    assert response.status_code == 200
+    catalog = response.json()
+    assert catalog["version"] == "2026.07.15.1"
+    assert catalog["cover_render_mode"] == "transparent_text_on_first_frame"
+    assert len(catalog["cover_templates"]) == 10
+    assert len(catalog["subtitle_templates"]) == 10
+    assert catalog["default_cover_template_id"] == "bold-yellow-white"
+    assert catalog["default_subtitle_template_id"] == "renovation_pitfall_yellow"
+
+
+def test_render_job_resolves_template_ids_to_versioned_styles(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    token = _activate(client)
+
+    response = client.post(
+        "/api/client/jobs",
+        headers=_device_headers(token),
+        json={
+            "job_type": "render",
+            "duration_seconds": 60,
+            "resolution": "1080p",
+            "payload": {
+                "script": "模板测试文案",
+                "cover_template_id": "bold-yellow-white",
+                "subtitle_style": {
+                    "template_id": "renovation_pitfall_yellow",
+                    "font_size": 66,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["payload"]
+    assert payload["template_catalog_version"] == "2026.07.15.1"
+    assert payload["cover_template"]["name"] == "黄白重磅"
+    assert payload["subtitle_template_id"] == "renovation_pitfall_yellow"
+    assert payload["subtitle_style"]["font_size"] == 66
+    assert payload["subtitle_style"]["keyword_color"] == "#FFE23B"
+    assert payload["subtitle_style"]["design_height"] == 1920
+
+
+def test_render_job_rejects_unknown_template_id(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    token = _activate(client)
+
+    response = client.post(
+        "/api/client/jobs",
+        headers=_device_headers(token),
+        json={
+            "job_type": "render",
+            "duration_seconds": 60,
+            "resolution": "1080p",
+            "payload": {
+                "script": "模板测试文案",
+                "cover_template_id": "does-not-exist",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "unknown cover template"

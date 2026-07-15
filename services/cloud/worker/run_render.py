@@ -37,7 +37,11 @@ RENDER_OPTION_KEYS = {
     "bgm_id",
     "bgm_volume",
     "subtitle_enabled",
+    "subtitle_template_id",
     "subtitle_style",
+    "cover_template_id",
+    "cover_template",
+    "template_catalog_version",
     "pip_enabled",
     "pip_asset_id",
     "pip_position",
@@ -489,6 +493,7 @@ def run_job(*, job_json: Path, output_path: Path, api_base: str) -> dict[str, An
     render_payload = build_render_payload(payload)
     bgm_asset = find_bgm_audio_asset(job)
     pip_asset = find_pip_asset(job)
+    cover_asset = find_cover_asset(job)
     voice_asset = find_voice_audio_asset(job)
     if voice_asset is not None:
         voice_path = Path(voice_asset["local_path"])
@@ -501,6 +506,7 @@ def run_job(*, job_json: Path, output_path: Path, api_base: str) -> dict[str, An
             output_path=output_path,
             bgm_asset=bgm_asset,
             pip_asset=pip_asset,
+            cover_asset=cover_asset,
             mode="heygem_direct",
         )
 
@@ -524,6 +530,7 @@ def run_job(*, job_json: Path, output_path: Path, api_base: str) -> dict[str, An
             output_path=output_path,
             bgm_asset=bgm_asset,
             pip_asset=pip_asset,
+            cover_asset=cover_asset,
             mode="cosyvoice_heygem_direct",
         )
         result["voice_reference_path"] = str(reference_path)
@@ -901,6 +908,10 @@ def find_pip_asset(job: dict[str, Any]) -> dict[str, Any] | None:
     return find_asset_by_kind(job, {"pip_asset", "picture_in_picture"})
 
 
+def find_cover_asset(job: dict[str, Any]) -> dict[str, Any] | None:
+    return find_asset_by_kind(job, {"thumbnail", "cover", "cover_image"})
+
+
 def find_asset_by_kind(job: dict[str, Any], kinds: set[str]) -> dict[str, Any] | None:
     payload = job.get("payload") or {}
     assets = list(job.get("input_assets") or payload.get("input_assets") or [])
@@ -1059,6 +1070,7 @@ def render_direct_pipeline(
     output_path: Path,
     bgm_asset: dict[str, Any] | None,
     pip_asset: dict[str, Any] | None,
+    cover_asset: dict[str, Any] | None,
     mode: str,
 ) -> dict[str, Any]:
     validate_direct_composition_assets(
@@ -1081,8 +1093,9 @@ def render_direct_pipeline(
 
     bgm_audio = Path(bgm_asset["local_path"]) if bgm_asset is not None else None
     pip_media = Path(pip_asset["local_path"]) if pip_asset is not None else None
+    cover_image = Path(cover_asset["local_path"]) if cover_asset is not None else None
     composition_diagnostics: dict[str, Any] = {}
-    if should_compose_final(render_payload, bgm_audio, pip_media):
+    if should_compose_final(render_payload, bgm_audio, pip_media, cover_image):
         compose_final_video(
             source_video=digital_path,
             voice_audio=voice_audio,
@@ -1090,6 +1103,7 @@ def render_direct_pipeline(
             output_path=output_path,
             bgm_audio=bgm_audio,
             pip_asset=pip_media,
+            cover_image=cover_image,
         )
         composition_diagnostics = dict(
             getattr(compose_final_video, "last_diagnostics", {}) or {}
@@ -1109,6 +1123,8 @@ def render_direct_pipeline(
         "pip_requested": render_payload.get("pip_enabled") is True,
         "pip_asset_path": str(pip_media) if pip_media is not None else None,
         "pip_composed": bool(composition_diagnostics.get("pip_composed")),
+        "cover_asset_path": str(cover_image) if cover_image is not None else None,
+        "cover_composed": bool(composition_diagnostics.get("cover_composed")),
         "composition": composition_diagnostics,
     }
 
@@ -1117,11 +1133,13 @@ def should_compose_final(
     render_payload: dict[str, Any],
     bgm_audio: Path | None,
     pip_asset: Path | None,
+    cover_image: Path | None,
 ) -> bool:
     return (
         render_payload.get("subtitle_enabled") is not False
         or bgm_audio is not None
         or (render_payload.get("pip_enabled") is True and pip_asset is not None)
+        or cover_image is not None
         or render_payload.get("voice_volume") is not None
     )
 
@@ -1151,6 +1169,7 @@ def compose_final_video(
     output_path: Path,
     bgm_audio: Path | None,
     pip_asset: Path | None,
+    cover_image: Path | None = None,
 ) -> None:
     ffmpeg = ffmpeg_executable()
     if ffmpeg is None:
@@ -1160,14 +1179,18 @@ def compose_final_video(
     command = [ffmpeg, "-y", "-i", str(source_video), "-i", str(voice_audio)]
     filter_parts: list[str] = []
     audio_output = "[aout]"
-    pip_input_index = 2
+    next_input_index = 2
+    bgm_input_index: int | None = None
+    pip_input_index: int | None = None
+    cover_input_index: int | None = None
 
     raw_voice_volume = render_payload.get("voice_volume")
     voice_volume = 0.45 if raw_voice_volume is None else float(raw_voice_volume)
     voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={voice_volume}"
     if bgm_audio is not None:
         command.extend(["-i", str(bgm_audio)])
-        pip_input_index = 3
+        bgm_input_index = next_input_index
+        next_input_index += 1
         raw_bgm_volume = render_payload.get("bgm_volume")
         bgm_volume = 0.35 if raw_bgm_volume is None else float(raw_bgm_volume)
         bgm_filter = (
@@ -1175,14 +1198,15 @@ def compose_final_video(
             "aloop=loop=-1:size=2147483647"
         )
         filter_parts.append(f"[1:a]{voice_filter}[voice]")
-        filter_parts.append(f"[2:a]{bgm_filter}[bgm]")
+        filter_parts.append(f"[{bgm_input_index}:a]{bgm_filter}[bgm]")
         filter_parts.append("[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]")
     else:
         filter_parts.append(f"[1:a]{voice_filter}[aout]")
 
     has_pip_filter = render_payload.get("pip_enabled") is True and pip_asset is not None
     has_subtitle_filter = render_payload.get("subtitle_enabled") is not False
-    has_video_filter = has_pip_filter or has_subtitle_filter
+    has_cover_filter = cover_image is not None
+    has_video_filter = has_pip_filter or has_subtitle_filter or has_cover_filter
     video_output = "0:v:0"
     if has_video_filter:
         canvas_width, canvas_height = canvas_dimensions(source_video)
@@ -1190,6 +1214,8 @@ def compose_final_video(
         filter_parts.append(portrait_main_video_filter(canvas_width, canvas_height))
     pip_composed = False
     if has_pip_filter:
+        pip_input_index = next_input_index
+        next_input_index += 1
         if pip_asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
             command.extend(["-loop", "1", "-i", str(pip_asset)])
         else:
@@ -1218,11 +1244,29 @@ def compose_final_video(
         subtitle_file = output_path.with_suffix(".srt")
         generate_srt_file(script, style, subtitle_file, voice_duration)
         subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+        subtitle_output = "[subv]" if has_cover_filter else "[vout]"
         filter_parts.append(
-            f"{video_input}subtitles='{subtitle_path}':force_style='{subtitle_force_style(style)}'[vout]"
+            f"{video_input}subtitles='{subtitle_path}':force_style='{subtitle_force_style(style)}'{subtitle_output}"
+        )
+        video_input = subtitle_output
+        video_output = subtitle_output
+
+    cover_composed = False
+    if has_cover_filter:
+        cover_input_index = next_input_index
+        command.extend(["-loop", "1", "-i", str(cover_image)])
+        filter_parts.append(
+            f"[{cover_input_index}:v]scale={canvas_width}:{canvas_height}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{canvas_height},setsar=1,format=rgba,"
+            "trim=end_frame=1,setpts=PTS-STARTPTS[coverv]"
+        )
+        filter_parts.append(
+            f"{video_input}[coverv]overlay=0:0:enable='eq(n\\,0)':"
+            "eof_action=pass:repeatlast=0[vout]"
         )
         video_output = "[vout]"
-    elif has_video_filter:
+        cover_composed = True
+    elif has_video_filter and not has_subtitle_filter:
         filter_parts.append(f"{video_input}null[vout]")
         video_output = "[vout]"
 
@@ -1264,6 +1308,8 @@ def compose_final_video(
     compose_final_video.last_diagnostics = {
         "pip_composed": pip_composed,
         "pip_asset": str(pip_asset) if pip_asset is not None else None,
+        "cover_composed": cover_composed,
+        "cover_asset": str(cover_image) if cover_image is not None else None,
         "filter_complex": ";".join(filter_parts),
     }
 
@@ -1776,12 +1822,19 @@ def generate_srt_file(
 ) -> None:
     lines = wrap_text(script, int(style.get("max_chars_per_line") or DEFAULT_SUBTITLE_CHARS_PER_LINE))
     seconds_per_line = 1.0 if not duration_seconds else max(0.8, duration_seconds / max(1, len(lines)))
+    keyword_color = str(style.get("keyword_color") or "").strip()
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", keyword_color):
+        keyword_color = ""
     blocks = []
     for index, line in enumerate(lines, start=1):
         start = (index - 1) * seconds_per_line
         end = index * seconds_per_line
         if duration_seconds is not None and index == len(lines):
             end = max(end, duration_seconds)
+        if keyword_color and "\n" in line:
+            line_parts = line.splitlines()
+            line_parts[-1] = f'<font color="{keyword_color}">{line_parts[-1]}</font>'
+            line = "\n".join(line_parts)
         blocks.append(f"{index}\n{format_timestamp(start)} --> {format_timestamp(end)}\n{line}\n")
     output_path.write_text("\n".join(blocks), encoding="utf-8")
 
@@ -1798,18 +1851,38 @@ def format_timestamp(seconds: float) -> str:
 
 
 def subtitle_force_style(style: dict[str, Any]) -> str:
+    try:
+        design_height = float(style.get("design_height") or 0)
+    except (TypeError, ValueError):
+        design_height = 0
+    scale = 288 / design_height if design_height > 0 else 1.0
+    font_size = max(1.0, float(style.get("font_size") or 12) * scale)
+    outline_width = max(
+        0.0,
+        float(style.get("outline_width") or DEFAULT_SUBTITLE_OUTLINE_WIDTH) * scale,
+    )
+    margin_v = max(
+        0,
+        int(float(style.get("margin_v") or DEFAULT_SUBTITLE_MARGIN_V) * scale + 0.5),
+    )
+    position = str(style.get("position") or "bottom").strip().lower()
+    alignment = 8 if position == "top" else 5 if position in {"middle", "center", "centre"} else 2
+
+    def ass_number(value: float) -> str:
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
     return ",".join(
         [
             f"FontName={style.get('font_family') or 'Microsoft YaHei'}",
-            f"FontSize={int(style.get('font_size') or 12)}",
+            f"FontSize={ass_number(font_size)}",
             "Bold=1",
             "BorderStyle=1",
-            f"Outline={int(style.get('outline_width') or DEFAULT_SUBTITLE_OUTLINE_WIDTH)}",
+            f"Outline={ass_number(outline_width)}",
             "Shadow=0",
             f"PrimaryColour={ass_color(str(style.get('color') or '#FFE600'), '#FFE600')}",
             f"OutlineColour={ass_color(str(style.get('outline_color') or '#000000'), '#000000')}",
-            "Alignment=2",
-            f"MarginV={int(style.get('margin_v') or DEFAULT_SUBTITLE_MARGIN_V)}",
+            f"Alignment={alignment}",
+            f"MarginV={margin_v}",
         ]
     )
 
