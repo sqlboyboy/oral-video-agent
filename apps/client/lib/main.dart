@@ -158,7 +158,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 5,
       font: 'Microsoft YaHei',
       position: 'bottom',
-      marginV: 390,
+      marginV: 510,
       maxChars: 9,
     ),
     (
@@ -174,7 +174,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 2,
       font: 'Microsoft YaHei UI',
       position: 'bottom',
-      marginV: 360,
+      marginV: 480,
       maxChars: 10,
     ),
     (
@@ -190,7 +190,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 4,
       font: 'SimHei',
       position: 'bottom',
-      marginV: 380,
+      marginV: 500,
       maxChars: 9,
     ),
     (
@@ -222,7 +222,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 2,
       font: 'Microsoft YaHei',
       position: 'bottom',
-      marginV: 370,
+      marginV: 490,
       maxChars: 9,
     ),
     (
@@ -238,7 +238,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 4,
       font: 'Microsoft YaHei UI',
       position: 'bottom',
-      marginV: 400,
+      marginV: 520,
       maxChars: 9,
     ),
     (
@@ -254,7 +254,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 5,
       font: 'Microsoft YaHei',
       position: 'bottom',
-      marginV: 380,
+      marginV: 500,
       maxChars: 10,
     ),
     (
@@ -270,7 +270,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 3,
       font: 'Microsoft YaHei UI',
       position: 'bottom',
-      marginV: 360,
+      marginV: 480,
       maxChars: 10,
     ),
     (
@@ -286,7 +286,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 2,
       font: 'SimSun',
       position: 'bottom',
-      marginV: 390,
+      marginV: 510,
       maxChars: 8,
     ),
     (
@@ -302,7 +302,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       outlineWidth: 1,
       font: 'KaiTi',
       position: 'bottom',
-      marginV: 420,
+      marginV: 540,
       maxChars: 8,
     ),
   ];
@@ -452,7 +452,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Color subtitleOutlineColor = const Color(0xFF111111);
   int subtitleOutlineWidth = 5;
   String subtitlePosition = 'bottom';
-  int subtitleMarginV = 390;
+  int subtitleMarginV = 510;
+  double subtitleX = 0.5;
+  double subtitleY = 0.62;
   int subtitleMaxCharsPerLine = 9;
   List<String> subtitlePreviewLines = const [];
   bool pipEnabled = false;
@@ -4244,6 +4246,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         ),
                       ],
                       const SizedBox(height: 12),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '在画面中直接拖动字幕调整位置；拖动画中画可调整画中画位置。',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       _subtitlePreviewBox(updateDialog: updateDialog),
                     ],
                   ),
@@ -5649,6 +5659,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'font_family': selectedSubtitleFont,
       'position': subtitlePosition,
       'margin_v': subtitleMarginV,
+      'position_x': subtitleX,
+      'position_y': subtitleY,
       'max_chars_per_line': subtitleMaxCharsPerLine,
     };
   }
@@ -6814,9 +6826,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        outputUrl != null
-                            ? _cloudOutputLabel
-                            : '等待生成后可预览与下载',
+                        outputUrl != null ? _cloudOutputLabel : '等待生成后可预览与下载',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style:
@@ -10506,6 +10516,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       selectedSubtitleFont = template.font;
       subtitlePosition = template.position;
       subtitleMarginV = template.marginV;
+      subtitleX = 0.5;
+      subtitleY = template.position == 'middle'
+          ? 0.44
+          : (1 - template.marginV / 1920 - (template.fontSize * 1.8 + 8) / 1920)
+              .clamp(0.0, 0.9)
+              .toDouble();
       subtitleMaxCharsPerLine = template.maxChars;
     }
 
@@ -10934,6 +10950,156 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  Rect _subtitleNormalizedRect() {
+    final width = ((subtitleMaxCharsPerLine * subtitleSize * 0.92 + 80) / 1080)
+        .clamp(0.34, 0.9)
+        .toDouble();
+    final height =
+        ((subtitleSize * 1.8 + 8) / 1920).clamp(0.055, 0.18).toDouble();
+    final left =
+        (subtitleX - width / 2).clamp(0.0, math.max(0.0, 1 - width)).toDouble();
+    final customTop =
+        subtitleY.clamp(0.0, math.max(0.0, 1 - height)).toDouble();
+    final top = switch (subtitlePosition) {
+      'custom' => customTop,
+      'top' => (subtitleMarginV / 1920)
+          .clamp(0.0, math.max(0.0, 1 - height))
+          .toDouble(),
+      'middle' || 'center' => (1 - height) / 2,
+      _ => (1 - subtitleMarginV / 1920 - height)
+          .clamp(0.0, math.max(0.0, 1 - height))
+          .toDouble(),
+    };
+    return Rect.fromLTWH(left, top, width, height);
+  }
+
+  Rect _subtitleCanvasRect(Size canvasSize) {
+    final rect = _subtitleNormalizedRect();
+    return Rect.fromLTWH(
+      rect.left * canvasSize.width,
+      rect.top * canvasSize.height,
+      rect.width * canvasSize.width,
+      rect.height * canvasSize.height,
+    );
+  }
+
+  void _dragSubtitle(
+    DragUpdateDetails details,
+    Size canvasSize,
+    void Function(VoidCallback update)? updateDialog,
+  ) {
+    if (!subtitlesEnabled || canvasSize.width <= 0 || canvasSize.height <= 0) {
+      return;
+    }
+    final currentRect = _subtitleNormalizedRect();
+    _updatePreviewState(() {
+      if (subtitlePosition != 'custom') {
+        subtitleX = currentRect.center.dx;
+        subtitleY = currentRect.top;
+      }
+      subtitlePosition = 'custom';
+      selectedSubtitleTemplate = 'custom';
+      subtitleX = (subtitleX + details.delta.dx / canvasSize.width)
+          .clamp(currentRect.width / 2, 1 - currentRect.width / 2)
+          .toDouble();
+      subtitleY = (subtitleY + details.delta.dy / canvasSize.height)
+          .clamp(0.0, math.max(0.0, 1 - currentRect.height))
+          .toDouble();
+    }, updateDialog);
+  }
+
+  Widget _subtitlePreviewLayer(
+    String previewText,
+    Size canvasSize, {
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final rect = _subtitleCanvasRect(canvasSize);
+    final previewFontSize =
+        (subtitleSize * canvasSize.height / 1920).clamp(8.0, 22.0).toDouble();
+    final outlineOffset = (subtitleOutlineWidth * canvasSize.height / 1920)
+        .clamp(0.7, 2.4)
+        .toDouble();
+    final previewLines =
+        previewText.split('\n').take(2).toList(growable: false);
+    final spans = <InlineSpan>[];
+    for (var index = 0; index < previewLines.length; index++) {
+      if (index > 0) spans.add(const TextSpan(text: '\n'));
+      spans.add(
+        TextSpan(
+          text: previewLines[index],
+          style: TextStyle(
+            color: previewLines.length > 1 && index == previewLines.length - 1
+                ? subtitleKeywordColor
+                : subtitleColor,
+          ),
+        ),
+      );
+    }
+    return Positioned(
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      child: MouseRegion(
+        cursor: subtitlesEnabled
+            ? SystemMouseCursors.move
+            : SystemMouseCursors.basic,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanUpdate: subtitlesEnabled
+              ? (details) => _dragSubtitle(details, canvasSize, updateDialog)
+              : null,
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: subtitlesEnabled
+                    ? cyan.withValues(alpha: 0.75)
+                    : Colors.white24,
+              ),
+              borderRadius: BorderRadius.circular(5),
+              color: Colors.black.withValues(alpha: 0.08),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Opacity(
+              opacity: subtitlesEnabled ? 1 : 0.35,
+              child: Text.rich(
+                TextSpan(children: spans),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: previewFontSize,
+                  fontFamily: selectedSubtitleFont,
+                  fontWeight: FontWeight.w900,
+                  height: 1.08,
+                  shadows: [
+                    Shadow(
+                      offset: Offset(outlineOffset, outlineOffset),
+                      color: subtitleOutlineColor,
+                    ),
+                    Shadow(
+                      offset: Offset(-outlineOffset, outlineOffset),
+                      color: subtitleOutlineColor,
+                    ),
+                    Shadow(
+                      offset: Offset(outlineOffset, -outlineOffset),
+                      color: subtitleOutlineColor,
+                    ),
+                    Shadow(
+                      offset: Offset(-outlineOffset, -outlineOffset),
+                      color: subtitleOutlineColor,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _subtitlePreviewBox({
     void Function(VoidCallback update)? updateDialog,
   }) {
@@ -10965,101 +11131,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   children: [
                     if (pipEnabled)
                       _pipPreviewLayer(canvasSize, updateDialog: updateDialog),
-                    Positioned.fill(
-                      child: Align(
-                        alignment: subtitlePosition == 'middle'
-                            ? Alignment.center
-                            : Alignment.bottomCenter,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            left: 10,
-                            right: 10,
-                            bottom: subtitlePosition == 'middle'
-                                ? 0
-                                : subtitleMarginV * canvasSize.height / 1920,
-                          ),
-                          child: Opacity(
-                            opacity: subtitlesEnabled ? 1 : 0.35,
-                            child: Builder(
-                              builder: (context) {
-                                final previewFontSize =
-                                    (subtitleSize * canvasSize.height / 1920)
-                                        .clamp(8.0, 22.0)
-                                        .toDouble();
-                                final outlineOffset = (subtitleOutlineWidth *
-                                        canvasSize.height /
-                                        1920)
-                                    .clamp(0.7, 2.4)
-                                    .toDouble();
-                                final previewLines = previewText
-                                    .split('\n')
-                                    .take(2)
-                                    .toList(growable: false);
-                                final spans = <InlineSpan>[];
-                                for (var index = 0;
-                                    index < previewLines.length;
-                                    index++) {
-                                  if (index > 0)
-                                    spans.add(const TextSpan(text: '\n'));
-                                  spans.add(
-                                    TextSpan(
-                                      text: previewLines[index],
-                                      style: TextStyle(
-                                        color: previewLines.length > 1 &&
-                                                index == previewLines.length - 1
-                                            ? subtitleKeywordColor
-                                            : subtitleColor,
-                                      ),
-                                    ),
-                                  );
-                                }
-                                return Text.rich(
-                                  TextSpan(children: spans),
-                                  textAlign: TextAlign.center,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: previewFontSize,
-                                    fontFamily: selectedSubtitleFont,
-                                    fontWeight: FontWeight.w900,
-                                    height: 1.08,
-                                    shadows: [
-                                      Shadow(
-                                        offset: Offset(
-                                          outlineOffset,
-                                          outlineOffset,
-                                        ),
-                                        color: subtitleOutlineColor,
-                                      ),
-                                      Shadow(
-                                        offset: Offset(
-                                          -outlineOffset,
-                                          outlineOffset,
-                                        ),
-                                        color: subtitleOutlineColor,
-                                      ),
-                                      Shadow(
-                                        offset: Offset(
-                                          outlineOffset,
-                                          -outlineOffset,
-                                        ),
-                                        color: subtitleOutlineColor,
-                                      ),
-                                      Shadow(
-                                        offset: Offset(
-                                          -outlineOffset,
-                                          -outlineOffset,
-                                        ),
-                                        color: subtitleOutlineColor,
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
+                    _subtitlePreviewLayer(
+                      previewText,
+                      canvasSize,
+                      updateDialog: updateDialog,
                     ),
                   ],
                 );

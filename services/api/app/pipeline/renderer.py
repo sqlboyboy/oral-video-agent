@@ -307,23 +307,54 @@ def _subtitle_force_style(options: RenderOptions) -> str:
     font_size = max(1.0, style.font_size * scale)
     outline_width = max(0.0, style.outline_width * scale)
     margin_v = max(0, int(style.margin_v * scale + 0.5))
+    alignment = _subtitle_alignment(style.position)
+    margin_l: int | None = None
+    margin_r: int | None = None
+    if (style.position or "").strip().lower() == "custom":
+        design_width = 1080
+        logical_width = 384
+        box_width = max(
+            360.0,
+            min(
+                980.0,
+                style.max_chars_per_line * style.font_size * 0.92 + 80,
+            ),
+        )
+        center_x = max(0.0, min(1.0, style.position_x)) * design_width
+        left = max(0.0, min(design_width - box_width, center_x - box_width / 2))
+        right = design_width - left - box_width
+        margin_l = max(0, int(left * logical_width / design_width + 0.5))
+        margin_r = max(0, int(right * logical_width / design_width + 0.5))
+        margin_v = max(0, int(max(0.0, min(1.0, style.position_y)) * 288 + 0.5))
+        alignment = 8
 
     def ass_number(value: float) -> str:
         return f"{value:.2f}".rstrip("0").rstrip(".")
 
-    return ",".join(
-        [
-            f"FontName={style.font_family}",
-            f"FontSize={ass_number(font_size)}",
-            "Bold=1",
-            "BorderStyle=1",
-            f"Outline={ass_number(outline_width)}",
-            "Shadow=0",
-            f"PrimaryColour={_ass_color(style.color, '#FFE600')}",
-            f"OutlineColour={_ass_color(style.outline_color, '#000000')}",
-            f"Alignment={_subtitle_alignment(style.position)}",
-            f"MarginV={margin_v}",
-        ]
+    parts = [
+        f"FontName={style.font_family}",
+        f"FontSize={ass_number(font_size)}",
+        "Bold=1",
+        "BorderStyle=1",
+        f"Outline={ass_number(outline_width)}",
+        "Shadow=0",
+        f"PrimaryColour={_ass_color(style.color, '#FFE600')}",
+        f"OutlineColour={_ass_color(style.outline_color, '#000000')}",
+        f"Alignment={alignment}",
+        f"MarginV={margin_v}",
+    ]
+    if margin_l is not None and margin_r is not None:
+        parts.extend([f"MarginL={margin_l}", f"MarginR={margin_r}"])
+    return ",".join(parts)
+
+
+def _subtitle_filter(subtitle_file: Path, options: RenderOptions) -> str:
+    subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+    if subtitle_file.suffix.lower() == ".ass":
+        return f"subtitles='{subtitle_path}'"
+    return (
+        f"subtitles='{subtitle_path}':"
+        f"force_style='{_subtitle_force_style(options)}'"
     )
 
 
@@ -639,9 +670,9 @@ class Renderer:
             video_input = "[basev]"
 
         if has_subtitle_filter:
-            subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
-            force_style = _subtitle_force_style(options)
-            filter_parts.append(f"{video_input}subtitles='{subtitle_path}':force_style='{force_style}'[vout]")
+            filter_parts.append(
+                f"{video_input}{_subtitle_filter(subtitle_file, options)}[vout]"
+            )
             video_output = "[vout]"
         elif has_video_filter:
             filter_parts.append(f"{video_input}null[vout]")
@@ -743,9 +774,9 @@ class Renderer:
             video_input = "[basev]"
 
         if has_subtitle_filter:
-            subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
-            force_style = _subtitle_force_style(options)
-            filter_parts.append(f"{video_input}subtitles='{subtitle_path}':force_style='{force_style}'[vout]")
+            filter_parts.append(
+                f"{video_input}{_subtitle_filter(subtitle_file, options)}[vout]"
+            )
             video_output = "[vout]"
         elif has_video_filter:
             filter_parts.append(f"{video_input}null[vout]")

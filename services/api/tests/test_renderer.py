@@ -60,11 +60,59 @@ def test_build_ffmpeg_command_maps_video_voice_bgm_and_subtitles(tmp_path):
     assert "subtitles=" in filter_complex
     assert "FontSize=9.6" in filter_complex
     assert "Outline=0.75" in filter_complex
-    assert "MarginV=59" in filter_complex
+    assert "MarginV=77" in filter_complex
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-crf") + 1] == "18"
     assert "-r" not in command
     assert command[-1] == str(output)
+
+
+def test_custom_subtitle_position_maps_drag_coordinates_to_libass(tmp_path):
+    renderer = Renderer()
+    source = tmp_path / "source.mp4"
+    voice = tmp_path / "voice.wav"
+    subtitle = tmp_path / "subtitle.srt"
+    output = tmp_path / "output.mp4"
+
+    command = renderer.build_ffmpeg_command(
+        source,
+        voice,
+        subtitle,
+        RenderOptions(
+            subtitle_style={
+                "position": "custom",
+                "position_x": 0.7,
+                "position_y": 0.31,
+            }
+        ),
+        output,
+    )
+
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "Alignment=8" in filter_complex
+    assert "MarginV=89" in filter_complex
+    assert "MarginL=160" in filter_complex
+    assert "MarginR=7" in filter_complex
+
+
+def test_ass_subtitles_keep_native_portrait_coordinates(tmp_path):
+    renderer = Renderer()
+    source = tmp_path / "source.mp4"
+    voice = tmp_path / "voice.wav"
+    subtitle = tmp_path / "subtitle.ass"
+    output = tmp_path / "output.mp4"
+
+    command = renderer.build_ffmpeg_command(
+        source,
+        voice,
+        subtitle,
+        RenderOptions(),
+        output,
+    )
+
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert "subtitles=" in filter_complex
+    assert "force_style=" not in filter_complex
 
 
 def test_build_ffmpeg_command_overlays_pip_with_timing(tmp_path):

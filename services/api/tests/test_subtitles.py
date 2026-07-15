@@ -1,5 +1,5 @@
 from app.models import SubtitleStyle
-from app.pipeline.subtitles import generate_srt, preview_subtitles
+from app.pipeline.subtitles import generate_ass, generate_srt, preview_subtitles
 from app.pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from fastapi.testclient import TestClient
 
@@ -16,7 +16,7 @@ def test_subtitle_style_defaults_to_first_template():
     assert style.font_size == 64
     assert style.max_chars_per_line == 9
     assert style.outline_width == 5
-    assert style.margin_v == 390
+    assert style.margin_v == 510
 
 
 def test_preview_subtitles_wraps_long_sentence_inside_caption():
@@ -52,6 +52,30 @@ def test_generate_srt_applies_template_keyword_color_to_second_line(tmp_path):
 
     text = output.read_text(encoding="utf-8")
     assert 'abcdef\n<font color="#FFE23B">ghijkl</font>' in text
+
+
+def test_generate_ass_uses_portrait_canvas_and_exact_drag_position(tmp_path):
+    output = tmp_path / "subtitle.ass"
+
+    generate_ass(
+        "abcdefghijkl",
+        SubtitleStyle(
+            font_size=54,
+            position="custom",
+            position_x=0.7,
+            position_y=0.31,
+            max_chars_per_line=6,
+            keyword_color="#43B8FF",
+        ),
+        output,
+    )
+
+    text = output.read_text(encoding="utf-8")
+    assert "PlayResX: 1080" in text
+    assert "PlayResY: 1920" in text
+    assert "Style: Default,Microsoft YaHei,54" in text
+    assert r"{\an8\pos(756,595)}abcdef\N" in text
+    assert r"{\c&H00FFB843&}ghijkl" in text
 
 
 def test_subtitle_preview_endpoint_returns_multiline_caption_and_style():

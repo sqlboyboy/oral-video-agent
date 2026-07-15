@@ -27,7 +27,9 @@ class SubtitleStyle(BaseModel):
     outline_width: int = Field(default=5, ge=0, le=8)
     font_family: str = "Microsoft YaHei"
     position: str = "bottom"
-    margin_v: int = Field(default=390, ge=0, le=500)
+    margin_v: int = Field(default=510, ge=0, le=1200)
+    position_x: float = Field(default=0.5, ge=0, le=1)
+    position_y: float = Field(default=0.62, ge=0, le=1)
     max_chars_per_line: int = Field(default=9, ge=6, le=40)
 
 

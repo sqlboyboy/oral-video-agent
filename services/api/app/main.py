@@ -33,7 +33,7 @@ from .pipeline.renderer import (
     prepare_video_for_audio_duration,
 )
 from .progress import complete_progress, fail_progress, start_progress
-from .pipeline.subtitles import generate_srt, preview_subtitles, subtitle_time_range_for_text
+from .pipeline.subtitles import generate_ass, preview_subtitles, subtitle_time_range_for_text
 from .pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
@@ -1848,8 +1848,8 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         start_progress(task, "subtitle")
         repo.put(task)
         if options.subtitle_enabled:
-            subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
-            generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=audio_duration)
+            subtitle_path = storage_dir("subtitles") / f"{task_id}.ass"
+            generate_ass(script, options.subtitle_style, subtitle_path, duration_seconds=audio_duration)
             task.subtitle_path = str(subtitle_path)
         else:
             task.subtitle_path = None
@@ -2032,11 +2032,11 @@ def generate_task_subtitles(task_id: str, options: RenderOptions) -> OralVideoTa
     task.render_options = options
     start_progress(task, "subtitle")
     if options.subtitle_enabled:
-        subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
+        subtitle_path = storage_dir("subtitles") / f"{task_id}.ass"
         duration = media_duration_seconds(task.extracted_audio_path)
         if duration is None and task.source_video:
             duration = media_duration_seconds(task.source_video.path)
-        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        generate_ass(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
         task.subtitle_path = str(subtitle_path)
     else:
         task.subtitle_path = None
@@ -2145,8 +2145,8 @@ def postprocess_video(request: PostprocessVideoRequest):
     postprocess_id = f"postprocess-{uuid4()}"
     subtitle_path: Path | None = None
     if options.subtitle_enabled:
-        subtitle_path = storage_dir("subtitles") / f"{postprocess_id}.srt"
-        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        subtitle_path = storage_dir("subtitles") / f"{postprocess_id}.ass"
+        generate_ass(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
 
     output_path = storage_dir("outputs") / f"{postprocess_id}.mp4"
     try:
