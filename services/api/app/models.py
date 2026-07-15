@@ -79,6 +79,12 @@ class CreateTaskRequest(BaseModel):
     title: Optional[str] = None
 
 
+class CreateScriptTaskRequest(BaseModel):
+    title: Optional[str] = None
+    original_script: str = ""
+    rewritten_script: str = Field(min_length=1)
+
+
 class UpdateTaskRequest(BaseModel):
     title: Optional[str] = None
 
@@ -94,6 +100,46 @@ class RewriteRequest(BaseModel):
     product_info: str = ""
     target_audience: str = ""
     duration_seconds: Optional[int] = Field(default=None, ge=5, le=600)
+
+
+class CreatorStyleProfile(BaseModel):
+    creator_name: str = ""
+    summary: str = ""
+    tone: List[str] = Field(default_factory=list)
+    hook_patterns: List[str] = Field(default_factory=list)
+    structure_patterns: List[str] = Field(default_factory=list)
+    language_features: List[str] = Field(default_factory=list)
+    audience: str = ""
+    cta_patterns: List[str] = Field(default_factory=list)
+    source_count: int = Field(default=0, ge=0)
+    sec_uid: Optional[str] = None
+
+
+class CreatorScriptCandidate(BaseModel):
+    candidate_id: str
+    title: str
+    angle: str
+    script: str
+    reason: str = ""
+
+
+class CreatorScriptGenerateRequest(BaseModel):
+    share_text: str = Field(default="", max_length=5000)
+    keyword: str = Field(min_length=1, max_length=100)
+    count: int = Field(default=8, ge=8, le=8)
+    duration_seconds: int = Field(default=60, ge=15, le=300)
+    style_profile: Optional[CreatorStyleProfile] = None
+    generation_round: int = Field(default=1, ge=1, le=100)
+    exclude_titles: List[str] = Field(default_factory=list, max_length=100)
+
+
+class CreatorScriptBatchResponse(BaseModel):
+    batch_id: str
+    creator_name: str
+    keyword: str
+    generation_round: int
+    style_profile: CreatorStyleProfile
+    items: List[CreatorScriptCandidate]
 
 
 class PublishRequest(BaseModel):

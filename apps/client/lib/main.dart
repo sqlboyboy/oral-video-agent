@@ -17,6 +17,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'audio_volume.dart';
+import 'creator_script_lab.dart';
 
 part 'mobile.dart';
 part 'mobile_updater.dart';
@@ -350,6 +351,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final audienceController = TextEditingController();
   final originalScriptController = TextEditingController();
   final rewrittenScriptController = TextEditingController();
+  final creatorHomepageController = TextEditingController();
+  final creatorKeywordController = TextEditingController();
   final publisherNicknameController = TextEditingController();
   final publishTitleController = TextEditingController();
   final publishBodyController = TextEditingController();
@@ -401,6 +404,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   bool messageIsError = false;
   String publishContentGeneratedKey = '';
   String generationMode = 'cloud';
+  String scriptCreationMode = 'rewrite';
+  String creatorSelectedLabel = '';
   String cloudActivationToken = '';
   bool cloudActivationValid = false;
   String cloudDeviceToken = '';
@@ -519,6 +524,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     audienceController.dispose();
     originalScriptController.dispose();
     rewrittenScriptController.dispose();
+    creatorHomepageController.dispose();
+    creatorKeywordController.dispose();
     publisherNicknameController.dispose();
     publishTitleController.dispose();
     publishBodyController.dispose();
@@ -2663,6 +2670,127 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() => task = body);
       _syncEditors(body);
     });
+  }
+
+  Future<void> openCreatorScriptLab() async {
+    if (!_ensureSoftwareActivated()) return;
+    if (renderingVideo || finalizingVideo || _cloudVoiceJobActive) {
+      showError('当前正在生成声音或视频，请等待任务完成后再开始新的文案创作');
+      return;
+    }
+    final shareText = creatorHomepageController.text.trim();
+    final keyword = creatorKeywordController.text.trim();
+    if (shareText.isEmpty) {
+      showError('请粘贴抖音主页链接或从“4-”开始到结尾的完整分享文案');
+      return;
+    }
+    if (keyword.isEmpty) {
+      showError('请输入创作关键词，例如“装修”');
+      return;
+    }
+    if (!localApiOnline) {
+      showError('本地创作服务未连接，请点击顶部刷新后重试');
+      return;
+    }
+
+    final selection = await showDialog<CreatorScriptSelection>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => CreatorScriptLabDialog(
+        apiBase: apiBase,
+        shareText: shareText,
+        keyword: keyword,
+      ),
+    );
+    if (selection == null || !mounted) return;
+    if (renderingVideo || finalizingVideo || _cloudVoiceJobActive) {
+      showError('当前正在生成声音或视频，暂时不能替换文案');
+      return;
+    }
+    final script = selection.candidate.script.trim();
+    if (script.isEmpty) return;
+    setState(() {
+      loading = true;
+      message = '正在保存选中的文案';
+      messageIsError = false;
+    });
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$apiBase/api/tasks/from-script'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'title': selection.candidate.title,
+              'original_script': '',
+              'rewritten_script': script,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+      _check(response);
+      final persistedTask =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final persistedTaskId = persistedTask['task_id']?.toString() ?? '';
+      if (!persistedTaskId.startsWith('cloud-deep-')) {
+        throw Exception('服务没有正确保存深度学习文案任务');
+      }
+      if (!mounted) return;
+      _stopCloudPolling();
+      _stopRenderPolling();
+      renderedSubtitlePreviewDebounce?.cancel();
+      renderedSubtitlePreviewDebounce = null;
+      setState(() {
+        generationMode = 'cloud';
+        originalScriptController.clear();
+        rewrittenScriptController.text = script;
+        task = {
+          ...persistedTask,
+          'status': persistedTask['status'] ?? 'rewritten',
+          'original_script': '',
+          'rewritten_script': script,
+          'progress_steps': persistedTask['progress_steps'] ?? const [],
+          'creator_name': selection.creatorName,
+          'creator_keyword': selection.keyword,
+          'creator_candidate_title': selection.candidate.title,
+        };
+        creatorSelectedLabel = selection.candidate.title.isEmpty
+            ? '已选择网红风格候选文案'
+            : selection.candidate.title;
+        output = null;
+        cloudJob = null;
+        cloudDouyinTranscription = null;
+        cloudEstimate = null;
+        mouthAtlasDiagnosis = null;
+        cloudSourceVideoPath = '';
+        cloudSourceVideoName = '';
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        intermediateVideoPath = '';
+        finalOutputVideoPath = '';
+        generatedVideoKey = '';
+        finalVideoKey = '';
+        coverPath = '';
+        _invalidateGeneratedVoice();
+        subtitlePreviewLines = const [];
+        renderedSubtitlePreviewBytes = null;
+        renderedSubtitlePreviewKey = '';
+        renderingSubtitlePreview = false;
+        renderedSubtitlePreviewRequestSerial++;
+        publishContentGeneratedKey = '';
+        publishTitleController.clear();
+        publishBodyController.clear();
+        publishTopicsController.clear();
+        outputRefresh++;
+        message = selection.creatorName.trim().isEmpty
+            ? '已选用网红风格文案，后续将按云端流程生成声音和视频'
+            : '已选用 ${selection.creatorName} 风格文案，后续将按云端流程生成声音和视频';
+        messageIsError = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      showError(_friendlyError(error));
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
   }
 
   Future<void> generateTitle() async {
@@ -6821,6 +6949,222 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _studioScriptStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _scriptCreationModeSelector(),
+        const SizedBox(height: 18),
+        if (scriptCreationMode == 'creator')
+          _studioCreatorScriptMode()
+        else
+          _studioVideoRewriteMode(),
+      ],
+    );
+  }
+
+  Widget _scriptCreationModeSelector() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F2F7),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: studioBorder),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _scriptCreationModeOption(
+              value: 'rewrite',
+              title: '视频仿写',
+              subtitle: '提取单条视频文案后智能改写',
+              icon: Icons.video_library_outlined,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: _scriptCreationModeOption(
+              value: 'creator',
+              title: '网红风格创作',
+              subtitle: '深度学习主页风格，一次生成 8 篇',
+              icon: Icons.psychology_alt_rounded,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _scriptCreationModeOption({
+    required String value,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+  }) {
+    final selected = scriptCreationMode == value;
+    return Material(
+      color: selected ? Colors.white : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() => scriptCreationMode = value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected ? const Color(0xFFBEC1FF) : Colors.transparent,
+            ),
+            boxShadow: selected
+                ? const [
+                    BoxShadow(
+                      color: Color(0x10000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? const Color(0xFFEEEFFF)
+                      : const Color(0xFFE5E7ED),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  icon,
+                  color: selected ? studioPrimary : studioMuted,
+                  size: 21,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: selected ? studioPrimaryDark : studioInk,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: studioMuted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: studioPrimary,
+                  size: 19,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _studioCreatorScriptMode() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip(
+          '复制网红抖音主页的完整分享内容，系统会分析主页简介和近期作品风格，再结合你的关键词生成 8 篇全新口播文案。',
+        ),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '网红主页与创作关键词',
+          subtitle: '从“4-”开始到末尾的整段抖音主页分享内容都可以直接粘贴',
+          icon: Icons.person_search_rounded,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: creatorHomepageController,
+                minLines: 3,
+                maxLines: 4,
+                decoration: _inputDecoration(
+                  '粘贴抖音主页链接或完整分享文案，例如：4- 长按复制此条消息…… https://v.douyin.com/……',
+                ),
+              ),
+              const SizedBox(height: 10),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final stacked = constraints.maxWidth < 620;
+                  final keywordInput = _input(
+                    creatorKeywordController,
+                    '输入创作关键词，例如：装修',
+                  );
+                  final generateButton = _stepButton(
+                    '分析风格并生成 8 篇',
+                    openCreatorScriptLab,
+                  );
+                  if (stacked) {
+                    return Column(
+                      children: [
+                        keywordInput,
+                        const SizedBox(height: 10),
+                        generateButton,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: keywordInput),
+                      const SizedBox(width: 10),
+                      SizedBox(width: 245, child: generateButton),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              const Row(
+                children: [
+                  Icon(Icons.verified_user_outlined,
+                      color: studioMuted, size: 16),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '仅分析主页公开内容；重新生成会沿用已学习的风格，不会重复读取主页。',
+                      style: TextStyle(color: studioMuted, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (creatorSelectedLabel.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _studioFieldCard(
+            title: '已选文案',
+            subtitle: '$creatorSelectedLabel · 可继续手动调整后进入声音生成',
+            icon: Icons.check_circle_outline_rounded,
+            child: _textBox(rewrittenScriptController, '已选择的口播文案', 10),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _studioVideoRewriteMode() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

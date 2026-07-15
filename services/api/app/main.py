@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, ensure_voice_reference_wav, save_upload
-from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PostprocessVideoRequest, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, project_root, storage_dir
+from .models import BgmTrack, CreateScriptTaskRequest, CreateTaskRequest, CreatorScriptBatchResponse, CreatorScriptGenerateRequest, DigitalHumanProfile, OralVideoTask, PostprocessVideoRequest, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, project_root, storage_dir
 from .mouth_quality import build_mouth_quality_report, collect_mouth_quality_signals
 from .pipeline.cover import (
     COVER_TEMPLATES,
@@ -39,7 +39,13 @@ from .pipeline.subtitles import generate_ass, preview_subtitles, subtitle_time_r
 from .pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
+from .providers.creator_scripts import create_creator_script_provider
 from .providers.digital_human import create_digital_human_provider
+from .providers.douyin_creator import (
+    DouyinCreatorCollector,
+    DouyinCreatorFetchError,
+    DouyinCreatorInputError,
+)
 from .providers.rewrite import create_rewrite_provider
 from .providers.rewrite_styles import REWRITE_STYLE_PRESETS
 from .providers.tts import create_voice_provider
@@ -80,9 +86,11 @@ app.include_router(publisher_router)
 settings = get_settings()
 asr_provider = create_asr_provider(settings)
 rewrite_provider = create_rewrite_provider(settings)
+creator_script_provider = create_creator_script_provider(settings)
 voice_provider = create_voice_provider(settings)
 digital_human_provider = create_digital_human_provider(settings)
 video_importer = VideoImporter()
+douyin_creator_collector = DouyinCreatorCollector()
 renderer = Renderer()
 
 DIGITAL_HUMAN_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
@@ -1514,6 +1522,22 @@ def create_task(req: CreateTaskRequest) -> OralVideoTask:
     return task
 
 
+@app.post("/api/tasks/from-script", tags=["tasks"])
+def create_task_from_script(req: CreateScriptTaskRequest) -> OralVideoTask:
+    rewritten_script = req.rewritten_script.strip()
+    if not rewritten_script:
+        raise HTTPException(status_code=400, detail="请选择一篇有效文案")
+    task = OralVideoTask(
+        task_id=f"cloud-deep-{uuid4()}",
+        title=(req.title or "").strip() or generate_title(rewritten_script),
+        original_script=req.original_script.strip(),
+        rewritten_script=rewritten_script,
+        status=TaskStatus.rewritten,
+    )
+    complete_progress(task, "extract", "rewrite")
+    return repo.put(task)
+
+
 @app.post("/api/tasks/upload", tags=["tasks"])
 def upload_video(file: UploadFile = File(...)) -> OralVideoTask:
     try:
@@ -1578,6 +1602,54 @@ def delete_task(task_id: str):
         if path:
             Path(path).unlink(missing_ok=True)
     return {"ok": True}
+
+
+@app.post(
+    "/api/creator-scripts/generate",
+    response_model=CreatorScriptBatchResponse,
+    tags=["tasks"],
+)
+def generate_creator_scripts(
+    req: CreatorScriptGenerateRequest,
+) -> CreatorScriptBatchResponse:
+    keyword = req.keyword.strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="请输入创作关键词")
+
+    try:
+        style_profile = req.style_profile
+        if style_profile is None:
+            if not req.share_text.strip():
+                raise DouyinCreatorInputError("请粘贴包含抖音主页链接的完整分享文案")
+            snapshot = douyin_creator_collector.collect(req.share_text)
+            style_profile = creator_script_provider.analyze_style(snapshot)
+
+        items = creator_script_provider.generate_scripts(
+            style_profile,
+            keyword=keyword,
+            count=req.count,
+            duration_seconds=req.duration_seconds,
+            generation_round=req.generation_round,
+            exclude_titles=req.exclude_titles,
+        )
+    except DouyinCreatorInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (DouyinCreatorFetchError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if len(items) != req.count:
+        raise HTTPException(
+            status_code=502,
+            detail=f"文案生成结果数量异常：期望 {req.count} 篇，实际 {len(items)} 篇",
+        )
+    return CreatorScriptBatchResponse(
+        batch_id=str(uuid4()),
+        creator_name=style_profile.creator_name or "抖音创作者",
+        keyword=keyword,
+        generation_round=req.generation_round,
+        style_profile=style_profile,
+        items=items,
+    )
 
 
 @app.post("/api/tasks/{task_id}/rewrite", tags=["tasks"])
