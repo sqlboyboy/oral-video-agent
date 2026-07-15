@@ -3,6 +3,7 @@ from app.pipeline.subtitles import generate_ass, generate_srt, preview_subtitles
 from app.pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from fastapi.testclient import TestClient
 
+from app import main as main_module
 from app.main import app
 
 
@@ -97,6 +98,25 @@ def test_subtitle_preview_endpoint_returns_multiline_caption_and_style():
     body = res.json()
     assert body["lines"] == ["abcdefgh\nijklmnop", "qr"]
     assert body["style"]["font_size"] == 12
+
+
+def test_rendered_subtitle_preview_endpoint_returns_png(tmp_path, monkeypatch):
+    preview = tmp_path / "subtitle-preview.png"
+    preview.write_bytes(b"\x89PNG\r\n\x1a\nrendered-subtitle")
+    monkeypatch.setattr(
+        main_module,
+        "_render_subtitle_preview_png",
+        lambda req: preview,
+    )
+
+    res = client.post(
+        "/api/subtitles/render-preview",
+        json={"script": "真实字幕预览", "style": {"font_size": 48}},
+    )
+
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "image/png"
+    assert res.content == preview.read_bytes()
 
 
 def test_subtitle_templates_endpoint_returns_researched_presets():

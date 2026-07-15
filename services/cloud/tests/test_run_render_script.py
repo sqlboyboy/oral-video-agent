@@ -23,6 +23,7 @@ from worker.run_render import (
     prepare_cosyvoice_reference_audio,
     run_job,
     run_preprocess_job,
+    should_compose_final,
     subtitle_force_style,
     to_simplified_chinese,
     wrap_text,
@@ -181,6 +182,27 @@ def test_build_render_payload_keeps_composition_options():
     assert payload["cover_template_id"] == "bold-yellow-white"
     assert payload["subtitle_template_id"] == "renovation_pitfall_yellow"
     assert payload["template_catalog_version"] == "2026.07.15.1"
+
+
+def test_deferred_packaging_forces_unity_voice_and_skips_final_composition():
+    payload = build_render_payload(
+        {
+            "script": "先生成数字人中间视频",
+            "defer_packaging": True,
+            "voice_volume": 0.2,
+            "bgm_id": "custom:bgm-1",
+            "bgm_volume": 0.8,
+            "subtitle_enabled": True,
+            "pip_enabled": True,
+        }
+    )
+
+    assert payload["voice_volume"] == 1.0
+    assert payload["bgm_id"] == "none"
+    assert payload["bgm_volume"] == 0
+    assert payload["subtitle_enabled"] is False
+    assert payload["pip_enabled"] is False
+    assert should_compose_final(payload, None, None, None) is False
 
 
 def test_cloud_subtitles_default_to_small_wrapped_captions():
@@ -393,7 +415,8 @@ def test_compose_final_video_resets_pts_and_reports_pip(monkeypatch, tmp_path):
     )
 
     filter_complex = commands[0][commands[0].index("-filter_complex") + 1]
-    assert "dynaudnorm=f=150:g=15:p=0.9,volume=0.45" in filter_complex
+    assert "[1:a]volume=0.45[aout]" in filter_complex
+    assert "loudnorm" not in filter_complex
     assert "[0:v]scale=720:1280:flags=lanczos,setsar=1,setpts=PTS-STARTPTS[mainv]" in filter_complex
     assert "[2:v]scale=360:202:force_original_aspect_ratio=increase,crop=360:202,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
     assert "[mainv][pip]overlay=344:16:enable='between(t\\,5.000\\,10.000)':eof_action=pass" in filter_complex

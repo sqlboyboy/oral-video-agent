@@ -1097,9 +1097,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
               Expanded(
                 child: Slider(
                   value: bgmVolume,
-                  onChanged: loading
-                      ? null
-                      : (value) => _updateMobile(() => bgmVolume = value),
+                  onChanged: loading ? null : _updateBgmVolume,
                 ),
               ),
               Text('${(bgmVolume * 100).round()}%'),

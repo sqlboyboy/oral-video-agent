@@ -651,6 +651,7 @@ def test_deferred_render_creates_unpacked_digital_human_video():
         json={
             "script": "先生成数字人中间视频，再选择封面、字幕和背景音乐。",
             "voice_id": "classic-female",
+            "voice_volume": 0.2,
             "bgm_id": "default-light",
             "subtitle_enabled": True,
             "pip_enabled": True,
@@ -667,6 +668,7 @@ def test_deferred_render_creates_unpacked_digital_human_video():
     assert rendered_task["subtitle_path"] is None
     assert rendered_task["cover_path"] is None
     assert rendered_task["render_options"]["defer_packaging"] is True
+    assert rendered_task["render_options"]["voice_volume"] == 1.0
     assert rendered_task["render_options"]["bgm_id"] == "none"
     assert rendered_task["render_options"]["subtitle_enabled"] is False
     assert rendered_task["render_options"]["pip_enabled"] is False
@@ -1009,6 +1011,30 @@ def test_voice_preview_returns_uploaded_voice_reference():
 
     assert preview.status_code == 200
     assert preview.content.startswith(b"RIFF")
+
+
+def test_render_normalization_fails_closed_when_ffmpeg_is_unavailable(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "voice.wav"
+    source.write_bytes(_wav_bytes())
+    monkeypatch.setattr(main_module, "_ffmpeg_executable", lambda: None)
+
+    assert (
+        main_module.ensure_loudness_preview_wav(source, "test_previews", "voice")
+        == source
+    )
+    try:
+        main_module.ensure_loudness_preview_wav(
+            source,
+            "test_render_audio",
+            "voice",
+            required=True,
+        )
+    except RuntimeError as exc:
+        assert "FFmpeg" in str(exc)
+    else:
+        raise AssertionError("required render normalization must not silently fall back")
 
 
 def test_clone_voice_preview_returns_template_file(tmp_path, monkeypatch):

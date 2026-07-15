@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -14,6 +15,8 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'audio_volume.dart';
 
 part 'mobile.dart';
 part 'mobile_updater.dart';
@@ -90,6 +93,8 @@ class _CloudUploadFile {
   final String fileName;
   final String contentType;
 }
+
+enum _CloudOutputKind { video, audio }
 
 enum _WorkspaceSection {
   studio,
@@ -457,6 +462,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   double subtitleY = 0.62;
   int subtitleMaxCharsPerLine = 9;
   List<String> subtitlePreviewLines = const [];
+  Uint8List? renderedSubtitlePreviewBytes;
+  String renderedSubtitlePreviewKey = '';
+  bool renderingSubtitlePreview = false;
   bool pipEnabled = false;
   String pipAssetId = '';
   String pipAssetName = '';
@@ -476,6 +484,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Timer? renderPollTimer;
   Timer? cloudPollTimer;
   Timer? cloudEmailCodeTimer;
+  Future<void>? _cloudOutputDownloadFuture;
+  String _cloudOutputDownloadJobId = '';
+  int _cloudDownloadTempSequence = 0;
+  Timer? renderedSubtitlePreviewDebounce;
+  int renderedSubtitlePreviewRequestSerial = 0;
   int cloudEmailCodeCooldown = 0;
   Process? _localApiProcess;
   Player? _voicePlayer;
@@ -496,6 +509,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     renderPollTimer?.cancel();
     cloudPollTimer?.cancel();
     cloudEmailCodeTimer?.cancel();
+    renderedSubtitlePreviewDebounce?.cancel();
     _localApiProcess?.kill();
     _voicePlayer?.dispose();
     _originalAudioPlayer?.dispose();
@@ -3057,10 +3071,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudVoiceCancelRequested = false;
     });
     try {
-      final existingJobId = cloudVoiceJobId.trim();
-      if (existingJobId.isNotEmpty &&
-          await _resumeCloudVoiceJob(existingJobId, script)) {
-        return;
+      final attemptedJobIds = <String>{};
+      var existingJobId = cloudVoiceJobId.trim();
+      if (existingJobId.isNotEmpty) {
+        attemptedJobIds.add(existingJobId);
+        if (await _resumeCloudVoiceJob(existingJobId, script)) return;
+      }
+      existingJobId = await _findReusableCloudVoiceJobId(script) ?? '';
+      if (existingJobId.isNotEmpty && attemptedJobIds.add(existingJobId)) {
+        if (mounted) setState(() => cloudVoiceJobId = existingJobId);
+        if (await _resumeCloudVoiceJob(existingJobId, script)) return;
       }
       setState(() {
         message = '正在准备云端克隆声音素材';
@@ -3391,8 +3411,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final job = _decodeMap(res);
     final payload = (job['payload'] as Map?)?.cast<String, dynamic>();
     final operation = payload?['operation']?.toString() ?? '';
+    final sourceScript = payload?['source_script']?.toString().trim() ?? '';
+    final voiceId = payload?['voice_id']?.toString() ?? '';
     final status = job['status']?.toString() ?? '';
     if ((operation.isNotEmpty && operation != 'voice') ||
+        (sourceScript.isNotEmpty && sourceScript != script.trim()) ||
+        (voiceId.isNotEmpty && voiceId != selectedVoice) ||
         !{'queued', 'running', 'completed'}.contains(status)) {
       if (mounted) setState(() => cloudVoiceJobId = '');
       return false;
@@ -3405,6 +3429,39 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
     await _finishCloudVoiceJob(jobId, script);
     return true;
+  }
+
+  Future<String?> _findReusableCloudVoiceJobId(String script) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_cloudApiBase/api/client/jobs?limit=50'),
+        headers: _cloudHeaders(),
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) return null;
+      final body = _decodeMap(res);
+      final jobs = (body['items'] as List?) ?? const [];
+      for (final rawJob in jobs) {
+        if (rawJob is! Map) continue;
+        final job = rawJob.cast<String, dynamic>();
+        if (job['job_type']?.toString() != 'preprocess') continue;
+        if (!{'queued', 'running', 'completed'}
+            .contains(job['status']?.toString())) {
+          continue;
+        }
+        final payload = (job['payload'] as Map?)?.cast<String, dynamic>();
+        if (payload?['operation']?.toString() != 'voice') continue;
+        if (payload?['source_script']?.toString().trim() != script.trim()) {
+          continue;
+        }
+        final voiceId = payload?['voice_id']?.toString() ?? '';
+        if (voiceId.isNotEmpty && voiceId != selectedVoice) continue;
+        final jobId = job['job_id']?.toString() ?? '';
+        if (jobId.isNotEmpty) return jobId;
+      }
+    } catch (_) {
+      // Reuse is an optimization. A failed history lookup must not block a new job.
+    }
+    return null;
   }
 
   Future<void> _finishCloudVoiceJob(String jobId, String script) async {
@@ -3710,11 +3767,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   double get _voicePreviewMediaVolume {
-    return (voicePreviewVolume * 100).clamp(0, 100).toDouble();
+    return linearGainToMediaKitVolume(voicePreviewVolume);
   }
 
   double get _bgmPreviewVolume {
-    return (bgmVolume * 100).clamp(0, 100).toDouble();
+    return linearGainToMediaKitVolume(bgmVolume);
   }
 
   Future<void> uploadDigitalHuman() async {
@@ -4059,17 +4116,120 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  String _renderedSubtitlePreviewRequestKey() {
+    return sha256
+        .convert(
+          utf8.encode(
+            jsonEncode({
+              'script': _renderScript,
+              'style': _subtitleStylePayload(),
+            }),
+          ),
+        )
+        .toString();
+  }
+
+  bool get _hasCurrentRenderedSubtitlePreview {
+    return subtitlesEnabled &&
+        renderedSubtitlePreviewBytes != null &&
+        renderedSubtitlePreviewKey == _renderedSubtitlePreviewRequestKey();
+  }
+
+  Future<void> refreshRenderedSubtitlePreview({
+    bool silent = false,
+    bool force = false,
+    VoidCallback? onUpdated,
+  }) async {
+    final script = _renderScript;
+    if (!subtitlesEnabled || script.isEmpty) {
+      renderedSubtitlePreviewRequestSerial++;
+      if (mounted) {
+        setState(() {
+          renderedSubtitlePreviewBytes = null;
+          renderedSubtitlePreviewKey = '';
+          renderingSubtitlePreview = false;
+        });
+      }
+      onUpdated?.call();
+      if (!silent && script.isEmpty) showError('请先生成或填写文案');
+      return;
+    }
+
+    final requestKey = _renderedSubtitlePreviewRequestKey();
+    if (!force &&
+        renderedSubtitlePreviewBytes != null &&
+        renderedSubtitlePreviewKey == requestKey) {
+      onUpdated?.call();
+      return;
+    }
+
+    final requestSerial = ++renderedSubtitlePreviewRequestSerial;
+    if (mounted) setState(() => renderingSubtitlePreview = true);
+    onUpdated?.call();
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/subtitles/render-preview'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'script': script,
+          'style': _subtitleStylePayload(),
+        }),
+      );
+      _check(res);
+      if (!mounted ||
+          requestSerial != renderedSubtitlePreviewRequestSerial ||
+          requestKey != _renderedSubtitlePreviewRequestKey()) {
+        return;
+      }
+      setState(() {
+        renderedSubtitlePreviewBytes = Uint8List.fromList(res.bodyBytes);
+        renderedSubtitlePreviewKey = requestKey;
+        renderingSubtitlePreview = false;
+        if (!silent) {
+          message = '真实字幕预览已刷新';
+          messageIsError = false;
+        }
+      });
+      onUpdated?.call();
+    } catch (e) {
+      if (mounted && requestSerial == renderedSubtitlePreviewRequestSerial) {
+        setState(() => renderingSubtitlePreview = false);
+        onUpdated?.call();
+      }
+      if (!silent) showError(e.toString());
+    }
+  }
+
+  void _scheduleRenderedSubtitlePreview({
+    VoidCallback? onUpdated,
+    Duration delay = const Duration(milliseconds: 280),
+  }) {
+    renderedSubtitlePreviewDebounce?.cancel();
+    renderedSubtitlePreviewDebounce = Timer(
+      delay,
+      () => unawaited(
+        refreshRenderedSubtitlePreview(silent: true, onUpdated: onUpdated),
+      ),
+    );
+  }
+
   Future<void> editSubtitlesAndPip() async {
     await refreshSubtitlePreview(silent: true);
+    await refreshRenderedSubtitlePreview(silent: true);
     if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, dialogSetState) {
+            void repaintDialog() {
+              if (dialogContext.mounted) dialogSetState(() {});
+            }
+
             void updateDialog(VoidCallback update) {
               setState(update);
               dialogSetState(() {});
+              _scheduleRenderedSubtitlePreview(onUpdated: repaintDialog);
             }
 
             return AlertDialog(
@@ -4266,7 +4426,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         ),
                       ),
                       const SizedBox(height: 8),
-                      _subtitlePreviewBox(updateDialog: updateDialog),
+                      _subtitlePreviewBox(
+                        updateDialog: updateDialog,
+                        onSubtitleDragEnd: () =>
+                            _scheduleRenderedSubtitlePreview(
+                          onUpdated: repaintDialog,
+                          delay: Duration.zero,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -4275,7 +4442,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 TextButton(
                   onPressed: () async {
                     await refreshSubtitlePreview();
-                    if (mounted) dialogSetState(() {});
+                    await refreshRenderedSubtitlePreview(
+                      force: true,
+                      onUpdated: repaintDialog,
+                    );
+                    repaintDialog();
                   },
                   child: const Text('刷新'),
                 ),
@@ -4289,6 +4460,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         );
       },
     );
+    renderedSubtitlePreviewDebounce?.cancel();
   }
 
   Widget _smallTextField(
@@ -5015,6 +5187,35 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _loadCloudDownload(String jobId) async {
+    final activeDownload = _cloudOutputDownloadFuture;
+    if (activeDownload != null) {
+      final activeJobId = _cloudOutputDownloadJobId;
+      if (activeJobId == jobId) {
+        await activeDownload;
+        return;
+      }
+      try {
+        await activeDownload;
+      } catch (_) {
+        // A different job failed to download; it must not block this job.
+      }
+      return _loadCloudDownload(jobId);
+    }
+
+    final download = _loadCloudDownloadOnce(jobId);
+    _cloudOutputDownloadFuture = download;
+    _cloudOutputDownloadJobId = jobId;
+    try {
+      await download;
+    } finally {
+      if (identical(_cloudOutputDownloadFuture, download)) {
+        _cloudOutputDownloadFuture = null;
+        _cloudOutputDownloadJobId = '';
+      }
+    }
+  }
+
+  Future<void> _loadCloudDownloadOnce(String jobId) async {
     final currentPath = cloudOutputLocalPath.trim();
     if (currentPath.isNotEmpty) {
       if (await _isUsableLocalMp4(currentPath)) return;
@@ -5187,6 +5388,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       url: url,
       headers: headers,
       fileName: fileName,
+      outputKind: _CloudOutputKind.audio,
     );
   }
 
@@ -5261,7 +5463,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (!await file.exists() || await file.length() < 32) return false;
       final reader = await file.open();
       try {
-        final header = await reader.read(64);
+        final header = await reader.read(4096);
         for (var index = 0; index + 3 < header.length; index++) {
           if (header[index] == 0x66 &&
               header[index + 1] == 0x74 &&
@@ -5277,6 +5479,83 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return false;
     }
     return false;
+  }
+
+  bool _matchesFileSignature(
+    List<int> header,
+    List<int> signature, {
+    int offset = 0,
+  }) {
+    if (offset < 0 || offset + signature.length > header.length) return false;
+    for (var index = 0; index < signature.length; index++) {
+      if (header[offset + index] != signature[index]) return false;
+    }
+    return true;
+  }
+
+  Future<bool> _isUsableLocalAudio(String path) async {
+    final value = path.trim();
+    if (value.isEmpty) return false;
+    final file = File(value);
+    try {
+      if (!await file.exists() || await file.length() < 32) return false;
+      final reader = await file.open();
+      try {
+        final header = await reader.read(64);
+        final isWav =
+            _matchesFileSignature(header, const [0x52, 0x49, 0x46, 0x46]) &&
+                _matchesFileSignature(
+                  header,
+                  const [0x57, 0x41, 0x56, 0x45],
+                  offset: 8,
+                );
+        final isMp3 = _matchesFileSignature(header, const [0x49, 0x44, 0x33]) ||
+            (header.length >= 2 &&
+                header[0] == 0xFF &&
+                (header[1] & 0xE0) == 0xE0);
+        final isFlac =
+            _matchesFileSignature(header, const [0x66, 0x4C, 0x61, 0x43]);
+        final isOgg =
+            _matchesFileSignature(header, const [0x4F, 0x67, 0x67, 0x53]);
+        final isWebm = _matchesFileSignature(
+          header,
+          const [0x1A, 0x45, 0xDF, 0xA3],
+        );
+        final isAiff =
+            _matchesFileSignature(header, const [0x46, 0x4F, 0x52, 0x4D]) &&
+                (_matchesFileSignature(
+                      header,
+                      const [0x41, 0x49, 0x46, 0x46],
+                      offset: 8,
+                    ) ||
+                    _matchesFileSignature(
+                      header,
+                      const [0x41, 0x49, 0x46, 0x43],
+                      offset: 8,
+                    ));
+        var isIsoMedia = false;
+        for (var index = 0; index + 3 < header.length; index++) {
+          if (header[index] == 0x66 &&
+              header[index + 1] == 0x74 &&
+              header[index + 2] == 0x79 &&
+              header[index + 3] == 0x70) {
+            isIsoMedia = true;
+            break;
+          }
+        }
+        return isWav ||
+            isMp3 ||
+            isFlac ||
+            isOgg ||
+            isWebm ||
+            isAiff ||
+            isIsoMedia;
+      } finally {
+        await reader.close();
+      }
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String?> _ensureCloudOutputFile(String jobId) async {
@@ -5299,9 +5578,43 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     required String url,
     required Map<String, String> headers,
     required String fileName,
+    _CloudOutputKind outputKind = _CloudOutputKind.video,
   }) async {
     final dest = await _cloudOutputFile(fileName);
-    final tmp = File('${dest.path}.download');
+    Object? lastError;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await _downloadCloudOutputToLocalOnce(
+          url: url,
+          headers: headers,
+          dest: dest,
+          outputKind: outputKind,
+        );
+      } catch (error) {
+        lastError = error;
+        if (attempt >= 1) rethrow;
+        if (mounted) {
+          setState(() {
+            message = '下载校验未通过，正在自动重试';
+            messageIsError = false;
+          });
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+      }
+    }
+    throw Exception('云端文件下载失败：$lastError');
+  }
+
+  Future<String> _downloadCloudOutputToLocalOnce({
+    required String url,
+    required Map<String, String> headers,
+    required File dest,
+    required _CloudOutputKind outputKind,
+  }) async {
+    final tempSequence = _cloudDownloadTempSequence++;
+    final tmp = File(
+      '${dest.path}.download-${DateTime.now().microsecondsSinceEpoch}-$tempSequence',
+    );
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 20);
     IOSink? sink;
@@ -5313,7 +5626,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final response = await request.close();
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final body = await utf8.decodeStream(response);
-        throw Exception('云端成品下载失败 ${response.statusCode}: $body');
+        throw Exception('云端文件下载失败 ${response.statusCode}: $body');
       }
       final total = response.contentLength;
       var received = 0;
@@ -5330,7 +5643,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           final percent = ((received / total) * 100).clamp(0, 100).floor();
           setState(() {
             message =
-                '正在保存云端成品到本地 $percent% (${_formatBytes(received)} / ${_formatBytes(total)})';
+                '正在保存云端文件到本地 $percent% (${_formatBytes(received)} / ${_formatBytes(total)})';
             messageIsError = false;
           });
         }
@@ -5345,16 +5658,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           '云端成品下载不完整：应为 ${_formatBytes(total)}，实际 ${_formatBytes(received)}',
         );
       }
-      if (!await _isUsableLocalMp4(tmp.path)) {
-        throw Exception('云端返回的文件不是有效 MP4，请刷新后重试');
+      final isUsable = outputKind == _CloudOutputKind.audio
+          ? await _isUsableLocalAudio(tmp.path)
+          : await _isUsableLocalMp4(tmp.path);
+      if (!isUsable) {
+        final label = outputKind == _CloudOutputKind.audio ? '声音文件' : 'MP4';
+        throw Exception('云端返回的文件不是有效$label，请刷新后重试');
       }
       if (await dest.exists()) {
         await dest.delete();
       }
       await tmp.rename(dest.path);
       final saved = File(dest.path);
-      if (!await _isUsableLocalMp4(saved.path)) {
-        throw Exception('本地成品文件保存失败');
+      final savedIsUsable = outputKind == _CloudOutputKind.audio
+          ? await _isUsableLocalAudio(saved.path)
+          : await _isUsableLocalMp4(saved.path);
+      if (!savedIsUsable) {
+        final label = outputKind == _CloudOutputKind.audio ? '声音文件' : '成品文件';
+        throw Exception('本地$label保存失败');
       }
       return saved.path;
     } finally {
@@ -5690,6 +6011,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic> _intermediateRenderPayload(String script) => {
         ..._renderPayload(script),
         'defer_packaging': true,
+        // 第 3 步只生成统一响度的中间视频；用户选择的人声音量在第 5 步应用一次。
+        'voice_volume': 1.0,
         'bgm_id': 'none',
         'bgm_volume': 0,
         'subtitle_enabled': false,
@@ -6626,8 +6949,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               ),
               const SizedBox(height: 10),
               _studioSlider(
-                '试听音量',
-                '仅影响本地试听',
+                '人声音量',
+                '试听与最终成片使用同一音量',
                 voicePreviewVolume,
                 0,
                 1,
@@ -7454,7 +7777,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _labeledSlider(
-                  '试听音量',
+                  '人声音量',
                   voicePreviewVolume,
                   0,
                   1,
@@ -10535,7 +10858,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             'BGM音量',
             bgmVolume,
             0,
-            0.6,
+            1,
             _updateBgmVolume,
             '${(bgmVolume * 100).round()}%',
           ),
@@ -11065,8 +11388,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  void _dragSubtitle(
-    DragUpdateDetails details,
+  void _dragSubtitleByDelta(
+    Offset delta,
     Size canvasSize,
     void Function(VoidCallback update)? updateDialog,
   ) {
@@ -11081,10 +11404,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       subtitlePosition = 'custom';
       selectedSubtitleTemplate = 'custom';
-      subtitleX = (subtitleX + details.delta.dx / canvasSize.width)
+      subtitleX = (subtitleX + delta.dx / canvasSize.width)
           .clamp(currentRect.width / 2, 1 - currentRect.width / 2)
           .toDouble();
-      subtitleY = (subtitleY + details.delta.dy / canvasSize.height)
+      subtitleY = (subtitleY + delta.dy / canvasSize.height)
           .clamp(0.0, math.max(0.0, 1 - currentRect.height))
           .toDouble();
     }, updateDialog);
@@ -11094,8 +11417,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     String previewText,
     Size canvasSize, {
     void Function(VoidCallback update)? updateDialog,
+    VoidCallback? onSubtitleDragEnd,
   }) {
-    final rect = _subtitleCanvasRect(canvasSize);
+    final visualRect = _subtitleCanvasRect(canvasSize);
+    final horizontalHitPadding = pipEnabled ? 14.0 : 28.0;
+    const verticalHitPadding = 18.0;
+    final hitRect = Rect.fromLTRB(
+      math.max(0.0, visualRect.left - horizontalHitPadding),
+      math.max(0.0, visualRect.top - verticalHitPadding),
+      math.min(canvasSize.width, visualRect.right + horizontalHitPadding),
+      math.min(canvasSize.height, visualRect.bottom + verticalHitPadding),
+    );
     final previewFontSize =
         (subtitleSize * canvasSize.height / 1920).clamp(8.0, 22.0).toDouble();
     final outlineOffset = (subtitleOutlineWidth * canvasSize.height / 1920)
@@ -11118,63 +11450,99 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       );
     }
     return Positioned(
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
+      left: hitRect.left,
+      top: hitRect.top,
+      width: hitRect.width,
+      height: hitRect.height,
       child: MouseRegion(
         cursor: subtitlesEnabled
             ? SystemMouseCursors.move
             : SystemMouseCursors.basic,
-        child: GestureDetector(
+        child: RawGestureDetector(
           behavior: HitTestBehavior.opaque,
-          onPanUpdate: subtitlesEnabled
-              ? (details) => _dragSubtitle(details, canvasSize, updateDialog)
-              : null,
-          child: Container(
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              border: Border.all(
-                color: subtitlesEnabled
-                    ? cyan.withValues(alpha: 0.75)
-                    : Colors.white24,
-              ),
-              borderRadius: BorderRadius.circular(5),
-              color: Colors.black.withValues(alpha: 0.08),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Opacity(
-              opacity: subtitlesEnabled ? 1 : 0.35,
-              child: Text.rich(
-                TextSpan(children: spans),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: previewFontSize,
-                  fontFamily: selectedSubtitleFont,
-                  fontWeight: FontWeight.w900,
-                  height: 1.08,
-                  shadows: [
-                    Shadow(
-                      offset: Offset(outlineOffset, outlineOffset),
-                      color: subtitleOutlineColor,
+          gestures: subtitlesEnabled
+              ? <Type, GestureRecognizerFactory>{
+                  EagerGestureRecognizer: GestureRecognizerFactoryWithHandlers<
+                      EagerGestureRecognizer>(
+                    EagerGestureRecognizer.new,
+                    (_) {},
+                  ),
+                }
+              : const <Type, GestureRecognizerFactory>{},
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerMove: subtitlesEnabled
+                ? (event) => _dragSubtitleByDelta(
+                      event.delta,
+                      canvasSize,
+                      updateDialog,
+                    )
+                : null,
+            onPointerUp:
+                subtitlesEnabled ? (_) => onSubtitleDragEnd?.call() : null,
+            onPointerCancel:
+                subtitlesEnabled ? (_) => onSubtitleDragEnd?.call() : null,
+            child: Stack(
+              children: [
+                Positioned(
+                  left: visualRect.left - hitRect.left,
+                  top: visualRect.top - hitRect.top,
+                  width: visualRect.width,
+                  height: visualRect.height,
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: subtitlesEnabled
+                            ? cyan.withValues(alpha: 0.75)
+                            : Colors.white24,
+                      ),
+                      borderRadius: BorderRadius.circular(5),
+                      color: Colors.black.withValues(alpha: 0.08),
                     ),
-                    Shadow(
-                      offset: Offset(-outlineOffset, outlineOffset),
-                      color: subtitleOutlineColor,
-                    ),
-                    Shadow(
-                      offset: Offset(outlineOffset, -outlineOffset),
-                      color: subtitleOutlineColor,
-                    ),
-                    Shadow(
-                      offset: Offset(-outlineOffset, -outlineOffset),
-                      color: subtitleOutlineColor,
-                    ),
-                  ],
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: _hasCurrentRenderedSubtitlePreview
+                        ? const SizedBox.expand()
+                        : Opacity(
+                            opacity: subtitlesEnabled ? 1 : 0.35,
+                            child: Text.rich(
+                              TextSpan(children: spans),
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: previewFontSize,
+                                fontFamily: selectedSubtitleFont,
+                                fontWeight: FontWeight.w900,
+                                height: 1.08,
+                                shadows: [
+                                  Shadow(
+                                    offset:
+                                        Offset(outlineOffset, outlineOffset),
+                                    color: subtitleOutlineColor,
+                                  ),
+                                  Shadow(
+                                    offset:
+                                        Offset(-outlineOffset, outlineOffset),
+                                    color: subtitleOutlineColor,
+                                  ),
+                                  Shadow(
+                                    offset:
+                                        Offset(outlineOffset, -outlineOffset),
+                                    color: subtitleOutlineColor,
+                                  ),
+                                  Shadow(
+                                    offset:
+                                        Offset(-outlineOffset, -outlineOffset),
+                                    color: subtitleOutlineColor,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
         ),
@@ -11184,6 +11552,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Widget _subtitlePreviewBox({
     void Function(VoidCallback update)? updateDialog,
+    VoidCallback? onSubtitleDragEnd,
   }) {
     final previewText = subtitlePreviewLines.isEmpty
         ? (_renderScript.isEmpty ? '字幕预览' : _renderScript)
@@ -11213,11 +11582,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   children: [
                     if (pipEnabled)
                       _pipPreviewLayer(canvasSize, updateDialog: updateDialog),
+                    if (_hasCurrentRenderedSubtitlePreview)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Image.memory(
+                            renderedSubtitlePreviewBytes!,
+                            fit: BoxFit.fill,
+                            gaplessPlayback: true,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                      ),
                     _subtitlePreviewLayer(
                       previewText,
                       canvasSize,
                       updateDialog: updateDialog,
+                      onSubtitleDragEnd: onSubtitleDragEnd,
                     ),
+                    if (renderingSubtitlePreview)
+                      const Positioned(
+                        right: 8,
+                        top: 8,
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
                   ],
                 );
               },

@@ -42,6 +42,7 @@ storage/thumbnails/*
 storage/voice_previews/*
 storage/bgm_previews/*
 storage/generated_voice_previews/*
+storage/subtitle_previews/*
 storage/models/*
 storage/experiments/*
 storage/logs/*

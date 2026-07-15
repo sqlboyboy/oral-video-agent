@@ -53,8 +53,9 @@ def test_build_ffmpeg_command_maps_video_voice_bgm_and_subtitles(tmp_path):
     assert str(bgm) in command
     assert "-filter_complex" in command
     filter_complex = command[command.index("-filter_complex") + 1]
-    assert "dynaudnorm=f=150:g=15:p=0.9,volume=0.45" in filter_complex
-    assert "volume=0.25" in filter_complex
+    assert "[1:a]volume=0.45[voice]" in filter_complex
+    assert "[2:a]volume=0.25,aloop=loop=-1:size=2147483647[bgm]" in filter_complex
+    assert "loudnorm" not in filter_complex
     assert "amix=inputs=2" in filter_complex
     assert "normalize=0" in filter_complex
     assert "subtitles=" in filter_complex
@@ -231,12 +232,43 @@ def test_build_postprocess_command_preserves_source_audio_and_fullscreen_pip(tmp
 
     filter_complex = command[command.index("-filter_complex") + 1]
     assert command[1:4] == ["-y", "-i", str(source)]
-    assert "[0:a]dynaudnorm=f=150:g=15:p=0.9,volume=0.45[aout]" in filter_complex
+    assert "[0:a]volume=0.45[aout]" in filter_complex
     assert "[0:v]scale=720:1280:flags=lanczos,setsar=1,setpts=PTS-STARTPTS[mainv]" in filter_complex
     assert "[1:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
     assert "[mainv][pip]overlay=0:0:eof_action=pass" in filter_complex
     assert "subtitles=" in filter_complex
     assert command[command.index("-r") + 1] == "30"
+
+
+def test_postprocess_applies_each_linear_volume_once_to_normalized_audio(tmp_path):
+    source = tmp_path / "digital-human.mp4"
+    voice = tmp_path / "voice-lufs16.wav"
+    bgm = tmp_path / "bgm.wav"
+    output = tmp_path / "final.mp4"
+
+    command = Renderer().build_postprocess_command(
+        source,
+        None,
+        RenderOptions(
+            subtitle_enabled=False,
+            voice_volume=0.62,
+            bgm_id="custom:bgm",
+            bgm_volume=0.18,
+        ),
+        output,
+        bgm_audio=bgm,
+        voice_audio=voice,
+    )
+
+    filter_complex = command[command.index("-filter_complex") + 1]
+    assert command[4:7] == ["-i", str(voice), "-i"]
+    assert "[1:a]volume=0.62[voice]" in filter_complex
+    assert (
+        "[2:a]volume=0.18,"
+        "aloop=loop=-1:size=2147483647[bgm]"
+    ) in filter_complex
+    assert "loudnorm" not in filter_complex
+    assert "amix=inputs=2:duration=first:dropout_transition=2:normalize=0" in filter_complex
 
 
 def test_build_postprocess_command_copies_video_when_no_visual_filter(tmp_path):

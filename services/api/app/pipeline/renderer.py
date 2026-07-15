@@ -15,6 +15,7 @@ FALLBACK_OUTPUT_HEIGHT = 1920
 PIP_MEDIA_ASPECT_RATIO = 16 / 9
 PIP_MARGIN_X = 24
 PIP_MARGIN_Y = 24
+LOUDNESS_NORMALIZATION_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
 
 def _ffmpeg_preset() -> str:
@@ -626,9 +627,12 @@ class Renderer:
         audio_inputs = "[aout]"
         pip_input_index = 2
 
-        voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={options.voice_volume}"
+        # The API prepares voice/BGM inputs at the same -16 LUFS baseline used
+        # by preview playback. Keep the render graph linear so each slider is
+        # applied exactly once and silence never reaches loudnorm inside amix.
+        voice_filter = f"volume={options.voice_volume}"
         bgm_filter = (
-            f"dynaudnorm=f=150:g=15:p=0.9,volume={options.bgm_volume},"
+            f"volume={options.bgm_volume},"
             "aloop=loop=-1:size=2147483647"
         )
         if bgm_audio is not None:
@@ -720,6 +724,7 @@ class Renderer:
         output_path: Path,
         bgm_audio: Optional[Path] = None,
         pip_asset: Optional[Path] = None,
+        voice_audio: Optional[Path] = None,
     ) -> List[str]:
         ffmpeg = _ffmpeg_executable()
         if ffmpeg is None:
@@ -728,21 +733,29 @@ class Renderer:
         command = [ffmpeg, "-y", "-i", str(source_video)]
         filter_parts = []
         audio_inputs = "[aout]"
-        pip_input_index = 1
+        next_input_index = 1
+        voice_input_index = 0
+        if voice_audio is not None:
+            command.extend(["-i", str(voice_audio)])
+            voice_input_index = next_input_index
+            next_input_index += 1
 
-        voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={options.voice_volume}"
+        # Step 3 and the extracted fallback are normalized before this command.
+        # The step-5 slider therefore remains a single linear gain operation.
+        voice_filter = f"volume={options.voice_volume}"
         bgm_filter = (
-            f"dynaudnorm=f=150:g=15:p=0.9,volume={options.bgm_volume},"
+            f"volume={options.bgm_volume},"
             "aloop=loop=-1:size=2147483647"
         )
         if bgm_audio is not None:
             command.extend(["-i", str(bgm_audio)])
-            pip_input_index = 2
-            filter_parts.append(f"[0:a]{voice_filter}[voice]")
-            filter_parts.append(f"[1:a]{bgm_filter}[bgm]")
+            bgm_input_index = next_input_index
+            next_input_index += 1
+            filter_parts.append(f"[{voice_input_index}:a]{voice_filter}[voice]")
+            filter_parts.append(f"[{bgm_input_index}:a]{bgm_filter}[bgm]")
             filter_parts.append("[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]")
         else:
-            filter_parts.append(f"[0:a]{voice_filter}[aout]")
+            filter_parts.append(f"[{voice_input_index}:a]{voice_filter}[aout]")
 
         has_pip_filter = options.pip_enabled and pip_asset is not None
         has_subtitle_filter = options.subtitle_enabled and subtitle_file is not None
@@ -753,6 +766,7 @@ class Renderer:
             video_input = "[mainv]"
             filter_parts.append(_portrait_main_video_filter(canvas_width, canvas_height))
         if has_pip_filter:
+            pip_input_index = next_input_index
             if pip_asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                 command.extend(["-loop", "1", "-i", str(pip_asset)])
             else:
@@ -824,6 +838,7 @@ class Renderer:
         output_path: Path,
         bgm_audio: Optional[Path] = None,
         pip_asset: Optional[Path] = None,
+        voice_audio: Optional[Path] = None,
     ) -> Path:
         command = self.build_postprocess_command(
             source_video,
@@ -832,6 +847,7 @@ class Renderer:
             output_path,
             bgm_audio,
             pip_asset,
+            voice_audio,
         )
         process = subprocess.Popen(command)
         process.wait()

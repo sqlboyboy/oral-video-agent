@@ -54,6 +54,7 @@ RENDER_OPTION_KEYS = {
     "pip_start_seconds",
     "pip_end_seconds",
     "pip_trigger_text",
+    "defer_packaging",
 }
 
 
@@ -69,6 +70,7 @@ FALLBACK_OUTPUT_WIDTH = 1080
 FALLBACK_OUTPUT_HEIGHT = 1920
 PIP_MEDIA_ASPECT_RATIO = 16 / 9
 PIP_MARGIN_X = 24
+LOUDNESS_NORMALIZATION_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 PIP_MARGIN_Y = 24
 
 TRADITIONAL_PHRASE_REPLACEMENTS = (
@@ -937,6 +939,17 @@ def build_render_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not script:
         raise RuntimeError("render script is required")
     render_payload["script"] = script
+    if render_payload.get("defer_packaging") is True:
+        render_payload.update(
+            {
+                "voice_volume": 1.0,
+                "bgm_id": "none",
+                "bgm_volume": 0,
+                "subtitle_enabled": False,
+                "pip_enabled": False,
+                "pip_asset_id": None,
+            }
+        )
     return render_payload
 
 
@@ -1080,25 +1093,35 @@ def render_direct_pipeline(
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     digital_path = output_path.with_name(f"{output_path.stem}_digital.mp4")
+    normalized_voice_audio = output_path.with_name(
+        f"{output_path.stem}_voice_lufs16.wav"
+    )
+    write_loudness_normalized_audio(voice_audio, normalized_voice_audio)
     heygem_source_path = prepare_heygem_source_video(
         source_video,
         output_path.with_name(f"{output_path.stem}_heygem_source.mp4"),
     )
     render_with_heygem(
         source_video=heygem_source_path,
-        voice_audio=voice_audio,
+        voice_audio=normalized_voice_audio,
         output_path=digital_path,
     )
     validate_render_output(digital_path)
 
     bgm_audio = Path(bgm_asset["local_path"]) if bgm_asset is not None else None
+    if bgm_audio is not None:
+        normalized_bgm_audio = output_path.with_name(
+            f"{output_path.stem}_bgm_lufs16.wav"
+        )
+        write_loudness_normalized_audio(bgm_audio, normalized_bgm_audio)
+        bgm_audio = normalized_bgm_audio
     pip_media = Path(pip_asset["local_path"]) if pip_asset is not None else None
     cover_image = Path(cover_asset["local_path"]) if cover_asset is not None else None
     composition_diagnostics: dict[str, Any] = {}
     if should_compose_final(render_payload, bgm_audio, pip_media, cover_image):
         compose_final_video(
             source_video=digital_path,
-            voice_audio=voice_audio,
+            voice_audio=normalized_voice_audio,
             render_payload=render_payload,
             output_path=output_path,
             bgm_audio=bgm_audio,
@@ -1115,7 +1138,7 @@ def render_direct_pipeline(
         "mode": mode,
         "source_path": str(source_video),
         "heygem_source_path": str(heygem_source_path),
-        "voice_audio_path": str(voice_audio),
+        "voice_audio_path": str(normalized_voice_audio),
         "digital_path": str(digital_path),
         "output_path": str(output_path),
         "bytes": output_path.stat().st_size,
@@ -1135,6 +1158,8 @@ def should_compose_final(
     pip_asset: Path | None,
     cover_image: Path | None,
 ) -> bool:
+    if render_payload.get("defer_packaging") is True:
+        return False
     return (
         render_payload.get("subtitle_enabled") is not False
         or bgm_audio is not None
@@ -1186,7 +1211,9 @@ def compose_final_video(
 
     raw_voice_volume = render_payload.get("voice_volume")
     voice_volume = 0.45 if raw_voice_volume is None else float(raw_voice_volume)
-    voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={voice_volume}"
+    # render_direct_pipeline prepares both audio inputs at the same -16 LUFS
+    # baseline used by client previews. Apply each linear slider only once.
+    voice_filter = f"volume={voice_volume}"
     if bgm_audio is not None:
         command.extend(["-i", str(bgm_audio)])
         bgm_input_index = next_input_index
@@ -1194,7 +1221,7 @@ def compose_final_video(
         raw_bgm_volume = render_payload.get("bgm_volume")
         bgm_volume = 0.35 if raw_bgm_volume is None else float(raw_bgm_volume)
         bgm_filter = (
-            f"dynaudnorm=f=150:g=15:p=0.9,volume={bgm_volume},"
+            f"volume={bgm_volume},"
             "aloop=loop=-1:size=2147483647"
         )
         filter_parts.append(f"[1:a]{voice_filter}[voice]")
@@ -1555,22 +1582,28 @@ def ffmpeg_executable() -> str | None:
 
 
 def normalize_audio_loudness(path: Path) -> None:
+    normalized_path = path.with_name(f"{path.stem}_normalized.wav")
+    write_loudness_normalized_audio(path, normalized_path)
+    normalized_path.replace(path)
+
+
+def write_loudness_normalized_audio(source_path: Path, output_path: Path) -> Path:
     ffmpeg = ffmpeg_executable()
     if ffmpeg is None:
         raise RuntimeError("ffmpeg is required for voice loudness normalization")
-    normalized_path = path.with_name(f"{path.stem}_normalized.wav")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     completed = subprocess.run(
         [
             ffmpeg,
             "-y",
             "-i",
-            str(path),
+            str(source_path),
             "-vn",
             "-af",
-            "loudnorm=I=-16:TP=-1.5:LRA=11",
+            LOUDNESS_NORMALIZATION_FILTER,
             "-ar",
             "44100",
-            str(normalized_path),
+            str(output_path),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -1578,13 +1611,13 @@ def normalize_audio_loudness(path: Path) -> None:
     )
     if (
         completed.returncode != 0
-        or not normalized_path.exists()
-        or normalized_path.stat().st_size <= 44
+        or not output_path.exists()
+        or output_path.stat().st_size <= 44
     ):
-        normalized_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
         detail = completed.stderr.decode("utf-8", errors="replace")[-800:]
-        raise RuntimeError(f"voice loudness normalization failed: {detail}")
-    normalized_path.replace(path)
+        raise RuntimeError(f"audio loudness normalization failed: {detail}")
+    return output_path
 
 
 def media_video_dimensions(path: Path) -> tuple[int, int] | None:

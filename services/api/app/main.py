@@ -7,6 +7,7 @@ import subprocess
 import threading
 import wave
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -26,6 +27,7 @@ from .pipeline.cover import (
     generate_cover_png,
 )
 from .pipeline.renderer import (
+    LOUDNESS_NORMALIZATION_FILTER,
     Renderer,
     _ffmpeg_executable,
     is_playable_mp4,
@@ -376,40 +378,59 @@ def ensure_voice_preview_wav(path: Path, voice_id: str) -> Path:
     return ensure_loudness_preview_wav(path, "voice_previews", voice_id)
 
 
-def ensure_loudness_preview_wav(path: Path, cache_group: str, cache_id: str) -> Path:
+def ensure_loudness_preview_wav(
+    path: Path,
+    cache_group: str,
+    cache_id: str,
+    *,
+    required: bool = False,
+) -> Path:
     ffmpeg = _ffmpeg_executable()
     if ffmpeg is None:
+        if required:
+            raise RuntimeError("FFmpeg 未配置，无法统一试听与成片的音频响度")
         return path
     try:
-        stamp = int(path.stat().st_mtime)
+        stat = path.stat()
+        stamp = f"{stat.st_mtime_ns}_{stat.st_size}"
     except OSError:
-        stamp = 0
+        stamp = "0_0"
     output = storage_dir(cache_group) / (
         f"{_safe_cache_name(cache_id)}_{stamp}_lufs16.wav"
     )
     if output.exists() and output.stat().st_size > 44:
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        [
-            ffmpeg,
-            "-y",
-            "-i",
-            str(path),
-            "-vn",
-            "-af",
-            "loudnorm=I=-16:TP=-1.5:LRA=11",
-            "-ar",
-            "44100",
-            str(output),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=30,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(path),
+                "-vn",
+                "-af",
+                LOUDNESS_NORMALIZATION_FILTER,
+                "-ar",
+                "44100",
+                str(output),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        output.unlink(missing_ok=True)
+        if required:
+            raise RuntimeError(f"音频响度归一化失败：{exc}") from exc
+        return path
     if completed.returncode == 0 and output.exists() and output.stat().st_size > 44:
         return output
+    output.unlink(missing_ok=True)
+    if required:
+        detail = completed.stderr.decode("utf-8", errors="replace")[-800:]
+        raise RuntimeError(f"音频响度归一化失败：{detail or completed.returncode}")
     return path
 
 
@@ -1214,6 +1235,81 @@ def subtitle_preview(req: SubtitlePreviewRequest):
     }
 
 
+def _render_subtitle_preview_png(req: SubtitlePreviewRequest) -> Path:
+    """Render a transparent subtitle frame with the same ASS/libass path as export."""
+    ffmpeg = _ffmpeg_executable()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg 未配置，无法生成真实字幕预览")
+
+    cache_payload = json.dumps(
+        {
+            "render_version": 1,
+            **req.model_dump(mode="json"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    cache_key = sha256(cache_payload.encode("utf-8")).hexdigest()
+    preview_dir = storage_dir("subtitle_previews")
+    output_path = preview_dir / f"{cache_key}.png"
+    if output_path.exists() and output_path.stat().st_size > 0:
+        return output_path
+
+    subtitle_path = preview_dir / f"{cache_key}.ass"
+    generate_ass(req.script, req.style, subtitle_path, duration_seconds=1.0)
+    escaped_subtitle_path = (
+        str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+    )
+    temporary_path = preview_dir / f"{cache_key}-{uuid4().hex}.tmp.png"
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black@0.0:s=1080x1920:r=10:d=1,format=rgba",
+                "-vf",
+                f"subtitles='{escaped_subtitle_path}':alpha=1",
+                "-ss",
+                "0.1",
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                str(temporary_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or "FFmpeg 字幕预览渲染失败"
+            raise RuntimeError(detail)
+        temporary_path.replace(output_path)
+        return output_path
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+@app.post("/api/subtitles/render-preview", tags=["subtitles"])
+def rendered_subtitle_preview(req: SubtitlePreviewRequest):
+    try:
+        output_path = _render_subtitle_preview_png(req)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FileResponse(
+        output_path,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/subtitles/templates", tags=["subtitles"])
 def list_subtitle_templates():
     return {
@@ -1762,6 +1858,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
             update={
                 "bgm_id": "none",
                 "bgm_volume": 0,
+                "voice_volume": 1.0,
                 "subtitle_enabled": False,
                 "pip_enabled": False,
                 "pip_asset_id": None,
@@ -1773,6 +1870,13 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     )
     voice_ref = voice_reference_path(options.voice_id, options.voice_reference_asset_id)
     bgm_audio = resolve_bgm_audio(options.bgm_id)
+    if bgm_audio is not None:
+        bgm_audio = ensure_loudness_preview_wav(
+            bgm_audio,
+            "bgm_previews",
+            options.bgm_id or bgm_audio.name,
+            required=True,
+        )
     pip_asset = resolve_pip_asset(options)
     digital_human_video = digital_human_reference_path(options.digital_human_id)
     _record_recent_usage("voice", options.voice_id)
@@ -1811,10 +1915,16 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
             )
         ensure_not_cancelled(task, cancel_event)
         task.extracted_audio_path = str(audio_path)
+        render_voice_audio = ensure_loudness_preview_wav(
+            audio_path,
+            "generated_voice_previews",
+            task_id,
+            required=True,
+        )
         complete_progress(task, "voice")
         repo.put(task)
 
-        audio_duration = media_duration_seconds(audio_path)
+        audio_duration = media_duration_seconds(render_voice_audio)
         if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
             range_text = (options.pip_trigger_text or "").strip()
             time_range = subtitle_time_range_for_text(
@@ -1838,7 +1948,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         if source_video is not None:
             prepared_reference_video = prepare_video_for_audio_duration(
                 source_video,
-                audio_path,
+                render_voice_audio,
                 storage_dir("outputs") / f"{task_id}_reference_matched.mp4",
                 cancel_event=cancel_event,
             )
@@ -1865,7 +1975,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
         active_digital_human_provider.render(
             reference_video=prepared_reference_video,
-            driving_audio=audio_path,
+            driving_audio=render_voice_audio,
             script=script,
             options=options,
             output_path=digital_path,
@@ -1876,7 +1986,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
         render_kwargs = {
             "source_video": digital_path,
-            "voice_audio": audio_path,
+            "voice_audio": render_voice_audio,
             "subtitle_file": subtitle_path,
             "bgm_audio": bgm_audio,
             "cancel_event": cancel_event,
@@ -2122,8 +2232,21 @@ def postprocess_video(request: PostprocessVideoRequest):
     options = request.options
     script = (options.script or "").strip()
     bgm_audio = resolve_bgm_audio(options.bgm_id)
+    if bgm_audio is not None:
+        bgm_audio = ensure_loudness_preview_wav(
+            bgm_audio,
+            "bgm_previews",
+            options.bgm_id or bgm_audio.name,
+            required=True,
+        )
     pip_asset = resolve_pip_asset(options)
     duration = media_duration_seconds(source_path)
+    voice_audio = ensure_loudness_preview_wav(
+        source_path,
+        "postprocess_voice",
+        source_path.stem,
+        required=True,
+    )
 
     if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
         range_text = (options.pip_trigger_text or "").strip()
@@ -2157,6 +2280,7 @@ def postprocess_video(request: PostprocessVideoRequest):
             output_path,
             bgm_audio=bgm_audio,
             pip_asset=pip_asset,
+            voice_audio=voice_audio,
         )
         cover_path = Path(options.cover_path).expanduser() if options.cover_path else None
         if cover_path is not None and cover_path.exists():
