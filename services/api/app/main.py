@@ -108,6 +108,19 @@ VOICE_TEMPLATE_ORDER = {
     "温和男声": 2,
     "元气女生": 3,
 }
+
+
+def _subtitle_timing_tokens(audio_path: str | Path | None):
+    """Best-effort word timing; final rendering still works if ASR is unavailable."""
+
+    if audio_path is None:
+        return []
+    try:
+        return asr_provider.transcribe_timed(Path(audio_path))
+    except Exception:
+        return []
+
+
 BGM_TEMPLATE_ORDER = {
     "宣传类口播": 0,
     "通用类口播": 1,
@@ -1997,6 +2010,16 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
 
         audio_duration = media_duration_seconds(render_voice_audio)
+        subtitle_timing_tokens = (
+            _subtitle_timing_tokens(render_voice_audio)
+            if options.subtitle_enabled
+            or (
+                options.pip_enabled
+                and (options.pip_timing_mode or "").strip().lower()
+                == "sentence"
+            )
+            else []
+        )
         if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
             range_text = (options.pip_trigger_text or "").strip()
             time_range = subtitle_time_range_for_text(
@@ -2004,6 +2027,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
                 options.subtitle_style,
                 range_text,
                 duration_seconds=audio_duration,
+                timed_tokens=subtitle_timing_tokens,
             )
             if time_range is None:
                 raise RuntimeError("没有在文案字幕中找到画中画触发句，请换一句更完整的话或改用按秒显示。")
@@ -2031,7 +2055,13 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
         if options.subtitle_enabled:
             subtitle_path = storage_dir("subtitles") / f"{task_id}.ass"
-            generate_ass(script, options.subtitle_style, subtitle_path, duration_seconds=audio_duration)
+            generate_ass(
+                script,
+                options.subtitle_style,
+                subtitle_path,
+                duration_seconds=audio_duration,
+                timed_tokens=subtitle_timing_tokens,
+            )
             task.subtitle_path = str(subtitle_path)
         else:
             task.subtitle_path = None
@@ -2218,7 +2248,16 @@ def generate_task_subtitles(task_id: str, options: RenderOptions) -> OralVideoTa
         duration = media_duration_seconds(task.extracted_audio_path)
         if duration is None and task.source_video:
             duration = media_duration_seconds(task.source_video.path)
-        generate_ass(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        timing_source = task.extracted_audio_path
+        if not timing_source and task.source_video:
+            timing_source = task.source_video.path
+        generate_ass(
+            script,
+            options.subtitle_style,
+            subtitle_path,
+            duration_seconds=duration,
+            timed_tokens=_subtitle_timing_tokens(timing_source),
+        )
         task.subtitle_path = str(subtitle_path)
     else:
         task.subtitle_path = None
@@ -2319,6 +2358,15 @@ def postprocess_video(request: PostprocessVideoRequest):
         source_path.stem,
         required=True,
     )
+    subtitle_timing_tokens = (
+        _subtitle_timing_tokens(voice_audio)
+        if options.subtitle_enabled
+        or (
+            options.pip_enabled
+            and (options.pip_timing_mode or "").strip().lower() == "sentence"
+        )
+        else []
+    )
 
     if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
         range_text = (options.pip_trigger_text or "").strip()
@@ -2327,6 +2375,7 @@ def postprocess_video(request: PostprocessVideoRequest):
             options.subtitle_style,
             range_text,
             duration_seconds=duration,
+            timed_tokens=subtitle_timing_tokens,
         )
         if time_range is None:
             raise HTTPException(status_code=400, detail="没有在文案字幕中找到画中画触发句，请换一句更完整的话或改用按秒显示。")
@@ -2341,7 +2390,13 @@ def postprocess_video(request: PostprocessVideoRequest):
     subtitle_path: Path | None = None
     if options.subtitle_enabled:
         subtitle_path = storage_dir("subtitles") / f"{postprocess_id}.ass"
-        generate_ass(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        generate_ass(
+            script,
+            options.subtitle_style,
+            subtitle_path,
+            duration_seconds=duration,
+            timed_tokens=subtitle_timing_tokens,
+        )
 
     output_path = storage_dir("outputs") / f"{postprocess_id}.mp4"
     try:

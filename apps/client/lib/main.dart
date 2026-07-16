@@ -4367,11 +4367,24 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     await refreshSubtitlePreview(silent: true);
     await refreshRenderedSubtitlePreview(silent: true);
     if (!mounted) return;
+    final initialSentenceOptions = _pipSentenceOptions;
+    if (pipTimingMode == 'sentence' &&
+        !initialSentenceOptions.contains(pipTriggerController.text.trim())) {
+      pipTriggerController.text = initialSentenceOptions.isEmpty
+          ? ''
+          : initialSentenceOptions.first;
+    }
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, dialogSetState) {
+            final sentenceOptions = _pipSentenceOptions;
+            final sentenceLabels = <String, String>{
+              for (var index = 0; index < sentenceOptions.length; index++)
+                sentenceOptions[index]: '${index + 1}. ${sentenceOptions[index]}',
+            };
+
             void repaintDialog() {
               if (dialogContext.mounted) dialogSetState(() {});
             }
@@ -4532,7 +4545,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                               _pipTimingOptions,
                               (value) {
                                 if (value == null) return;
-                                updateDialog(() => pipTimingMode = value);
+                                updateDialog(() {
+                                  pipTimingMode = value;
+                                  if (value == 'sentence' &&
+                                      !sentenceOptions.contains(
+                                        pipTriggerController.text.trim(),
+                                      )) {
+                                    pipTriggerController.text =
+                                        sentenceOptions.isEmpty
+                                            ? ''
+                                            : sentenceOptions.first;
+                                  }
+                                });
                               },
                               labels: _pipTimingLabels,
                             ),
@@ -4561,11 +4585,31 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       ),
                       if (pipTimingMode == 'sentence') ...[
                         const SizedBox(height: 8),
-                        _smallTextField(
-                          pipTriggerController,
-                          '触发句子',
-                          updateDialog,
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '选择画中画出现的口播句子',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
                         ),
+                        const SizedBox(height: 6),
+                        if (sentenceOptions.isEmpty)
+                          _readonlyBox('当前文案没有可选口播句子')
+                        else
+                          _dropdown(
+                            pipTriggerController.text.trim(),
+                            sentenceOptions,
+                            (value) {
+                              if (value == null) return;
+                              updateDialog(
+                                () => pipTriggerController.text = value,
+                              );
+                            },
+                            labels: sentenceLabels,
+                          ),
                       ],
                       const SizedBox(height: 12),
                       const Align(
@@ -6072,6 +6116,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return originalScriptController.text.trim();
   }
 
+  List<String> get _pipSentenceOptions {
+    final script = _renderScript.trim();
+    if (script.isEmpty) return const [];
+
+    final parts = script.split(RegExp(r'[。！？!?；;\r\n]+'));
+    final seen = <String>{};
+    final sentences = <String>[];
+    for (final part in parts) {
+      final sentence = part
+          .replaceAll(
+            RegExp(r'[，、：:,.“”‘’（）()【】\[\]《》〈〉…—-]+'),
+            '',
+          )
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (sentence.isNotEmpty && seen.add(sentence)) {
+        sentences.add(sentence);
+      }
+    }
+    return sentences;
+  }
+
   String _voiceKeyFor(String script) =>
       '$selectedVoice:${script.trim().hashCode}';
 
@@ -6195,10 +6261,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         return false;
       }
     }
-    if (pipTimingMode == 'sentence' &&
-        pipTriggerController.text.trim().isEmpty) {
-      showError('请填写画中画触发句子');
-      return false;
+    if (pipTimingMode == 'sentence') {
+      final trigger = pipTriggerController.text.trim();
+      if (trigger.isEmpty || !_pipSentenceOptions.contains(trigger)) {
+        showError('请选择画中画触发的口播句子');
+        return false;
+      }
     }
     return true;
   }
