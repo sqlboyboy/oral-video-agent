@@ -475,6 +475,33 @@ extension _MobileWorkbench on _WorkbenchPageState {
     );
   }
 
+  Widget _mobileScriptCreationModeSelector() {
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<String>(
+        segments: const [
+          ButtonSegment<String>(
+            value: 'rewrite',
+            icon: Icon(Icons.video_library_outlined, size: 18),
+            label: Text('视频仿写'),
+          ),
+          ButtonSegment<String>(
+            value: 'creator',
+            icon: Icon(Icons.person_search_rounded, size: 18),
+            label: Text('网红风格创作'),
+          ),
+        ],
+        selected: {scriptCreationMode},
+        showSelectedIcon: false,
+        onSelectionChanged: loading
+            ? null
+            : (value) => _updateMobile(
+                  () => scriptCreationMode = value.first,
+                ),
+      ),
+    );
+  }
+
   Widget _mobileStudioPage() {
     final jobStatus = cloudJob?['status']?.toString() ?? '';
     final jobProgress =
@@ -496,112 +523,184 @@ extension _MobileWorkbench on _WorkbenchPageState {
           _mobileCard(
             number: '1',
             title: '准备文案',
-            subtitle: '粘贴抖音链接，由服务器下载视频并提取口播原文',
+            subtitle: scriptCreationMode == 'creator'
+                ? '学习网红主页公开内容，结合关键词原创 8 篇文案'
+                : '粘贴抖音链接，由服务器下载视频并提取口播原文',
             icon: Icons.edit_note_rounded,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextField(
-                  controller: urlController,
-                  minLines: 2,
-                  maxLines: 4,
-                  keyboardType: TextInputType.url,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  decoration: _mobileInputDecoration(
-                    '粘贴抖音分享链接或完整分享口令',
-                  ).copyWith(
-                    prefixIcon: const Icon(Icons.link_rounded),
-                    alignLabelWithHint: true,
-                  ),
-                ),
-                const SizedBox(height: 7),
-                const Text(
-                  '解析、视频下载、音频提取和语音识别均在服务器完成。',
-                  style: TextStyle(color: Colors.white54, fontSize: 11),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: loading ? null : createCloudDouyinTranscriptTask,
-                    icon: const Icon(Icons.auto_fix_high_rounded),
-                    label: const Text('解析链接并提取文案'),
-                  ),
-                ),
-                if (douyinStatus.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  _mobileJobStatus(douyinStatus, douyinProgress),
-                  if (douyinProgressMessage.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      douyinProgressMessage,
-                      style:
-                          const TextStyle(color: Colors.white60, fontSize: 11),
-                    ),
-                  ],
-                ],
+                _mobileScriptCreationModeSelector(),
                 const SizedBox(height: 12),
-                _mobileTextArea(
-                  originalScriptController,
-                  '输入或粘贴原始口播文案',
-                  minLines: 5,
-                ),
+                if (scriptCreationMode == 'rewrite') ...[
+                  TextField(
+                    controller: urlController,
+                    minLines: 2,
+                    maxLines: 4,
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: _mobileInputDecoration(
+                      '粘贴抖音分享链接或完整分享口令',
+                    ).copyWith(
+                      prefixIcon: const Icon(Icons.link_rounded),
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  const Text(
+                    '解析、视频下载、音频提取和语音识别均在服务器完成。',
+                    style: TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed:
+                          loading ? null : createCloudDouyinTranscriptTask,
+                      icon: const Icon(Icons.auto_fix_high_rounded),
+                      label: const Text('解析链接并提取文案'),
+                    ),
+                  ),
+                  if (douyinStatus.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    _mobileJobStatus(douyinStatus, douyinProgress),
+                    if (douyinProgressMessage.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        douyinProgressMessage,
+                        style: const TextStyle(
+                          color: Colors.white60,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ],
+                  const SizedBox(height: 12),
+                  _mobileTextArea(
+                    originalScriptController,
+                    '输入或粘贴原始口播文案',
+                    minLines: 5,
+                  ),
+                ] else ...[
+                  TextField(
+                    controller: creatorHomepageController,
+                    minLines: 3,
+                    maxLines: 5,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    decoration: _mobileInputDecoration(
+                      '粘贴抖音主页链接，或从“4-”开始到末尾的完整分享内容',
+                    ).copyWith(
+                      prefixIcon: const Icon(Icons.person_search_rounded),
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: creatorKeywordController,
+                    decoration: _mobileInputDecoration(
+                      '创作关键词，例如：装修',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    '首次读取主页简介和近期 12 个公开作品描述；换一批会直接复用已学习的风格。',
+                    style: TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: loading ? null : openCreatorScriptLab,
+                      icon: const Icon(Icons.auto_awesome_rounded),
+                      label: const Text('分析风格并生成 8 篇'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
           const SizedBox(height: 12),
           _mobileCard(
             number: '2',
-            title: 'AI 仿写',
-            subtitle: '按产品、受众和风格生成新的口播脚本',
+            title: scriptCreationMode == 'creator' ? '确认创作文案' : 'AI 仿写',
+            subtitle: scriptCreationMode == 'creator'
+                ? '从 8 篇候选中选择后，可在这里继续手动调整'
+                : '按产品、受众和风格生成新的口播脚本',
             icon: Icons.auto_awesome_rounded,
             child: Column(
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: selectedStyle,
-                  decoration: _mobileInputDecoration('改写风格'),
-                  items: const [
-                    '同款口播',
-                    '精简有力',
-                    '情绪感染',
-                    '专业可信',
-                    '种草转化',
-                  ]
-                      .map((style) => DropdownMenuItem(
-                            value: style,
-                            child: Text(style),
-                          ))
-                      .toList(),
-                  onChanged: loading
-                      ? null
-                      : (value) => _updateMobile(
-                            () => selectedStyle = value ?? selectedStyle,
-                          ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: productController,
-                  decoration: _mobileInputDecoration('产品或服务（可选）'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: audienceController,
-                  decoration: _mobileInputDecoration('目标人群（可选）'),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: loading ? null : rewrite,
-                    icon: const Icon(Icons.bolt_rounded),
-                    label: const Text('一键生成改写文案'),
+                if (scriptCreationMode == 'rewrite') ...[
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedStyle,
+                    decoration: _mobileInputDecoration('改写风格'),
+                    items: const [
+                      '同款口播',
+                      '精简有力',
+                      '情绪感染',
+                      '专业可信',
+                      '种草转化',
+                    ]
+                        .map((style) => DropdownMenuItem(
+                              value: style,
+                              child: Text(style),
+                            ))
+                        .toList(),
+                    onChanged: loading
+                        ? null
+                        : (value) => _updateMobile(
+                              () => selectedStyle = value ?? selectedStyle,
+                            ),
                   ),
-                ),
-                const SizedBox(height: 12),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: productController,
+                    decoration: _mobileInputDecoration('产品或服务（可选）'),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: audienceController,
+                    decoration: _mobileInputDecoration('目标人群（可选）'),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: loading ? null : rewrite,
+                      icon: const Icon(Icons.bolt_rounded),
+                      label: const Text('一键生成改写文案'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ] else if (creatorSelectedLabel.isNotEmpty) ...[
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.check_circle_rounded,
+                        color: Color(0xFF65DDB0),
+                        size: 18,
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          creatorSelectedLabel,
+                          style: const TextStyle(
+                            color: Color(0xFF65DDB0),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 _mobileTextArea(
                   rewrittenScriptController,
-                  '改写后的文案；也可以继续手动编辑',
+                  scriptCreationMode == 'creator'
+                      ? '请先在上一步生成并选择文案；选择后也可以继续手动编辑'
+                      : '改写后的文案；也可以继续手动编辑',
                   minLines: 7,
                 ),
               ],

@@ -46,14 +46,16 @@ class CreatorScriptSelection {
 class CreatorScriptLabDialog extends StatefulWidget {
   const CreatorScriptLabDialog({
     super.key,
-    required this.apiBase,
+    required this.endpoint,
     required this.shareText,
     required this.keyword,
+    this.headers = const {'Content-Type': 'application/json'},
   });
 
-  final String apiBase;
+  final String endpoint;
   final String shareText;
   final String keyword;
+  final Map<String, String> headers;
 
   @override
   State<CreatorScriptLabDialog> createState() => _CreatorScriptLabDialogState();
@@ -110,11 +112,14 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
       };
       final response = await http
           .post(
-            Uri.parse('${widget.apiBase}/api/creator-scripts/generate'),
-            headers: const {'Content-Type': 'application/json'},
+            Uri.parse(widget.endpoint),
+            headers: {
+              'Content-Type': 'application/json',
+              ...widget.headers,
+            },
             body: jsonEncode(requestBody),
           )
-          .timeout(const Duration(minutes: 3));
+          .timeout(const Duration(minutes: 5));
       final decodedText = utf8.decode(response.bodyBytes);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw Exception(_responseError(decodedText, response.statusCode));
@@ -205,19 +210,23 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.sizeOf(context);
+    final compact = screenSize.width < 720;
+    final inset = compact ? 8.0 : 22.0;
     return Dialog(
-      insetPadding: const EdgeInsets.all(22),
+      insetPadding: EdgeInsets.all(inset),
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(compact ? 16 : 22),
+      ),
       child: SizedBox(
-        width: mathMin(1180, screenSize.width - 44),
-        height: mathMin(820, screenSize.height - 44),
+        width: mathMin(1180, screenSize.width - inset * 2),
+        height: mathMin(820, screenSize.height - inset * 2),
         child: Column(
           children: [
-            _header(),
+            _header(compact),
             if (_loading) const LinearProgressIndicator(minHeight: 3),
-            Expanded(child: _body()),
-            _footer(),
+            Expanded(child: _body(compact)),
+            _footer(compact),
           ],
         ),
       ),
@@ -227,9 +236,11 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
   double mathMin(num first, num second) =>
       (first < second ? first : second).toDouble();
 
-  Widget _header() {
+  Widget _header(bool compact) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(24, 18, 14, 18),
+      padding: compact
+          ? const EdgeInsets.fromLTRB(14, 12, 6, 12)
+          : const EdgeInsets.fromLTRB(24, 18, 14, 18),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(bottom: BorderSide(color: _border)),
@@ -237,8 +248,8 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
       child: Row(
         children: [
           Container(
-            width: 44,
-            height: 44,
+            width: compact ? 38 : 44,
+            height: compact ? 38 : 44,
             decoration: BoxDecoration(
               color: const Color(0xFFEEEFFF),
               borderRadius: BorderRadius.circular(13),
@@ -250,11 +261,11 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   '网红风格创作 · 深度学习',
                   style: TextStyle(
                     color: _ink,
-                    fontSize: 20,
+                    fontSize: compact ? 16 : 20,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
@@ -280,7 +291,7 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
     );
   }
 
-  Widget _body() {
+  Widget _body(bool compact) {
     if (_items.isEmpty) {
       return ColoredBox(
         color: _canvas,
@@ -295,14 +306,22 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
     return ColoredBox(
       color: _canvas,
       child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: [
-            SizedBox(width: 365, child: _candidateList()),
-            const SizedBox(width: 16),
-            Expanded(child: _candidateDetail()),
-          ],
-        ),
+        padding: EdgeInsets.all(compact ? 10 : 18),
+        child: compact
+            ? Column(
+                children: [
+                  SizedBox(height: 228, child: _candidateList()),
+                  const SizedBox(height: 10),
+                  Expanded(child: _candidateDetail()),
+                ],
+              )
+            : Row(
+                children: [
+                  SizedBox(width: 365, child: _candidateList()),
+                  const SizedBox(width: 16),
+                  Expanded(child: _candidateDetail()),
+                ],
+              ),
       ),
     );
   }
@@ -606,46 +625,76 @@ class _CreatorScriptLabDialogState extends State<CreatorScriptLabDialog> {
     );
   }
 
-  Widget _footer() {
+  Widget _footer(bool compact) {
     final canUse = _selectedCandidate != null && !_loading;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 22,
+        vertical: compact ? 10 : 14,
+      ),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(top: BorderSide(color: _border)),
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.info_outline_rounded, color: _muted, size: 18),
-          const SizedBox(width: 7),
-          const Expanded(
-            child: Text(
-              '候选文案为风格学习后的全新创作；只有点击“使用选中文案”才会写入当前项目。',
-              style: TextStyle(color: _muted, fontSize: 12),
+      child: compact
+          ? Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _items.isEmpty || _loading
+                        ? null
+                        : () => _generate(regenerate: true),
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: Text(_loading ? '正在生成' : '换一批'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: canUse ? _useSelected : null,
+                    style: FilledButton.styleFrom(backgroundColor: _primary),
+                    icon: const Icon(Icons.check_rounded, size: 18),
+                    label: const Text(
+                      '使用此文案',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : Row(
+              children: [
+                const Icon(Icons.info_outline_rounded, color: _muted, size: 18),
+                const SizedBox(width: 7),
+                const Expanded(
+                  child: Text(
+                    '候选文案为风格学习后的全新创作；只有点击“使用选中文案”才会写入当前项目。',
+                    style: TextStyle(color: _muted, fontSize: 12),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _items.isEmpty || _loading
+                      ? null
+                      : () => _generate(regenerate: true),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: Text(_loading ? '正在生成' : '不满意，换一批'),
+                ),
+                const SizedBox(width: 10),
+                FilledButton.icon(
+                  onPressed: canUse ? _useSelected : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _primary,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 14),
+                  ),
+                  icon: const Icon(Icons.check_rounded),
+                  label: const Text(
+                    '使用选中文案',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ],
             ),
-          ),
-          OutlinedButton.icon(
-            onPressed: _items.isEmpty || _loading
-                ? null
-                : () => _generate(regenerate: true),
-            icon: const Icon(Icons.refresh_rounded),
-            label: Text(_loading ? '正在生成' : '不满意，换一批'),
-          ),
-          const SizedBox(width: 10),
-          FilledButton.icon(
-            onPressed: canUse ? _useSelected : null,
-            style: FilledButton.styleFrom(
-              backgroundColor: _primary,
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            ),
-            icon: const Icon(Icons.check_rounded),
-            label: const Text(
-              '使用选中文案',
-              style: TextStyle(fontWeight: FontWeight.w900),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

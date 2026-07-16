@@ -16,6 +16,16 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Query, Requ
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+from .creator_scripts import (
+    CreatorScriptBatchResponse,
+    CreatorScriptGenerateRequest,
+    create_creator_script_provider,
+)
+from .douyin_creator import (
+    DouyinCreatorCollector,
+    DouyinCreatorFetchError,
+    DouyinCreatorInputError,
+)
 from .email_sender import create_email_sender
 from .douyin_transcriber import (
     DouyinTranscriptionError,
@@ -37,6 +47,12 @@ store.fail_interrupted_douyin_transcriptions()
 notifier = WebhookNotifier(settings.notify_webhook_url)
 redis_state = RedisState(settings.redis_url)
 email_sender = create_email_sender()
+douyin_creator_collector = DouyinCreatorCollector(
+    chromium_executable=settings.douyin_chromium_executable,
+    max_works=12,
+    timeout_ms=settings.douyin_browser_timeout_seconds * 1000,
+)
+creator_script_provider = create_creator_script_provider(settings)
 
 
 class JobCreateRequest(BaseModel):
@@ -1179,6 +1195,53 @@ def activate_client_license(
 @app.get("/api/client/me")
 def client_me(session: dict[str, Any] = Depends(require_client)) -> dict[str, Any]:
     return session
+
+
+@app.post(
+    "/api/client/creator-scripts/generate",
+    response_model=CreatorScriptBatchResponse,
+)
+def generate_client_creator_scripts(
+    req: CreatorScriptGenerateRequest,
+    session: dict[str, Any] = Depends(require_cloud_account),
+) -> CreatorScriptBatchResponse:
+    del session
+    keyword = req.keyword.strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="请输入创作关键词")
+    try:
+        style_profile = req.style_profile
+        if style_profile is None:
+            if not req.share_text.strip():
+                raise DouyinCreatorInputError("请粘贴包含抖音主页链接的完整分享文案")
+            snapshot = douyin_creator_collector.collect(req.share_text)
+            style_profile = creator_script_provider.analyze_style(snapshot)
+        items = creator_script_provider.generate_scripts(
+            style_profile,
+            keyword=keyword,
+            count=req.count,
+            duration_seconds=req.duration_seconds,
+            generation_round=req.generation_round,
+            exclude_titles=req.exclude_titles,
+        )
+    except DouyinCreatorInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (DouyinCreatorFetchError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if len(items) != req.count:
+        raise HTTPException(
+            status_code=502,
+            detail=f"文案生成结果数量异常：期望 {req.count} 篇，实际 {len(items)} 篇",
+        )
+    return CreatorScriptBatchResponse(
+        batch_id=secrets.token_hex(16),
+        creator_name=style_profile.creator_name or "抖音创作者",
+        keyword=keyword,
+        generation_round=req.generation_round,
+        style_profile=style_profile,
+        items=items,
+    )
 
 
 @app.post("/api/client/douyin/transcriptions")

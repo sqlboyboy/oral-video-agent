@@ -2688,7 +2688,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入创作关键词，例如“装修”');
       return;
     }
-    if (!localApiOnline) {
+    final useCloudCreatorService = _isAndroidClient;
+    if (useCloudCreatorService && !_ensureCloudAccountReady()) {
+      return;
+    }
+    if (!useCloudCreatorService && !localApiOnline) {
       showError('本地创作服务未连接，请点击顶部刷新后重试');
       return;
     }
@@ -2697,7 +2701,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => CreatorScriptLabDialog(
-        apiBase: apiBase,
+        endpoint: useCloudCreatorService
+            ? '$_cloudApiBase/api/client/creator-scripts/generate'
+            : '$apiBase/api/creator-scripts/generate',
+        headers: useCloudCreatorService
+            ? _cloudHeaders()
+            : const {'Content-Type': 'application/json'},
         shareText: shareText,
         keyword: keyword,
       ),
@@ -2715,20 +2724,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       messageIsError = false;
     });
     try {
-      final response = await http
-          .post(
-            Uri.parse('$apiBase/api/tasks/from-script'),
-            headers: const {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'title': selection.candidate.title,
-              'original_script': '',
-              'rewritten_script': script,
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
-      _check(response);
-      final persistedTask =
-          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      late final Map<String, dynamic> persistedTask;
+      if (useCloudCreatorService) {
+        persistedTask = {
+          'task_id':
+              'cloud-deep-${selection.batchId}-${selection.candidate.candidateId}',
+          'title': selection.candidate.title,
+          'status': 'rewritten',
+          'original_script': '',
+          'rewritten_script': script,
+          'progress_steps': const [],
+        };
+      } else {
+        final response = await http
+            .post(
+              Uri.parse('$apiBase/api/tasks/from-script'),
+              headers: const {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'title': selection.candidate.title,
+                'original_script': '',
+                'rewritten_script': script,
+              }),
+            )
+            .timeout(const Duration(seconds: 30));
+        _check(response);
+        persistedTask =
+            jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      }
       final persistedTaskId = persistedTask['task_id']?.toString() ?? '';
       if (!persistedTaskId.startsWith('cloud-deep-')) {
         throw Exception('服务没有正确保存深度学习文案任务');
