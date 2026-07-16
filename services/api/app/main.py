@@ -39,7 +39,7 @@ from .pipeline.subtitles import generate_ass, preview_subtitles, subtitle_time_r
 from .pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
-from .providers.creator_scripts import create_creator_script_provider
+from .providers.creator_scripts import create_creator_script_provider, format_spoken_script
 from .providers.digital_human import create_digital_human_provider
 from .providers.douyin_creator import (
     DouyinCreatorCollector,
@@ -1645,6 +1645,10 @@ def generate_creator_scripts(
             generation_round=req.generation_round,
             exclude_titles=req.exclude_titles,
         )
+        items = [
+            item.model_copy(update={"script": format_spoken_script(item.script)})
+            for item in items
+        ]
     except DouyinCreatorInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (DouyinCreatorFetchError, RuntimeError, ValueError) as exc:

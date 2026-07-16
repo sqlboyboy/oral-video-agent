@@ -7,6 +7,7 @@ from app.providers.creator_scripts import (
     PlaceholderCreatorScriptProvider,
     _extract_json_object,
     create_creator_script_provider,
+    format_spoken_script,
 )
 from app.providers.douyin_creator import (
     DouyinCreatorSnapshot,
@@ -94,6 +95,20 @@ def test_json_parser_accepts_markdown_code_fence():
     assert result == {"items": []}
 
 
+def test_format_spoken_script_removes_punctuation_and_keeps_semantic_pauses():
+    result = format_spoken_script(
+        "第一，装修前要先确认需求；预算有限，也不要忽略水电！\n最后：记得验收。"
+    )
+
+    assert result.splitlines() == [
+        "第一装修前要先确认需求",
+        "预算有限也不要忽略水电",
+        "最后",
+        "记得验收",
+    ]
+    assert not any(char in result for char in "，；！：。")
+
+
 def test_generate_endpoint_collects_analyzes_and_returns_frontend_contract(monkeypatch):
     calls = {"collect": 0, "analyze": 0, "generate": 0}
 
@@ -145,6 +160,7 @@ def test_generate_endpoint_collects_analyzes_and_returns_frontend_contract(monke
     assert body["generation_round"] == 1
     assert body["style_profile"]["sec_uid"] == "sec-test"
     assert len(body["items"]) == 8
+    assert body["items"][0]["script"] == "这是第1篇围绕装修生成的完整口播文案"
     assert calls == {"collect": 1, "analyze": 1, "generate": 1}
 
 

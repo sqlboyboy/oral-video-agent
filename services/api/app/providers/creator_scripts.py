@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Protocol
+import unicodedata
 from uuid import uuid4
 
 import httpx
@@ -61,6 +62,35 @@ def _string_list(value: Any, *, limit: int = 8) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def format_spoken_script(text: str) -> str:
+    """Return punctuation-free spoken copy separated by semantic pauses."""
+
+    lines: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        line = re.sub(r"\s+", " ", "".join(buffer)).strip()
+        buffer.clear()
+        if line:
+            lines.append(line)
+
+    for char in str(text or ""):
+        if char in "\r\n":
+            flush()
+            continue
+        if not unicodedata.category(char).startswith("P"):
+            buffer.append(char)
+            continue
+
+        # A short comma clause such as “第一个” belongs with the phrase after it.
+        current = re.sub(r"\s+", "", "".join(buffer))
+        if char in "，,、" and len(current) < 8:
+            continue
+        flush()
+    flush()
+    return "\n".join(lines)
 
 
 class PlaceholderCreatorScriptProvider:
@@ -150,6 +180,7 @@ class PlaceholderCreatorScriptProvider:
             script = script_template.format(keyword=keyword)
             if generation_round > 1:
                 script = f"换一个角度看{keyword}。{script}"
+            script = format_spoken_script(script)
             result.append(
                 CreatorScriptCandidate(
                     candidate_id=f"placeholder-{generation_round}-{index}",
@@ -273,6 +304,9 @@ class DeepSeekCreatorScriptProvider:
             f"每篇约 {min_chars}-{max_chars} 个中文字符，适合约 {duration_seconds} 秒口播。\n"
             "8 篇必须使用明显不同的切入角度、开场钩子和内容结构，不能只是替换少量词语。\n"
             "不得编造数据、资质、案例、价格、功效或承诺；信息不足时给通用、可核验的建议。\n"
+            "script 必须按自然语义停顿分行，每行是一句可直接口播的话，不能按固定字数机械换行。\n"
+            "script 中禁止使用任何标点符号，包括逗号、句号、冒号、问号、感叹号和序号标点；只用换行表示停顿。\n"
+            "每行尽量保持 8 到 24 个中文字符，短句可与紧接的语义合并，且必须完整表达全部内容。\n"
             "不要使用已排除的标题。只输出严格 JSON 对象，不要 Markdown。\n"
             "格式："
             '{"items":[{"title":"候选标题","angle":"切入角度",'
@@ -298,7 +332,7 @@ class DeepSeekCreatorScriptProvider:
                 continue
             title = str(raw.get("title") or "").strip()
             angle = str(raw.get("angle") or "").strip()
-            script = str(raw.get("script") or "").strip()
+            script = format_spoken_script(str(raw.get("script") or ""))
             reason = str(raw.get("reason") or "").strip()
             title_key = title.casefold()
             script_key = re.sub(r"\s+", "", script).casefold()
