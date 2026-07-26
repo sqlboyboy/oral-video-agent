@@ -415,7 +415,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
           _mobileCard(
             number: '3',
             title: '克隆声音',
-            subtitle: '建议选择 15–60 秒清晰人声，最长不超过 5 分钟',
+            subtitle: '支持 WAV/MP3/M4A/AAC/FLAC，最长 3 分钟；较长音频会自动提取克隆片段',
             icon: Icons.graphic_eq_rounded,
             child: Column(
               children: [

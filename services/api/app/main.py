@@ -59,6 +59,8 @@ import mimetypes
 import os
 from urllib.parse import urlencode
 
+VOICE_REFERENCE_UPLOAD_MAX_SECONDS = 180.0
+
 # 修复 Windows 下 Python 3.13+ 运行 Playwright 报错 NotImplementedError 的问题
 if sys.platform == 'win32':
     # 强制设置事件循环策略
@@ -845,12 +847,15 @@ def upload_voice_reference(file: UploadFile = File(...)):
         # and synthesis will report a clear decode error if the audio is invalid.
         pass
     duration_seconds = media_duration_seconds(Path(asset.path))
-    if duration_seconds is not None and duration_seconds > 300:
+    if (
+        duration_seconds is not None
+        and duration_seconds > VOICE_REFERENCE_UPLOAD_MAX_SECONDS
+    ):
         try:
             Path(asset.path).unlink(missing_ok=True)
         finally:
             asset_store.delete(asset.asset_id)
-        raise HTTPException(status_code=400, detail="声音参考文件最长不能超过 5 分钟")
+        raise HTTPException(status_code=400, detail="声音参考文件最长不能超过 3 分钟")
     voice_id = f"custom:{asset.asset_id}"
     _record_recent_usage("voice", voice_id)
     return {

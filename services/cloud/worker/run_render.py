@@ -66,6 +66,10 @@ FALLBACK_OUTPUT_HEIGHT = 1920
 PIP_MEDIA_ASPECT_RATIO = 16 / 9
 PIP_MARGIN_X = 24
 PIP_MARGIN_Y = 24
+VOICE_REFERENCE_UPLOAD_MAX_SECONDS = 180.0
+# CosyVoice-300M-25Hz rejects prompt audio longer than 30 seconds.
+# Leave a small margin for container/sample rounding after transcoding.
+COSYVOICE_REFERENCE_MAX_SECONDS = 29.5
 
 TRADITIONAL_PHRASE_REPLACEMENTS = (
     ("畫中畫", "画中画"),
@@ -1275,29 +1279,83 @@ def synthesize_voice_with_cosyvoice(
     output_path: Path,
 ) -> None:
     start_cosyvoice_service()
-    max_chars = int(os.getenv("COSYVOICE_MAX_CHARS_PER_REQUEST", "120") or "120")
-    chunks = split_tts_script(script, max_chars=max_chars)
-    if len(chunks) > 1:
-        part_paths: list[Path] = []
-        for index, chunk in enumerate(chunks, start=1):
-            part_path = output_path.with_name(
-                f"{output_path.stem}_part_{index:03d}{output_path.suffix}"
-            )
-            synthesize_cosyvoice_chunk_with_retry(
-                reference_audio=reference_audio,
-                script=chunk,
-                output_path=part_path,
-            )
-            part_paths.append(part_path)
-        concatenate_wav_files(part_paths, output_path)
-        validate_wav_output(output_path)
-        return
-
-    synthesize_cosyvoice_chunk_with_retry(
-        reference_audio=reference_audio,
-        script=chunks[0] if chunks else script,
-        output_path=output_path,
+    normalized_reference = output_path.with_name(
+        f".{output_path.stem}_{uuid4().hex}_reference.wav"
     )
+    prepare_cosyvoice_reference_audio(reference_audio, normalized_reference)
+    try:
+        max_chars = int(os.getenv("COSYVOICE_MAX_CHARS_PER_REQUEST", "120") or "120")
+        chunks = split_tts_script(script, max_chars=max_chars)
+        if len(chunks) > 1:
+            part_paths: list[Path] = []
+            for index, chunk in enumerate(chunks, start=1):
+                part_path = output_path.with_name(
+                    f"{output_path.stem}_part_{index:03d}{output_path.suffix}"
+                )
+                synthesize_cosyvoice_chunk_with_retry(
+                    reference_audio=normalized_reference,
+                    script=chunk,
+                    output_path=part_path,
+                )
+                part_paths.append(part_path)
+            concatenate_wav_files(part_paths, output_path)
+            validate_wav_output(output_path)
+            return
+
+        synthesize_cosyvoice_chunk_with_retry(
+            reference_audio=normalized_reference,
+            script=chunks[0] if chunks else script,
+            output_path=output_path,
+        )
+    finally:
+        normalized_reference.unlink(missing_ok=True)
+
+
+def prepare_cosyvoice_reference_audio(source_path: Path, output_path: Path) -> Path:
+    """Convert and limit uploaded references to the WAV format CosyVoice accepts."""
+    if not source_path.exists() or source_path.stat().st_size == 0:
+        raise RuntimeError(f"voice reference is empty: {source_path}")
+    duration_seconds = media_duration_seconds(source_path)
+    if (
+        duration_seconds is not None
+        and duration_seconds > VOICE_REFERENCE_UPLOAD_MAX_SECONDS
+    ):
+        raise RuntimeError("声音参考文件最长不能超过 3 分钟")
+    ffmpeg = ffmpeg_executable()
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required to prepare the CosyVoice reference audio")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_path),
+            "-t",
+            str(COSYVOICE_REFERENCE_MAX_SECONDS),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "pcm_s16le",
+            str(output_path),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode != 0:
+        output_path.unlink(missing_ok=True)
+        detail = completed.stderr.decode("utf-8", errors="replace")[-800:]
+        raise RuntimeError(f"voice reference conversion failed: {detail}")
+    try:
+        validate_wav_output(output_path)
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
+    return output_path
 
 
 def synthesize_cosyvoice_chunk_with_retry(

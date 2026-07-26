@@ -16,6 +16,7 @@ from starlette.background import BackgroundTask
 
 
 REPO = Path(os.getenv("COSYVOICE_REPO", "/root/autodl-tmp/cosyvoice/CosyVoice"))
+COSYVOICE_REFERENCE_MAX_SECONDS = 29.5
 MODEL = Path(
     os.getenv(
         "COSYVOICE_MODEL",
@@ -51,6 +52,21 @@ def _validate_reference(path: Path) -> None:
                 raise ValueError("reference WAV contains no audio")
     except wave.Error as exc:
         raise ValueError("reference_file must be a valid WAV file") from exc
+
+
+def _limit_reference_duration(path: Path) -> None:
+    samples, sample_rate = sf.read(path, dtype="float32", always_2d=True)
+    if samples.shape[0] <= 0 or sample_rate <= 0:
+        raise ValueError("reference WAV contains no audio")
+    max_frames = int(sample_rate * COSYVOICE_REFERENCE_MAX_SECONDS)
+    if samples.shape[0] <= max_frames:
+        return
+    sf.write(
+        path,
+        samples[:max_frames],
+        sample_rate,
+        subtype="PCM_16",
+    )
 
 
 def _collect_speech(outputs) -> np.ndarray:
@@ -92,6 +108,7 @@ def synthesize_voice(
     try:
         reference_path.write_bytes(reference_file.file.read())
         _validate_reference(reference_path)
+        _limit_reference_duration(reference_path)
         tts_text = _prepare_text(text)
         with inference_lock:
             speech = _collect_speech(
@@ -107,7 +124,7 @@ def synthesize_voice(
             int(getattr(model, "sample_rate", 22050)),
             subtype="PCM_16",
         )
-    except (ValueError, RuntimeError) as exc:
+    except (AssertionError, ValueError, RuntimeError) as exc:
         for path in work_dir.glob("*"):
             path.unlink(missing_ok=True)
         work_dir.rmdir()

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import threading
+import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 import worker.run_render as run_render_module
 from worker.run_render import (
@@ -17,6 +20,7 @@ from worker.run_render import (
     find_voice_audio_asset,
     find_voice_reference_asset,
     pip_enable_expression,
+    prepare_cosyvoice_reference_audio,
     run_job,
     run_preprocess_job,
     subtitle_force_style,
@@ -185,6 +189,56 @@ def test_cloud_subtitles_default_to_small_wrapped_captions():
 def test_cloud_rewrite_prompt_constraint_stays_at_300_chars():
     assert bounded_rewrite_chars({"max_chars": 800}) == 300
     assert to_simplified_chinese("開直播後臺觀眾") == "开直播后台观众"
+
+
+def test_prepare_cosyvoice_reference_converts_and_limits_audio(monkeypatch, tmp_path):
+    source = tmp_path / "reference.m4a"
+    source.write_bytes(b"m4a-reference")
+    output = tmp_path / "reference.wav"
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        with wave.open(str(output), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(b"\0\0" * 160)
+        return type("Completed", (), {"returncode": 0, "stderr": b""})()
+
+    monkeypatch.setattr(run_render_module, "ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr(
+        run_render_module,
+        "media_duration_seconds",
+        lambda _path: 180.0,
+    )
+    monkeypatch.setattr(run_render_module.subprocess, "run", fake_run)
+
+    assert prepare_cosyvoice_reference_audio(source, output) == output
+    command = commands[0]
+    assert command[command.index("-ac") + 1] == "1"
+    assert command[command.index("-ar") + 1] == "16000"
+    assert command[command.index("-c:a") + 1] == "pcm_s16le"
+    assert command[command.index("-t") + 1] == str(
+        run_render_module.COSYVOICE_REFERENCE_MAX_SECONDS
+    )
+
+
+def test_prepare_cosyvoice_reference_rejects_audio_longer_than_three_minutes(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "too-long.wav"
+    source.write_bytes(b"wav-reference")
+    output = tmp_path / "reference.wav"
+    monkeypatch.setattr(
+        run_render_module,
+        "media_duration_seconds",
+        lambda _path: 180.01,
+    )
+
+    with pytest.raises(RuntimeError, match="最长不能超过 3 分钟"):
+        prepare_cosyvoice_reference_audio(source, output)
 
 
 def test_find_source_asset_prefers_source_video_kind(tmp_path):

@@ -6663,7 +6663,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _studioTip('选择已有音色直接合成，或上传 15–60 秒清晰人声创建专属声音。'),
+        _studioTip('选择已有音色直接合成，或上传不超过 3 分钟的清晰人声创建专属声音；较长音频会自动提取适合克隆的片段。'),
         const SizedBox(height: 18),
         _studioFieldCard(
           title: '声音模型',
@@ -7510,7 +7510,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(height: 14),
           _managementCard(
             title: '声音训练',
-            subtitle: '建议上传 15–60 秒清晰人声，支持 MP3、WAV、M4A；最长不超过 5 分钟',
+            subtitle: '支持 MP3、WAV、M4A，最长不超过 3 分钟；系统会自动提取适合克隆的片段',
             icon: Icons.cloud_upload_outlined,
             child: Column(
               children: [
