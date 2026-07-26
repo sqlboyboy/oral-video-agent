@@ -17,6 +17,19 @@ test_video/
 .flutter-plugins
 .flutter-plugins-dependencies
 build/
+**/.gradle/
+**/.hvigor/
+**/local.properties
+**/key.properties
+*.iml
+**/GeneratedPluginRegistrant.java
+apps/client/android/gradlew
+apps/client/android/gradlew.bat
+apps/client/android/gradle/wrapper/gradle-wrapper.jar
+apps/client/ios/Flutter/Generated.xcconfig
+apps/client/ios/Flutter/ephemeral/
+apps/client/ios/Flutter/flutter_export_environment.sh
+apps/client/ios/Runner/GeneratedPluginRegistrant.*
 
 # Model weights & binaries
 gfpgan/
@@ -52,6 +65,8 @@ storage/douyin_cookies.txt
 
 # Local cloud runtime data
 services/cloud/data/*
+data/
+storage/subtitle_previews/
 
 !storage/uploads/.gitkeep
 !storage/extracted_audio/.gitkeep

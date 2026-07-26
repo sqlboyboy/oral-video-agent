@@ -12,6 +12,8 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'creator_script_lab.dart';
+
 part 'mobile.dart';
 
 void main() {
@@ -136,6 +138,168 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     'KaiTi': '楷体',
     'Arial': 'Arial',
   };
+  static const _subtitleTemplates = [
+    (
+      id: 'renovation_pitfall_yellow',
+      name: '避坑警示黄',
+      industry: '装修',
+      first: '这3个装修坑',
+      second: '千万别踩',
+      fontSize: 64.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFFFFE23B),
+      outline: Color(0xFF111111),
+      outlineWidth: 5,
+      font: 'Microsoft YaHei',
+      position: 'bottom',
+      marginV: 510,
+      maxChars: 9,
+    ),
+    (
+      id: 'renovation_editorial_gray',
+      name: '设计高级灰',
+      industry: '装修',
+      first: '高级感不靠堆钱',
+      second: '靠的是细节',
+      fontSize: 54.0,
+      color: Color(0xFFF7F3EA),
+      keywordColor: Color(0xFFD8895B),
+      outline: Color(0xFF232323),
+      outlineWidth: 2,
+      font: 'Microsoft YaHei UI',
+      position: 'bottom',
+      marginV: 480,
+      maxChars: 10,
+    ),
+    (
+      id: 'renovation_inspection_blueprint',
+      name: '工地验收蓝',
+      industry: '装修',
+      first: '水电验收',
+      second: '先看这4点',
+      fontSize: 60.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFF43B8FF),
+      outline: Color(0xFF0B2239),
+      outlineWidth: 4,
+      font: 'SimHei',
+      position: 'bottom',
+      marginV: 500,
+      maxChars: 9,
+    ),
+    (
+      id: 'restaurant_owner_billboard',
+      name: '老板大字报',
+      industry: '餐饮',
+      first: '菜品好吃',
+      second: '不等于生意好',
+      fontSize: 68.0,
+      color: Color(0xFFFFD82E),
+      keywordColor: Color(0xFFFFFFFF),
+      outline: Color(0xFF16100A),
+      outlineWidth: 6,
+      font: 'SimHei',
+      position: 'middle',
+      marginV: 0,
+      maxChars: 8,
+    ),
+    (
+      id: 'restaurant_price_tag_red',
+      name: '红火价签',
+      industry: '餐饮',
+      first: '工作日午市',
+      second: '只要29.9元',
+      fontSize: 58.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFFFFE873),
+      outline: Color(0xFF6E130F),
+      outlineWidth: 2,
+      font: 'Microsoft YaHei',
+      position: 'bottom',
+      marginV: 490,
+      maxChars: 9,
+    ),
+    (
+      id: 'restaurant_wok_fire_warm',
+      name: '烟火探店暖白',
+      industry: '餐饮',
+      first: '这口锅气',
+      second: '才是老店灵魂',
+      fontSize: 56.0,
+      color: Color(0xFFFFF8E7),
+      keywordColor: Color(0xFFFFB547),
+      outline: Color(0xFF27160D),
+      outlineWidth: 4,
+      font: 'Microsoft YaHei UI',
+      position: 'bottom',
+      marginV: 520,
+      maxChars: 9,
+    ),
+    (
+      id: 'training_key_conclusion',
+      name: '重点结论黄',
+      industry: '培训',
+      first: '孩子学不会',
+      second: '往往不是不努力',
+      fontSize: 60.0,
+      color: Color(0xFFFFFFFF),
+      keywordColor: Color(0xFFFFE042),
+      outline: Color(0xFF111111),
+      outlineWidth: 5,
+      font: 'Microsoft YaHei',
+      position: 'bottom',
+      marginV: 500,
+      maxChars: 10,
+    ),
+    (
+      id: 'training_framework_blue',
+      name: '知识框架蓝',
+      industry: '培训',
+      first: '提分关键',
+      second: '是建立知识框架',
+      fontSize: 54.0,
+      color: Color(0xFFF8FBFF),
+      keywordColor: Color(0xFF59BFFF),
+      outline: Color(0xFF0F2841),
+      outlineWidth: 3,
+      font: 'Microsoft YaHei UI',
+      position: 'bottom',
+      marginV: 480,
+      maxChars: 10,
+    ),
+    (
+      id: 'sinology_ink_gold',
+      name: '墨韵雅金',
+      industry: '国学',
+      first: '心若安定',
+      second: '万事从容',
+      fontSize: 58.0,
+      color: Color(0xFFF6E7C7),
+      keywordColor: Color(0xFFD9B45B),
+      outline: Color(0xFF1A1712),
+      outlineWidth: 2,
+      font: 'SimSun',
+      position: 'bottom',
+      marginV: 510,
+      maxChars: 8,
+    ),
+    (
+      id: 'sinology_minimal_vermilion',
+      name: '留白朱砂',
+      industry: '国学',
+      first: '知止不殆',
+      second: '可以长久',
+      fontSize: 54.0,
+      color: Color(0xFFF8F1E2),
+      keywordColor: Color(0xFFB6382B),
+      outline: Color(0xFF241F19),
+      outlineWidth: 1,
+      font: 'KaiTi',
+      position: 'bottom',
+      marginV: 540,
+      maxChars: 8,
+    ),
+  ];
   static const _pipPositionOptions = [
     'top_right',
     'fullscreen',
@@ -171,6 +335,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final audienceController = TextEditingController();
   final originalScriptController = TextEditingController();
   final rewrittenScriptController = TextEditingController();
+  final creatorHomepageController = TextEditingController();
+  final creatorKeywordController = TextEditingController();
   final publisherNicknameController = TextEditingController();
   final publishTitleController = TextEditingController();
   final publishBodyController = TextEditingController();
@@ -193,6 +359,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic>? output;
   Map<String, dynamic>? cloudSession;
   Map<String, dynamic>? cloudWallet;
+  Map<String, dynamic>? cloudUsageAccess;
   Map<String, dynamic>? cloudJob;
   Map<String, dynamic>? cloudDouyinTranscription;
   Map<String, dynamic>? cloudEstimate;
@@ -218,12 +385,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   bool cloudAccountSignedOut = false;
   bool cloudPasswordVisible = false;
   bool cloudPasswordConfirmVisible = false;
+  bool retryingLocalApiConnection = false;
+  bool finalizingVideo = false;
   bool initialized = false;
   String apiBase = _configuredApiBase;
   String message = '';
   bool messageIsError = false;
   String publishContentGeneratedKey = '';
   String generationMode = 'cloud';
+  String scriptCreationMode = 'rewrite';
+  String creatorSelectedLabel = '';
   String cloudActivationToken = '';
   bool cloudActivationValid = false;
   String cloudDeviceToken = '';
@@ -231,6 +402,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String cloudSourceVideoName = '';
   String cloudOutputUrl = '';
   String cloudOutputLocalPath = '';
+  String intermediateVideoPath = '';
+  String finalOutputVideoPath = '';
   String cloudVoiceAudioPath = '';
   String mobileVoiceReferencePath = '';
   String mobileVoiceReferenceName = '';
@@ -238,7 +411,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   String mobileDigitalHumanName = '';
   String cloudVoiceJobId = '';
   String generatedVoiceKey = '';
+  String generatedVideoKey = '';
+  String finalVideoKey = '';
   String coverPath = '';
+  String selectedCoverTemplate = 'bold-yellow-white';
+  String selectedSubtitleTemplate = 'renovation_pitfall_yellow';
   String selectedStyle = '同款口播';
   String selectedVoice = '';
   String selectedBgm = 'none';
@@ -260,12 +437,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   double speechRate = 1.0;
   double voicePreviewVolume = 0.45;
   double bgmVolume = 0.35;
-  double subtitleSize = 12;
+  double subtitleSize = 64;
   bool subtitlesEnabled = true;
   String selectedSubtitleFont = 'Microsoft YaHei';
-  Color subtitleColor = const Color(0xFFFFE600);
-  Color subtitleOutlineColor = const Color(0xFF000000);
+  Color subtitleColor = const Color(0xFFFFFFFF);
+  Color subtitleKeywordColor = const Color(0xFFFFE23B);
+  Color subtitleOutlineColor = const Color(0xFF111111);
+  int subtitleOutlineWidth = 5;
+  String subtitlePosition = 'bottom';
+  int subtitleMarginV = 510;
+  double subtitleX = 0.5;
+  double subtitleY = 0.62;
+  int subtitleMaxCharsPerLine = 9;
   List<String> subtitlePreviewLines = const [];
+  Uint8List? renderedSubtitlePreviewBytes;
+  String renderedSubtitlePreviewKey = '';
+  bool renderingSubtitlePreview = false;
   bool pipEnabled = false;
   String pipAssetId = '';
   String pipAssetName = '';
@@ -285,6 +472,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Timer? renderPollTimer;
   Timer? cloudPollTimer;
   Timer? cloudEmailCodeTimer;
+  Timer? renderedSubtitlePreviewDebounce;
+  int renderedSubtitlePreviewRequestSerial = 0;
+  Future<void>? localBootstrapFuture;
   int cloudEmailCodeCooldown = 0;
   Process? _localApiProcess;
   Player? _voicePlayer;
@@ -305,6 +495,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     renderPollTimer?.cancel();
     cloudPollTimer?.cancel();
     cloudEmailCodeTimer?.cancel();
+    renderedSubtitlePreviewDebounce?.cancel();
     _localApiProcess?.kill();
     _voicePlayer?.dispose();
     _originalAudioPlayer?.dispose();
@@ -314,6 +505,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     audienceController.dispose();
     originalScriptController.dispose();
     rewrittenScriptController.dispose();
+    creatorHomepageController.dispose();
+    creatorKeywordController.dispose();
     publisherNicknameController.dispose();
     publishTitleController.dispose();
     publishBodyController.dispose();
@@ -332,6 +525,28 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> loadBootstrap() async {
+    final running = localBootstrapFuture;
+    if (running != null) {
+      await running;
+      return;
+    }
+    final future = _loadBootstrapOnce();
+    localBootstrapFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(localBootstrapFuture, future)) {
+        localBootstrapFuture = null;
+      }
+    }
+  }
+
+  Future<void> _loadBootstrapOnce() async {
+    final hadLocalConnectionError = !localApiOnline ||
+        (messageIsError &&
+            (message.contains('本地创作服务') ||
+                message.contains('无法连接本地服务') ||
+                message.contains('连接本地服务')));
     try {
       final bootstrap = await _loadBootstrapFromAvailableApi();
       final loadedApiBase = bootstrap.apiBase;
@@ -340,7 +555,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           (body['voices'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       final loadedHumans =
           (body['digital_humans'] as List?)?.cast<Map<String, dynamic>>() ??
-          const [];
+              const [];
       final loadedBgm =
           (body['bgm'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
       if (!mounted) return;
@@ -352,7 +567,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         providers = loadedProviders;
         rewriteStyles =
             (body['rewrite_styles'] as List?)?.cast<Map<String, dynamic>>() ??
-            const [];
+                const [];
         voices = loadedVoices;
         digitalHumans = loadedHumans;
         bgmTracks = loadedBgm;
@@ -412,8 +627,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             !rewriteStyles.any((s) => s['name'] == selectedStyle)) {
           selectedStyle = rewriteStyles.first['name'] as String;
         }
-        if (apiBaseChanged && message.isEmpty) {
-          message = '已连接本项目后端：$loadedApiBase';
+        if (apiBaseChanged || hadLocalConnectionError) {
+          message = '本地创作服务已连接：$loadedApiBase';
           messageIsError = false;
         }
       });
@@ -428,32 +643,108 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Future<void> _initialize() async {
-    if (_isAndroidClient) {
-      generationMode = 'cloud';
-      subtitlesEnabled = false;
-      cloudDurationController.text = '60';
-      await _loadCloudAuth();
-      if (_cloudLoggedIn) {
-        await loadCloudMe(silent: true);
-        await loadCloudLedger(silent: true);
-        await loadMobileCloudJobs(silent: true);
+    try {
+      if (_isAndroidClient) {
+        generationMode = 'cloud';
+        subtitlesEnabled = false;
+        cloudDurationController.text = '60';
+        await _runInitializationStep(
+          '读取云端登录状态',
+          _loadCloudAuth,
+          const Duration(seconds: 20),
+        );
+        if (_cloudLoggedIn) {
+          await _runInitializationStep(
+            '读取云端账户',
+            () => loadCloudMe(silent: true),
+            const Duration(seconds: 20),
+          );
+          await _runInitializationStep(
+            '读取使用期限',
+            () => loadCloudLedger(silent: true),
+            const Duration(seconds: 20),
+          );
+          await _runInitializationStep(
+            '读取云端任务',
+            () => loadMobileCloudJobs(silent: true),
+            const Duration(seconds: 20),
+          );
+        }
+        return;
       }
+      await _runInitializationStep(
+        '连接本地服务',
+        loadBootstrap,
+        const Duration(seconds: 45),
+      );
+      await _runInitializationStep(
+        '读取本地任务',
+        () => loadTaskHistory(silent: true),
+        const Duration(seconds: 15),
+      );
+      await _runInitializationStep(
+        '检查本地升级状态',
+        _resetReleaseLocalStateIfNeeded,
+        const Duration(seconds: 12),
+      );
+      await _runInitializationStep(
+        '读取软件激活状态',
+        _loadCloudAuth,
+        const Duration(seconds: 20),
+      );
+      if (_cloudLicensed && !cloudAccountSignedOut) {
+        await _runInitializationStep(
+          '读取使用期限',
+          () => loadCloudLedger(silent: true),
+          const Duration(seconds: 20),
+        );
+      }
+      if (mounted && providers != null) {
+        await _runInitializationStep(
+          '读取发布账号',
+          loadPublisherAccounts,
+          const Duration(seconds: 15),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => initialized = true);
+        if (!_isAndroidClient && !localApiOnline) {
+          unawaited(_retryLocalApiConnection());
+        }
+      }
+    }
+  }
+
+  Future<void> _retryLocalApiConnection() async {
+    if (retryingLocalApiConnection) return;
+    retryingLocalApiConnection = true;
+    try {
+      for (var attempt = 0; attempt < 20; attempt++) {
+        if (!mounted || localApiOnline) return;
+        await Future<void>.delayed(const Duration(seconds: 3));
+        if (!mounted || localApiOnline) return;
+        await loadBootstrap();
+      }
+    } finally {
+      retryingLocalApiConnection = false;
+    }
+  }
+
+  Future<void> _runInitializationStep(
+    String label,
+    Future<void> Function() action,
+    Duration timeout,
+  ) async {
+    try {
+      await action().timeout(timeout);
+    } catch (e) {
       if (!mounted) return;
-      setState(() => initialized = true);
-      return;
+      setState(() {
+        message = '$label未完成：${_friendlyError(e)}';
+        messageIsError = true;
+      });
     }
-    await loadBootstrap();
-    await loadTaskHistory(silent: true);
-    await _resetReleaseLocalStateIfNeeded();
-    await _loadCloudAuth();
-    if (_cloudLicensed && !cloudAccountSignedOut) {
-      await loadCloudLedger(silent: true);
-    }
-    if (mounted && providers != null) {
-      await loadPublisherAccounts();
-    }
-    if (!mounted) return;
-    setState(() => initialized = true);
   }
 
   Future<File> _releaseResetMarkerFile() async {
@@ -534,6 +825,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先登录云端账号');
       return false;
     }
+    if (cloudUsageAccess != null && cloudUsageAccess?['has_access'] != true) {
+      showError('剩余使用期限为 0天0小时0分，请联系管理员开通使用期限');
+      return false;
+    }
     return true;
   }
 
@@ -587,9 +882,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           cloudEmailController.text = savedEmail;
         }
         cloudActivationToken = savedActivationToken;
-        cloudDeviceToken = hasSeparateActivationToken && !savedSignedOut
-            ? savedToken
-            : '';
+        cloudDeviceToken =
+            hasSeparateActivationToken && !savedSignedOut ? savedToken : '';
         cloudAccountSignedOut = savedSignedOut;
       });
       if (savedActivationToken.isNotEmpty) {
@@ -637,6 +931,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
+      cloudUsageAccess = null;
       cloudLedger = const [];
       cloudAccountSignedOut = false;
       cloudAuthMode = 'login';
@@ -649,6 +944,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
+      cloudUsageAccess = null;
       cloudLedger = const [];
       cloudAccountSignedOut = true;
       cloudAuthMode = 'login';
@@ -680,10 +976,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Future<bool> _validateCloudActivation() async {
     if (cloudActivationToken.isEmpty) return false;
     try {
-      final res = await http.get(
-        Uri.parse('$_cloudApiBase/api/client/activation'),
-        headers: _cloudHeaders(auth: false),
-      );
+      final res = await http
+          .get(
+            Uri.parse('$_cloudApiBase/api/client/activation'),
+            headers: _cloudHeaders(auth: false),
+          )
+          .timeout(const Duration(seconds: 15));
       if (res.statusCode < 200 || res.statusCode >= 300) return false;
       final body = _decodeMap(res);
       final activated = body['activated'] == true;
@@ -700,10 +998,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return;
     }
     try {
-      final res = await http.get(
-        Uri.parse('$_cloudApiBase/api/client/me'),
-        headers: _cloudHeaders(),
-      );
+      final res = await http
+          .get(
+            Uri.parse('$_cloudApiBase/api/client/me'),
+            headers: _cloudHeaders(),
+          )
+          .timeout(const Duration(seconds: 15));
       _check(res);
       final body = _decodeMap(res);
       if (!mounted) return;
@@ -711,6 +1011,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
         final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (user?['usage_access'] as Map?)?.cast<String, dynamic>();
         final email = user?['email'] as String? ?? '';
         if (email.isNotEmpty) cloudEmailController.text = email;
         if (!silent) {
@@ -731,19 +1033,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Future<void> loadCloudLedger({bool silent = false}) async {
     if (!_cloudLicensed || !_cloudLoggedIn) return;
     try {
-      final res = await http.get(
-        Uri.parse('$_cloudApiBase/api/client/credits/ledger'),
-        headers: _cloudHeaders(),
-      );
+      final res = await http
+          .get(
+            Uri.parse('$_cloudApiBase/api/client/credits/ledger'),
+            headers: _cloudHeaders(),
+          )
+          .timeout(const Duration(seconds: 15));
       _check(res);
       final body = _decodeMap(res);
       if (!mounted) return;
       setState(() {
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (body['usage_access'] as Map?)?.cast<String, dynamic>();
         cloudLedger =
             (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
         if (!silent) {
-          message = '点数明细已刷新';
+          message = '使用期限已刷新';
           messageIsError = false;
         }
       });
@@ -782,9 +1088,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入邮箱');
       return;
     }
-    final mobileFingerprint = _isAndroidClient
-        ? await _mobileDeviceFingerprint()
-        : '';
+    final mobileFingerprint =
+        _isAndroidClient ? await _mobileDeviceFingerprint() : '';
     final endpoint = _isAndroidClient
         ? '/api/mobile/auth/email-code'
         : '/api/client/auth/email-code';
@@ -849,9 +1154,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请输入密码');
       return false;
     }
-    final mobileFingerprint = _isAndroidClient
-        ? await _mobileDeviceFingerprint()
-        : '';
+    final mobileFingerprint =
+        _isAndroidClient ? await _mobileDeviceFingerprint() : '';
     final endpoint = _isAndroidClient
         ? '/api/mobile/auth/password-login'
         : '/api/client/auth/password-login';
@@ -876,6 +1180,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudDeviceToken = body['device_token'] as String? ?? cloudDeviceToken;
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (user?['usage_access'] as Map?)?.cast<String, dynamic>();
         cloudEmailCodeController.clear();
         cloudPasswordController.clear();
         cloudPasswordConfirmController.clear();
@@ -932,12 +1239,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('两次输入的密码不一致');
       return false;
     }
-    final mobileFingerprint = _isAndroidClient
-        ? await _mobileDeviceFingerprint()
-        : '';
-    final endpointPrefix = _isAndroidClient
-        ? '/api/mobile/auth'
-        : '/api/client/auth';
+    final mobileFingerprint =
+        _isAndroidClient ? await _mobileDeviceFingerprint() : '';
+    final endpointPrefix =
+        _isAndroidClient ? '/api/mobile/auth' : '/api/client/auth';
     var succeeded = false;
     await _runBusy(() async {
       final res = await http.post(
@@ -965,6 +1270,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudDeviceToken = body['device_token'] as String? ?? '';
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (user?['usage_access'] as Map?)?.cast<String, dynamic>();
         cloudEmailCodeController.clear();
         cloudPasswordController.clear();
         cloudPasswordConfirmController.clear();
@@ -1008,9 +1316,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudDeviceToken = '';
         cloudSession = null;
         cloudWallet = null;
+        cloudUsageAccess = null;
         cloudAccountSignedOut = false;
         cloudActivationCodeController.clear();
-        message = '软件已激活，请绑定邮箱账号管理点数';
+        message = '软件已激活，请绑定邮箱账号并开通使用期限';
         messageIsError = false;
       });
       await _saveCloudAuth();
@@ -1283,8 +1592,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                                 final ok = isLogin
                                     ? await loginCloudWithPassword()
                                     : (isRegister
-                                          ? await registerCloudAccount()
-                                          : await resetCloudPassword());
+                                        ? await registerCloudAccount()
+                                        : await resetCloudPassword());
                                 if (ok && dialogContext.mounted) {
                                   Navigator.pop(dialogContext);
                                 }
@@ -1373,9 +1682,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _boundAccountModule() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
-    final available = wallet['available_points'] ?? 0;
-    final frozen = wallet['frozen_points'] ?? 0;
     return Container(
       constraints: const BoxConstraints(minHeight: 58, maxWidth: 720),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -1392,14 +1698,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           Flexible(flex: 3, child: _headerInfo('账号', _cloudAccountText)),
           const SizedBox(width: 12),
           _headerInfo(
-            '可用',
-            '$available 点',
+            '剩余使用期限',
+            _cloudUsageText,
             valueColor: const Color(0xFFB9F8D0),
           ),
           const SizedBox(width: 12),
-          _headerInfo('冻结', '$frozen 点'),
-          const SizedBox(width: 12),
-          Flexible(flex: 3, child: _headerInfo('点数明细', _latestLedgerText)),
+          Flexible(flex: 3, child: _headerInfo('到期时间', _cloudUsageExpiryText)),
           const SizedBox(width: 8),
           _headerIconButton(Icons.refresh, () async {
             await loadCloudMe(silent: true);
@@ -1484,7 +1788,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       width: 36,
       height: 36,
       child: IconButton(
-        tooltip: '刷新账号点数',
+        tooltip: '刷新使用期限',
         onPressed: loading ? null : onPressed,
         icon: Icon(icon, size: 18),
         color: Colors.white,
@@ -1520,7 +1824,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() {
         cloudEstimate = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
-        message = '云端任务已预估';
+        cloudUsageAccess =
+            (body['usage_access'] as Map?)?.cast<String, dynamic>();
+        message = '云端任务可在有效期内直接使用';
         messageIsError = false;
       });
     });
@@ -1558,9 +1864,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     String candidate, {
     Duration timeout = const Duration(seconds: 20),
   }) async {
-    final res = await http
-        .get(Uri.parse('$candidate/api/bootstrap'))
-        .timeout(timeout);
+    final res =
+        await http.get(Uri.parse('$candidate/api/bootstrap')).timeout(timeout);
     _check(res);
     final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     if (_isExpectedBootstrapPayload(body)) {
@@ -1571,6 +1876,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<bool> _startBundledLocalApiIfAvailable() async {
     if (!Platform.isWindows || _localApiProcess != null) return false;
+    final startupPort = await _findAvailableLocalApiPort();
+    if (startupPort == null) return false;
     final appDir = File(Platform.resolvedExecutable).parent;
     final candidates = [
       File('${appDir.path}${Platform.pathSeparator}oral_video_agent_api.exe'),
@@ -1587,7 +1894,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (!await apiExe.exists()) continue;
       _localApiProcess = await Process.start(
         apiExe.path,
-        const ['--host', '127.0.0.1', '--port', '8000'],
+        ['--host', '127.0.0.1', '--port', '$startupPort'],
         workingDirectory: appDir.path,
         environment: {'ORAL_VIDEO_AGENT_HOME': appDir.path},
       );
@@ -1596,12 +1903,34 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return true;
     }
     if (kDebugMode) {
-      return _startDevelopmentLocalApi(appDir);
+      return _startDevelopmentLocalApi(appDir, startupPort);
     }
     return false;
   }
 
-  Future<bool> _startDevelopmentLocalApi(Directory appDir) async {
+  Future<int?> _findAvailableLocalApiPort() async {
+    for (final port in const [8000, 8001]) {
+      ServerSocket? socket;
+      try {
+        socket = await ServerSocket.bind(
+          InternetAddress.loopbackIPv4,
+          port,
+          shared: false,
+        );
+        return port;
+      } catch (_) {
+        // Try the fallback port when another or an older API is still running.
+      } finally {
+        await socket?.close();
+      }
+    }
+    return null;
+  }
+
+  Future<bool> _startDevelopmentLocalApi(
+    Directory appDir,
+    int startupPort,
+  ) async {
     final roots = <Directory>[Directory.current, appDir];
     final visited = <String>{};
     for (final start in roots) {
@@ -1628,19 +1957,19 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           final python = await projectPython.exists()
               ? projectPython.path
               : await rootPython.exists()
-              ? rootPython.path
-              : 'python';
+                  ? rootPython.path
+                  : 'python';
           try {
             _localApiProcess = await Process.start(
               python,
-              const [
+              [
                 '-m',
                 'uvicorn',
                 'app.main:app',
                 '--host',
                 '127.0.0.1',
                 '--port',
-                '8000',
+                '$startupPort',
               ],
               workingDirectory: apiDir.path,
               environment: {'ORAL_VIDEO_AGENT_HOME': current.path},
@@ -1671,8 +2000,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   bool _isExpectedBootstrapPayload(Map<String, dynamic> body) {
+    final features = body['features'];
     final humans = body['digital_humans'];
-    return body['providers'] is Map &&
+    return features is Map &&
+        features['creator_style_scripts'] == true &&
+        body['providers'] is Map &&
         body['voices'] is List &&
         humans is List &&
         body['bgm'] is List &&
@@ -1698,19 +2030,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         Uri.parse('$apiBase/api/publisher/accounts'),
       );
       _check(accountsRes);
-      final accountsBody =
-          jsonDecode(utf8.decode(accountsRes.bodyBytes))
-              as Map<String, dynamic>;
+      final accountsBody = jsonDecode(utf8.decode(accountsRes.bodyBytes))
+          as Map<String, dynamic>;
       final jobsRes = await http.get(Uri.parse('$apiBase/api/publish-jobs'));
       _check(jobsRes);
       final jobsBody =
           jsonDecode(utf8.decode(jobsRes.bodyBytes)) as Map<String, dynamic>;
       final accounts =
           (accountsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
-          const [];
+              const [];
       final visibleAccounts = _dedupePublisherAccounts(accounts);
-      final jobs =
-          (jobsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
+      final jobs = (jobsBody['items'] as List?)?.cast<Map<String, dynamic>>() ??
           const [];
       setState(() {
         localApiOnline = true;
@@ -1812,9 +2142,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Future<void> createPublisherAccount() async {
     final rawNickname = publisherNicknameController.text.trim();
-    final nickname = rawNickname == _publisherNicknamePlaceholder
-        ? ''
-        : rawNickname;
+    final nickname =
+        rawNickname == _publisherNicknamePlaceholder ? '' : rawNickname;
     if (nickname.isNotEmpty) {
       final existing = publisherAccounts.where((account) {
         return account['platform'] == selectedPublishPlatform &&
@@ -1952,7 +2281,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final topics =
           (body['topics'] as List?)?.map((item) => item.toString()).toList() ??
-          const <String>[];
+              const <String>[];
       setState(() {
         publishTitleController.text = _limitPublishTitle(
           body['title'] as String? ?? '',
@@ -2014,11 +2343,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       _invalidateGeneratedVoice();
     }
     final taskId = currentTask['task_id'] as String? ?? '';
-    final publishSource =
-        ((currentTask['rewritten_script'] as String?) ??
-                (currentTask['original_script'] as String?) ??
-                '')
-            .trim();
+    final publishSource = ((currentTask['rewritten_script'] as String?) ??
+            (currentTask['original_script'] as String?) ??
+            '')
+        .trim();
     final generationKey = '$taskId:${publishSource.hashCode}';
     if (taskId.isNotEmpty &&
         publishSource.isNotEmpty &&
@@ -2106,9 +2434,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             current['progress_message']?.toString().trim() ?? '';
         setState(() {
           cloudDouyinTranscription = current;
-          message = progressMessage.isNotEmpty
-              ? progressMessage
-              : '服务器正在处理抖音视频';
+          message =
+              progressMessage.isNotEmpty ? progressMessage : '服务器正在处理抖音视频';
           messageIsError = false;
         });
         final status = current['status']?.toString() ?? '';
@@ -2408,6 +2735,125 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     });
   }
 
+  Future<void> openCreatorScriptLab() async {
+    if (!_ensureSoftwareActivated()) return;
+    if (renderingVideo || _cloudVoiceJobActive) {
+      showError('当前正在生成声音或视频，请等待任务完成后再开始新的文案创作');
+      return;
+    }
+    final shareText = creatorHomepageController.text.trim();
+    final keyword = creatorKeywordController.text.trim();
+    if (shareText.isEmpty) {
+      showError('请粘贴抖音主页链接或从“4-”开始到结尾的完整分享文案');
+      return;
+    }
+    if (keyword.isEmpty) {
+      showError('请输入创作关键词，例如“装修”');
+      return;
+    }
+    if (!localApiOnline && mounted) {
+      setState(() {
+        message = '正在重新连接本地创作服务';
+        messageIsError = false;
+      });
+    }
+    await loadBootstrap();
+    if (!mounted) return;
+    if (!localApiOnline) {
+      showError('本地创作服务未连接，请点击顶部刷新后重试');
+      return;
+    }
+
+    final selection = await showDialog<CreatorScriptSelection>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => CreatorScriptLabDialog(
+        endpoint: '$apiBase/api/creator-scripts/generate',
+        shareText: shareText,
+        keyword: keyword,
+      ),
+    );
+    if (selection == null || !mounted) return;
+    if (renderingVideo || _cloudVoiceJobActive) {
+      showError('当前正在生成声音或视频，暂时不能替换文案');
+      return;
+    }
+    final script = selection.candidate.script.trim();
+    if (script.isEmpty) return;
+    setState(() {
+      loading = true;
+      message = '正在保存选中的文案';
+      messageIsError = false;
+    });
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$apiBase/api/tasks/from-script'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'title': selection.candidate.title,
+              'original_script': '',
+              'rewritten_script': script,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+      _check(response);
+      final persistedTask =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final persistedTaskId = persistedTask['task_id']?.toString() ?? '';
+      if (!persistedTaskId.startsWith('cloud-deep-')) {
+        throw Exception('服务没有正确保存深度学习文案任务');
+      }
+      if (!mounted) return;
+      _stopCloudPolling();
+      _stopRenderPolling();
+      setState(() {
+        generationMode = 'cloud';
+        originalScriptController.clear();
+        rewrittenScriptController.text = script;
+        task = {
+          ...persistedTask,
+          'status': persistedTask['status'] ?? 'rewritten',
+          'original_script': '',
+          'rewritten_script': script,
+          'progress_steps': persistedTask['progress_steps'] ?? const [],
+          'creator_name': selection.creatorName,
+          'creator_keyword': selection.keyword,
+          'creator_candidate_title': selection.candidate.title,
+        };
+        creatorSelectedLabel = selection.candidate.title.isEmpty
+            ? '已选择网红风格候选文案'
+            : selection.candidate.title;
+        output = null;
+        cloudJob = null;
+        cloudDouyinTranscription = null;
+        cloudEstimate = null;
+        mouthAtlasDiagnosis = null;
+        cloudSourceVideoPath = '';
+        cloudSourceVideoName = '';
+        cloudOutputUrl = '';
+        cloudOutputLocalPath = '';
+        coverPath = '';
+        _invalidateGeneratedVoice();
+        subtitlePreviewLines = const [];
+        publishContentGeneratedKey = '';
+        publishTitleController.clear();
+        publishBodyController.clear();
+        publishTopicsController.clear();
+        outputRefresh++;
+        message = selection.creatorName.trim().isEmpty
+            ? '已选用网红风格文案，后续将按云端流程生成声音和视频'
+            : '已选用 ${selection.creatorName} 风格文案，后续将按云端流程生成声音和视频';
+        messageIsError = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      showError(_friendlyError(error));
+    } finally {
+      if (mounted) setState(() => loading = false);
+    }
+  }
+
   Future<void> generateTitle() async {
     if (!_ensureSoftwareActivated()) return;
     final taskId = task?['task_id'] as String?;
@@ -2434,7 +2880,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     await _runBusy(() async {
       if (taskId != null && !taskId.startsWith('cloud-')) {
         final res = await http.post(
-          Uri.parse('$apiBase/api/tasks/$taskId/cover'),
+          Uri.parse('$apiBase/api/tasks/$taskId/cover').replace(
+            queryParameters: {'template_id': selectedCoverTemplate},
+          ),
         );
         _check(res);
         final body =
@@ -2442,6 +2890,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         setState(() {
           task = body;
           coverPath = body['cover_path'] as String? ?? coverPath;
+          finalOutputVideoPath = '';
+          finalVideoKey = '';
           outputRefresh++;
           message = '封面已生成';
           messageIsError = false;
@@ -2452,10 +2902,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         Uri.parse('$apiBase/api/covers/generate'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'title': (task?['title'] as String? ?? publishTitleController.text)
-              .trim(),
+          'title':
+              (task?['title'] as String? ?? publishTitleController.text).trim(),
           'script': script,
           'background_path': _outputVideoPath ?? '',
+          'template_id': selectedCoverTemplate,
         }),
       );
       _check(res);
@@ -2463,6 +2914,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       setState(() {
         coverPath = body['cover_path'] as String? ?? '';
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         outputRefresh++;
         message = '封面已生成';
         messageIsError = false;
@@ -2482,6 +2935,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (taskId == null || taskId.startsWith('cloud-')) {
       setState(() {
         coverPath = path;
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         outputRefresh++;
         message = '已选择自定义封面';
         messageIsError = false;
@@ -2502,6 +2957,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() {
         task = body;
         coverPath = body['cover_path'] as String? ?? path;
+        selectedCoverTemplate = 'custom';
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         outputRefresh++;
         message = '已上传自定义封面';
         messageIsError = false;
@@ -2811,6 +3269,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
+      cloudUsageAccess = null;
       cloudLedger = const [];
       cloudEmailController.clear();
       cloudEmailCodeController.clear();
@@ -3499,7 +3958,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final lines =
           (body['lines'] as List?)?.map((line) => line.toString()).toList() ??
-          const <String>[];
+              const <String>[];
       setState(() {
         subtitlePreviewLines = lines;
         if (!silent) {
@@ -3512,17 +3971,110 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  String _renderedSubtitlePreviewRequestKey() {
+    return jsonEncode({
+      'script': _renderScript,
+      'style': _subtitleStylePayload(),
+    }).hashCode.toString();
+  }
+
+  bool get _hasCurrentRenderedSubtitlePreview {
+    return subtitlesEnabled &&
+        renderedSubtitlePreviewBytes != null &&
+        renderedSubtitlePreviewKey == _renderedSubtitlePreviewRequestKey();
+  }
+
+  Future<void> refreshRenderedSubtitlePreview({
+    bool silent = false,
+    bool force = false,
+    VoidCallback? onUpdated,
+  }) async {
+    final script = _renderScript;
+    if (!subtitlesEnabled || script.isEmpty) {
+      renderedSubtitlePreviewRequestSerial++;
+      if (mounted) {
+        setState(() {
+          renderedSubtitlePreviewBytes = null;
+          renderedSubtitlePreviewKey = '';
+          renderingSubtitlePreview = false;
+        });
+      }
+      onUpdated?.call();
+      if (!silent && script.isEmpty) showError('请先生成或填写文案');
+      return;
+    }
+
+    final requestKey = _renderedSubtitlePreviewRequestKey();
+    if (!force &&
+        renderedSubtitlePreviewBytes != null &&
+        renderedSubtitlePreviewKey == requestKey) {
+      onUpdated?.call();
+      return;
+    }
+
+    final requestSerial = ++renderedSubtitlePreviewRequestSerial;
+    if (mounted) setState(() => renderingSubtitlePreview = true);
+    onUpdated?.call();
+    try {
+      final res = await http.post(
+        Uri.parse('$apiBase/api/subtitles/render-preview'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'script': script,
+          'style': _subtitleStylePayload(),
+        }),
+      );
+      _check(res);
+      if (!mounted ||
+          requestSerial != renderedSubtitlePreviewRequestSerial ||
+          requestKey != _renderedSubtitlePreviewRequestKey()) {
+        return;
+      }
+      setState(() {
+        renderedSubtitlePreviewBytes = Uint8List.fromList(res.bodyBytes);
+        renderedSubtitlePreviewKey = requestKey;
+        renderingSubtitlePreview = false;
+      });
+      onUpdated?.call();
+    } catch (e) {
+      if (mounted && requestSerial == renderedSubtitlePreviewRequestSerial) {
+        setState(() => renderingSubtitlePreview = false);
+        onUpdated?.call();
+      }
+      if (!silent) showError(e.toString());
+    }
+  }
+
+  void _scheduleRenderedSubtitlePreview({
+    VoidCallback? onUpdated,
+    Duration delay = const Duration(milliseconds: 280),
+  }) {
+    renderedSubtitlePreviewDebounce?.cancel();
+    renderedSubtitlePreviewDebounce = Timer(
+      delay,
+      () => unawaited(
+        refreshRenderedSubtitlePreview(silent: true, onUpdated: onUpdated),
+      ),
+    );
+  }
+
   Future<void> editSubtitlesAndPip() async {
     await refreshSubtitlePreview(silent: true);
+    await refreshRenderedSubtitlePreview(silent: true);
     if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, dialogSetState) {
+            void repaintDialog() {
+              if (dialogContext.mounted) dialogSetState(() {});
+            }
+
             void updateDialog(VoidCallback update) {
               setState(update);
               dialogSetState(() {});
+              _scheduleRenderedSubtitlePreview(onUpdated: repaintDialog);
             }
 
             return AlertDialog(
@@ -3541,6 +4093,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         title: const Text('字幕 启用'),
                       ),
                       const SizedBox(height: 8),
+                      _subtitleTemplatePicker(updateDialog: updateDialog),
+                      const SizedBox(height: 8),
                       Row(
                         children: [
                           Expanded(
@@ -3549,9 +4103,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                               _subtitleFontOptions,
                               (value) {
                                 if (value == null) return;
-                                updateDialog(
-                                  () => selectedSubtitleFont = value,
-                                );
+                                updateDialog(() {
+                                  selectedSubtitleFont = value;
+                                  selectedSubtitleTemplate = 'custom';
+                                });
                               },
                               labels: _subtitleFontLabels,
                             ),
@@ -3576,9 +4131,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       _labeledSlider(
                         '字号',
                         subtitleSize,
-                        12,
-                        56,
-                        (value) => updateDialog(() => subtitleSize = value),
+                        24,
+                        72,
+                        (value) => updateDialog(() {
+                          subtitleSize = value;
+                          selectedSubtitleTemplate = 'custom';
+                        }),
                         subtitleSize.round().toString(),
                       ),
                       const SizedBox(height: 12),
@@ -3704,6 +4262,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         ),
                       ],
                       const SizedBox(height: 12),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          '可直接拖动画面中的字幕调整位置；画中画选择“自定义拖放”后也可拖动。',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       _subtitlePreviewBox(updateDialog: updateDialog),
                     ],
                   ),
@@ -3713,6 +4279,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 TextButton(
                   onPressed: () async {
                     await refreshSubtitlePreview();
+                    await refreshRenderedSubtitlePreview(
+                      force: true,
+                      onUpdated: repaintDialog,
+                    );
                     if (mounted) dialogSetState(() {});
                   },
                   child: const Text('刷新'),
@@ -3727,6 +4297,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         );
       },
     );
+    renderedSubtitlePreviewDebounce?.cancel();
   }
 
   Widget _smallTextField(
@@ -3776,10 +4347,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() => message = '请先生成或填写文案');
       return;
     }
-    if (!_validateCompositionSettings()) return;
+    if (!_hasFreshGeneratedVoice(script)) {
+      showError('请先完成第 2 步“克隆声音”');
+      return;
+    }
+    if (selectedDigitalHuman.isEmpty) {
+      showError('请先上传或选择数字人形象');
+      return;
+    }
     setState(() {
       loading = true;
       renderingVideo = true;
+      intermediateVideoPath = '';
+      finalOutputVideoPath = '';
+      generatedVideoKey = '';
+      finalVideoKey = '';
+      messageIsError = false;
       message = '正在生成视频，可以点击停止生成中断任务';
     });
     _startRenderPolling(taskId);
@@ -3787,7 +4370,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       final res = await http.post(
         Uri.parse('$apiBase/api/tasks/$taskId/render'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(_renderPayload(script)),
+        body: jsonEncode(_intermediateRenderPayload(script)),
       );
       _check(res);
       final body =
@@ -3802,6 +4385,17 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         return;
       }
       await loadOutput();
+      final path = output?['path'] as String? ??
+          task?['output_video_path'] as String? ??
+          '';
+      if (path.isNotEmpty && mounted) {
+        setState(() {
+          intermediateVideoPath = path;
+          generatedVideoKey = _digitalVideoKeyFor(script);
+          message = '声音和数字人视频已生成，请继续选择封面';
+          messageIsError = false;
+        });
+      }
     } catch (e) {
       setState(() => message = e.toString());
     } finally {
@@ -3939,7 +4533,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先生成或填写文案');
       return;
     }
-    if (!_validateCompositionSettings()) return;
+    if (!_hasFreshGeneratedVoice(script)) {
+      showError('请先完成第 2 步“克隆声音”');
+      return;
+    }
     final duration = _cloudDurationSeconds();
     if (duration == null) {
       showError('请输入云端任务时长');
@@ -3952,6 +4549,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudJob = null;
       cloudOutputUrl = '';
       cloudOutputLocalPath = '';
+      intermediateVideoPath = '';
+      finalOutputVideoPath = '';
+      generatedVideoKey = '';
+      finalVideoKey = '';
       outputRefresh++;
       message = '正在上传云端素材';
       messageIsError = false;
@@ -3995,12 +4596,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         });
       }
       final cloudBasePayload = {
-        ..._renderPayload(script),
+        ..._intermediateRenderPayload(script),
         'bgm_id': 'none',
         'bgm_volume': 0,
         'subtitle_enabled': false,
         'pip_enabled': false,
         'pip_asset_id': null,
+        'cover_path': null,
         'source_file_name': fileName,
         'original_script': originalScriptController.text.trim(),
         'rewritten_script': rewrittenScriptController.text.trim(),
@@ -4287,8 +4889,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (!mounted || total <= 0) return;
     final percent = ((sent / total) * 100).clamp(0, 100).floor();
     final now = DateTime.now();
-    final shouldUpdate =
-        sent >= total ||
+    final shouldUpdate = sent >= total ||
         percent >= lastPercent + 5 ||
         now.difference(lastUpdate).inMilliseconds >= 600;
     if (!shouldUpdate) return;
@@ -4397,11 +4998,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       headers: headers,
       fileName: fileName,
     );
-    final finalPath = await _postprocessCloudOutputIfNeeded(localPath);
+    final finalPath = localPath;
     if (!mounted) return;
     setState(() {
       cloudOutputUrl = url;
       cloudOutputLocalPath = finalPath;
+      intermediateVideoPath = localPath;
+      finalOutputVideoPath = '';
+      generatedVideoKey = _digitalVideoKeyFor(_renderScript);
+      finalVideoKey = '';
       outputRefresh++;
       message = finalPath == localPath ? '云端成品已保存到本地' : '云端成品已完成本地合成';
       messageIsError = false;
@@ -4413,13 +5018,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  // Kept as a compatibility signal for older cloud flows.
+  // ignore: unused_element
   bool get _needsLocalCloudPostprocess {
     if (_isAndroidClient) return false;
     return subtitlesEnabled || selectedBgm != 'none' || pipEnabled;
   }
 
-  Future<String> _postprocessCloudOutputIfNeeded(String sourcePath) async {
-    if (!_needsLocalCloudPostprocess) return sourcePath;
+  Future<String> _postprocessVideo(String sourcePath) async {
     if (pipEnabled && pipAssetId.isEmpty) {
       throw Exception('请先上传画中画素材');
     }
@@ -4446,6 +5052,55 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final path = body['path'] as String? ?? '';
     if (path.isEmpty) throw Exception('本地后处理没有返回成品路径');
     return path;
+  }
+
+  Future<void> finalizeVideo() async {
+    final script = _renderScript;
+    if (!_hasFreshIntermediateVideo(script)) {
+      showError('请先完成第 3 步，生成数字人视频');
+      return;
+    }
+    if (_currentCoverPath == null) {
+      showError('请先完成第 4 步，选择或生成视频封面');
+      return;
+    }
+    if (!_validateCompositionSettings()) return;
+    final sourcePath = intermediateVideoPath;
+    setState(() {
+      loading = true;
+      finalizingVideo = true;
+      finalOutputVideoPath = '';
+      finalVideoKey = '';
+      message = '正在合成最终成品视频';
+      messageIsError = false;
+    });
+    try {
+      final renderedPath = await _postprocessVideo(sourcePath);
+      if (!mounted) return;
+      setState(() {
+        finalOutputVideoPath = renderedPath;
+        finalVideoKey = _finalVideoKeyFor(script);
+        if (generationMode == 'cloud') {
+          cloudOutputLocalPath = renderedPath;
+        }
+        outputRefresh++;
+        message = '最终成品视频已合成，可以预览或继续发布';
+        messageIsError = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        message = e.toString();
+        messageIsError = true;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          loading = false;
+          finalizingVideo = false;
+        });
+      }
+    }
   }
 
   Future<String> _downloadCloudJobOutputToLocal(
@@ -4491,14 +5146,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final rawName = cosKey.trim().isEmpty
         ? fallbackFileName
         : Uri.decodeComponent(_fileNameFromPath(cosKey));
-    final safeName = rawName
-        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
-        .trim();
+    final safeName =
+        rawName.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
     final name = safeName.isEmpty ? fallbackFileName : safeName;
     final hasExtension = RegExp(r'\.[A-Za-z0-9]{2,5}$').hasMatch(name);
     final fallbackExtension =
         RegExp(r'\.[A-Za-z0-9]{2,5}$').firstMatch(fallbackFileName)?.group(0) ??
-        '';
+            '';
     final withExt = hasExtension || fallbackExtension.isEmpty
         ? name
         : '$name$fallbackExtension';
@@ -4509,9 +5163,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final rawName = cosKey.trim().isEmpty
         ? 'result.mp4'
         : Uri.decodeComponent(_fileNameFromPath(cosKey));
-    final safeName = rawName
-        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
-        .trim();
+    final safeName =
+        rawName.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_').trim();
     final name = safeName.isEmpty ? 'result.mp4' : safeName;
     final lower = name.toLowerCase();
     final withExt = lower.endsWith('.mp4') ? name : '$name.mp4';
@@ -4827,21 +5480,52 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return File(cloudVoiceAudioPath).existsSync();
   }
 
+  bool _hasFreshGeneratedVoice(String script) {
+    if (script.trim().isEmpty || generatedVoiceKey != _voiceKeyFor(script)) {
+      return false;
+    }
+    if (generationMode == 'cloud') return _hasFreshCloudVoice(script);
+    final path = task?['extracted_audio_path'] as String? ?? '';
+    return path.isNotEmpty && File(path).existsSync();
+  }
+
+  String _digitalVideoKeyFor(String script) =>
+      '${_taskId ?? ''}:${_voiceKeyFor(script)}:$selectedDigitalHuman';
+
+  bool _hasFreshIntermediateVideo(String script) {
+    return intermediateVideoPath.isNotEmpty &&
+        generatedVideoKey == _digitalVideoKeyFor(script) &&
+        File(intermediateVideoPath).existsSync();
+  }
+
+  String _finalVideoKeyFor(String script) =>
+      '${_digitalVideoKeyFor(script)}:${jsonEncode(_renderPayload(script)).hashCode}';
+
+  bool _hasFreshFinalVideo(String script) {
+    return finalOutputVideoPath.isNotEmpty &&
+        finalVideoKey == _finalVideoKeyFor(script) &&
+        File(finalOutputVideoPath).existsSync();
+  }
+
   void _invalidateGeneratedVoice() {
     cloudVoiceAudioPath = '';
     cloudVoiceJobId = '';
     generatedVoiceKey = '';
+    intermediateVideoPath = '';
+    finalOutputVideoPath = '';
+    generatedVideoKey = '';
+    finalVideoKey = '';
   }
 
   Map<String, dynamic> _renderPayload(String script) {
     final pipRect = _pipNormalizedRect();
+    final currentCoverPath = _currentCoverPath;
     return {
       'script': script,
       'voice_id': selectedVoice,
       'voice_volume': voicePreviewVolume,
       'digital_human_engine': selectedDigitalHumanEngine,
-      'digital_human_id':
-          selectedDigitalHuman.startsWith('custom:') ||
+      'digital_human_id': selectedDigitalHuman.startsWith('custom:') ||
               selectedDigitalHuman.startsWith('template:')
           ? selectedDigitalHuman
           : null,
@@ -4850,6 +5534,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'bgm_id': selectedBgm,
       'bgm_volume': bgmVolume,
       'subtitle_enabled': subtitlesEnabled,
+      'subtitle_template_id': selectedSubtitleTemplate == 'custom'
+          ? null
+          : selectedSubtitleTemplate,
       'subtitle_style': _subtitleStylePayload(),
       'pip_enabled': pipEnabled,
       'pip_asset_id': pipAssetId.isEmpty ? null : pipAssetId,
@@ -4865,8 +5552,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       'pip_trigger_text': pipTriggerController.text.trim().isEmpty
           ? null
           : pipTriggerController.text.trim(),
+      'cover_template_id': selectedCoverTemplate,
+      'cover_path': currentCoverPath,
     };
   }
+
+  Map<String, dynamic> _intermediateRenderPayload(String script) => {
+        ..._renderPayload(script),
+        'defer_packaging': true,
+        'voice_volume': 1.0,
+        'bgm_id': 'none',
+        'bgm_volume': 0,
+        'subtitle_enabled': false,
+        'pip_enabled': false,
+        'pip_asset_id': null,
+        'cover_path': null,
+      };
 
   double? _optionalSeconds(String value) {
     final trimmed = value.trim();
@@ -4902,14 +5603,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
 
   Map<String, dynamic> _subtitleStylePayload() {
     return {
+      'template_id': selectedSubtitleTemplate,
       'font_size': subtitleSize.round(),
       'color': _colorHex(subtitleColor),
+      'keyword_color': _colorHex(subtitleKeywordColor),
       'outline_color': _colorHex(subtitleOutlineColor),
-      'outline_width': 2,
+      'outline_width': subtitleOutlineWidth,
       'font_family': selectedSubtitleFont,
-      'position': 'bottom',
-      'margin_v': 70,
-      'max_chars_per_line': 12,
+      'position': subtitlePosition,
+      'margin_v': subtitleMarginV,
+      'position_x': subtitleX,
+      'position_y': subtitleY,
+      'max_chars_per_line': subtitleMaxCharsPerLine,
     };
   }
 
@@ -4929,6 +5634,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return email;
   }
 
+  String get _cloudUsageText {
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>();
+    if (access?['unlimited'] == true) return '不限期';
+    final days = access?['remaining_days'] ?? 0;
+    final hours = access?['remaining_hours'] ?? 0;
+    final minutes = access?['remaining_minutes'] ?? 0;
+    return '$days天$hours小时$minutes分';
+  }
+
+  String get _cloudUsageExpiryText {
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>();
+    if (access?['unlimited'] == true) return '永久可用';
+    final value = access?['expires_at']?.toString() ?? '';
+    if (value.isEmpty) return '尚未开通';
+    final parsed = DateTime.tryParse(value)?.toLocal();
+    if (parsed == null) return value;
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${parsed.year}-${two(parsed.month)}-${two(parsed.day)} '
+        '${two(parsed.hour)}:${two(parsed.minute)}';
+  }
+
   bool get _cloudVoiceJobActive {
     final jobId = cloudVoiceJobId.trim();
     if (jobId.isEmpty) return false;
@@ -4938,15 +5666,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         const {'uploading', 'queued', 'running'}.contains(status);
   }
 
-  String get _latestLedgerText {
-    if (cloudLedger.isEmpty) return '暂无流水';
-    final item = cloudLedger.first;
-    final points = item['points'] ?? 0;
-    final positive = points is num && points > 0;
-    return '${_ledgerTitle(item)} ${positive ? '+' : ''}$points';
-  }
-
   String get _cloudOutputLabel {
+    if (_hasFreshFinalVideo(_renderScript)) {
+      return _fileNameFromPath(finalOutputVideoPath);
+    }
+    if (_hasFreshIntermediateVideo(_renderScript)) {
+      return '${_fileNameFromPath(intermediateVideoPath)}（数字人视频）';
+    }
     if (cloudOutputLocalPath.isNotEmpty) {
       return _fileNameFromPath(cloudOutputLocalPath);
     }
@@ -4981,14 +5707,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String? get _outputVideoUrl {
+    if (_hasFreshFinalVideo(_renderScript)) return finalOutputVideoPath;
+    if (_hasFreshIntermediateVideo(_renderScript)) return intermediateVideoPath;
     if (generationMode == 'cloud') {
       if (cloudOutputLocalPath.isNotEmpty) return cloudOutputLocalPath;
       return cloudOutputUrl.isEmpty ? null : cloudOutputUrl;
     }
     final taskId = _taskId;
     if (taskId == null) return null;
-    final hasOutputPath =
-        (output?['ready'] == true) ||
+    final hasOutputPath = (output?['ready'] == true) ||
         ((task?['output_video_path'] as String? ?? '').isNotEmpty);
     if (!hasOutputPath) return null;
     return '$apiBase/api/tasks/$taskId/download?v=$outputRefresh';
@@ -5019,6 +5746,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   String? get _outputVideoPath {
+    if (_hasFreshFinalVideo(_renderScript)) return finalOutputVideoPath;
+    if (_hasFreshIntermediateVideo(_renderScript)) return intermediateVideoPath;
     if (generationMode == 'cloud') {
       return cloudOutputLocalPath.isEmpty ? null : cloudOutputLocalPath;
     }
@@ -5071,21 +5800,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return '云端生成中：${percent.round()}%';
     }
     return '云端任务：${_cloudStatusText(status)}';
-  }
-
-  String _ledgerTitle(Map<String, dynamic> item) {
-    final event = item['event_type'] as String? ?? '';
-    final source = item['source'] as String? ?? '';
-    final sourceText = source == 'bonus' ? '赠点' : '付费点数';
-    return switch (event) {
-      'admin_credit' => '后台加点',
-      'credit_redeem' => '兑换加点',
-      'hold' => '任务冻结',
-      'capture' => '任务扣点',
-      'release' => '任务释放',
-      'cancel_fee' => '取消扣费',
-      _ => '$event $sourceText',
-    };
   }
 
   @override
@@ -5149,9 +5863,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       ),
       dividerColor: studioBorder,
       textTheme: ThemeData.light().textTheme.apply(
-        bodyColor: studioInk,
-        displayColor: studioInk,
-      ),
+            bodyColor: studioInk,
+            displayColor: studioInk,
+          ),
       sliderTheme: const SliderThemeData(
         activeTrackColor: studioPrimary,
         thumbColor: studioPrimary,
@@ -5193,26 +5907,33 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  List<({String title, String subtitle, IconData icon})>
-  get _studioSteps => const [
-    (title: '文案生成', subtitle: '导入链接并智能改写', icon: Icons.edit_note_rounded),
-    (title: '声音生成', subtitle: '选择音色与克隆声音', icon: Icons.graphic_eq_rounded),
-    (
-      title: '数字人生成',
-      subtitle: '选择形象并生成视频',
-      icon: Icons.face_retouching_natural_rounded,
-    ),
-    (title: '视频封面', subtitle: '生成或上传竖版封面', icon: Icons.image_outlined),
-    (title: 'BGM 与字幕', subtitle: '完善声音和字幕样式', icon: Icons.subtitles_rounded),
-    (title: '一键发布', subtitle: '编辑文案并选择平台', icon: Icons.rocket_launch_rounded),
-  ];
+  List<({String title, String subtitle, IconData icon})> get _studioSteps =>
+      const [
+        (title: '文案生成', subtitle: '导入链接并智能改写', icon: Icons.edit_note_rounded),
+        (title: '声音生成', subtitle: '选择音色与克隆声音', icon: Icons.graphic_eq_rounded),
+        (
+          title: '数字人生成',
+          subtitle: '选择形象并生成视频',
+          icon: Icons.face_retouching_natural_rounded,
+        ),
+        (title: '视频封面', subtitle: '生成或上传竖版封面', icon: Icons.image_outlined),
+        (
+          title: 'BGM 与字幕',
+          subtitle: '完善声音和字幕样式',
+          icon: Icons.subtitles_rounded
+        ),
+        (
+          title: '一键发布',
+          subtitle: '编辑文案并选择平台',
+          icon: Icons.rocket_launch_rounded
+        ),
+      ];
 
   Widget _studioWorkflowRail({bool embedded = false}) {
     final steps = _studioSteps;
     return Container(
-      margin: embedded
-          ? EdgeInsets.zero
-          : const EdgeInsets.fromLTRB(16, 16, 8, 16),
+      margin:
+          embedded ? EdgeInsets.zero : const EdgeInsets.fromLTRB(16, 16, 8, 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(embedded ? 0 : 18),
@@ -5384,8 +6105,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     color: completed
                         ? const Color(0xFFE8F8F0)
                         : active
-                        ? studioPrimary
-                        : const Color(0xFFF0F2F6),
+                            ? studioPrimary
+                            : const Color(0xFFF0F2F6),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
@@ -5394,8 +6115,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     color: completed
                         ? studioSuccess
                         : active
-                        ? Colors.white
-                        : const Color(0xFF9AA0B2),
+                            ? Colors.white
+                            : const Color(0xFF9AA0B2),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -5467,8 +6188,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     color: completed
                         ? studioSuccess
                         : active
-                        ? studioPrimary
-                        : studioMuted,
+                            ? studioPrimary
+                            : studioMuted,
                     size: 20,
                   ),
                   const SizedBox(width: 8),
@@ -5591,9 +6312,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       child: Row(
         children: [
           TextButton.icon(
-            onPressed: studioStep == 0
-                ? null
-                : () => setState(() => studioStep -= 1),
+            onPressed:
+                studioStep == 0 ? null : () => setState(() => studioStep -= 1),
             icon: const Icon(Icons.arrow_back_rounded, size: 18),
             label: const Text('上一步'),
           ),
@@ -5602,8 +6322,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             onPressed: loading
                 ? null
                 : lastStep
-                ? createPublishJobs
-                : () => setState(() => studioStep += 1),
+                    ? createPublishJobs
+                    : () => setState(() => studioStep += 1),
             style: FilledButton.styleFrom(
               backgroundColor: studioPrimary,
               foregroundColor: Colors.white,
@@ -5637,6 +6357,225 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _studioScriptStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _scriptCreationModeSelector(),
+        const SizedBox(height: 18),
+        if (scriptCreationMode == 'creator')
+          _studioCreatorScriptMode()
+        else
+          _studioVideoRewriteMode(),
+      ],
+    );
+  }
+
+  Widget _scriptCreationModeSelector() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F2F7),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: studioBorder),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _scriptCreationModeOption(
+              value: 'rewrite',
+              title: '视频仿写',
+              subtitle: '提取单条视频文案后智能改写',
+              icon: Icons.video_library_outlined,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: _scriptCreationModeOption(
+              value: 'creator',
+              title: '网红风格创作',
+              subtitle: '深度学习主页风格，一次生成 8 篇',
+              icon: Icons.psychology_alt_rounded,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _scriptCreationModeOption({
+    required String value,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+  }) {
+    final selected = scriptCreationMode == value;
+    return Material(
+      color: selected ? Colors.white : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() => scriptCreationMode = value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected ? const Color(0xFFBEC1FF) : Colors.transparent,
+            ),
+            boxShadow: selected
+                ? const [
+                    BoxShadow(
+                      color: Color(0x10000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 2),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? const Color(0xFFEEEFFF)
+                      : const Color(0xFFE5E7ED),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  icon,
+                  color: selected ? studioPrimary : studioMuted,
+                  size: 21,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: selected ? studioPrimaryDark : studioInk,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: studioMuted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (selected)
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: studioPrimary,
+                  size: 19,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _studioCreatorScriptMode() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _studioTip(
+          '复制网红抖音主页的完整分享内容，系统会分析主页简介和近期作品风格，再结合你的关键词生成 8 篇全新口播文案。',
+        ),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '网红主页与创作关键词',
+          subtitle: '从“4-”开始到末尾的整段抖音主页分享内容都可以直接粘贴',
+          icon: Icons.person_search_rounded,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: creatorHomepageController,
+                minLines: 3,
+                maxLines: 4,
+                decoration: _inputDecoration(
+                  '粘贴抖音主页链接或完整分享文案，例如：4- 长按复制此条消息…… https://v.douyin.com/……',
+                ),
+              ),
+              const SizedBox(height: 10),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final stacked = constraints.maxWidth < 620;
+                  final keywordInput = _input(
+                    creatorKeywordController,
+                    '输入创作关键词，例如：装修',
+                  );
+                  final generateButton = _stepButton(
+                    '分析风格并生成 8 篇',
+                    openCreatorScriptLab,
+                  );
+                  if (stacked) {
+                    return Column(
+                      children: [
+                        keywordInput,
+                        const SizedBox(height: 10),
+                        generateButton,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: keywordInput),
+                      const SizedBox(width: 10),
+                      SizedBox(width: 245, child: generateButton),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              const Row(
+                children: [
+                  Icon(
+                    Icons.verified_user_outlined,
+                    color: studioMuted,
+                    size: 16,
+                  ),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '仅分析主页公开内容；重新生成会沿用已学习的风格，不会重复读取主页。',
+                      style: TextStyle(color: studioMuted, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        if (creatorSelectedLabel.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _studioFieldCard(
+            title: '已选文案',
+            subtitle: '$creatorSelectedLabel · 可继续手动调整后进入声音生成',
+            icon: Icons.check_circle_outline_rounded,
+            child: _textBox(rewrittenScriptController, '已选择的口播文案', 10),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _studioVideoRewriteMode() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5798,9 +6737,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _studioAvatarStep() {
-    final userDigitalHumans = digitalHumans
-        .where((item) => item['built_in'] != true)
-        .toList();
+    final userDigitalHumans =
+        digitalHumans.where((item) => item['built_in'] != true).toList();
     final options = _limitedProfileOptions(
       userDigitalHumans,
       'digital_human_id',
@@ -5868,6 +6806,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _coverTemplatePicker(),
+              const SizedBox(height: 16),
               _coverTools(),
               const SizedBox(height: 14),
               _coverPreview(),
@@ -5894,6 +6834,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               const SizedBox(height: 18),
               _mediaSubTabPanel(),
             ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        _studioFieldCard(
+          title: '最终合成',
+          subtitle: '以第 3 步数字人视频为底片，统一加入封面、BGM、字幕和画中画',
+          icon: Icons.movie_filter_outlined,
+          child: _stepButton(
+            finalizingVideo ? '正在合成最终成品...' : '合成 BGM / 字幕 / 封面',
+            finalizeVideo,
           ),
         ),
       ],
@@ -5949,8 +6899,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 status == 'completed'
                     ? studioSuccess
                     : status == 'failed'
-                    ? const Color(0xFFFF5D73)
-                    : studioPrimary,
+                        ? const Color(0xFFFF5D73)
+                        : studioPrimary,
               ),
             ],
           ),
@@ -5981,10 +6931,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                   child: outputUrl != null
                       ? _OutputVideoPreview(url: outputUrl)
                       : avatarUrl != null
-                      ? _digitalHumanPreviewImage(avatarUrl)
-                      : sourceUrl != null
-                      ? _OutputVideoPreview(url: sourceUrl)
-                      : _previewPlaceholder(),
+                          ? _digitalHumanPreviewImage(avatarUrl)
+                          : sourceUrl != null
+                              ? _OutputVideoPreview(url: sourceUrl)
+                              : _previewPlaceholder(),
                 ),
               ),
             ),
@@ -6385,9 +7335,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               ),
             ),
             child: Row(
-              mainAxisAlignment: compact
-                  ? MainAxisAlignment.center
-                  : MainAxisAlignment.start,
+              mainAxisAlignment:
+                  compact ? MainAxisAlignment.center : MainAxisAlignment.start,
               children: [
                 Icon(
                   icon,
@@ -6710,9 +7659,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _avatarManagementPage() {
-    final customHumans = digitalHumans
-        .where((item) => item['built_in'] != true)
-        .toList();
+    final customHumans =
+        digitalHumans.where((item) => item['built_in'] != true).toList();
     return Padding(
       padding: const EdgeInsets.all(18),
       child: Column(
@@ -6740,11 +7688,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 : GridView.builder(
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
-                          maxCrossAxisExtent: 320,
-                          childAspectRatio: 0.78,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                        ),
+                      maxCrossAxisExtent: 320,
+                      childAspectRatio: 0.78,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                    ),
                     itemCount: customHumans.length + 1,
                     itemBuilder: (context, index) {
                       if (index == 0) return _addAvatarCard();
@@ -6932,9 +7880,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     Expanded(
                       child: _dropZone(
                         icon: Icons.add_photo_alternate_outlined,
-                        title: pipAssetName.isEmpty
-                            ? '上传画中画图片或视频'
-                            : pipAssetName,
+                        title:
+                            pipAssetName.isEmpty ? '上传画中画图片或视频' : pipAssetName,
                         subtitle: pipAssetName.isEmpty
                             ? '支持常见图片与视频格式'
                             : '素材已关联当前任务，可继续设置显示方式',
@@ -7210,8 +8157,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final checkboxValue = selectedVisible == 0
         ? false
         : allSelected
-        ? true
-        : null;
+            ? true
+            : null;
     return Row(
       children: [
         SizedBox(
@@ -7231,12 +8178,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           onChanged: visibleIds.isEmpty
               ? null
               : (value) => setState(() {
-                  if (value == true) {
-                    selectedTaskIds.addAll(visibleIds);
-                  } else {
-                    selectedTaskIds.removeAll(visibleIds);
-                  }
-                }),
+                    if (value == true) {
+                      selectedTaskIds.addAll(visibleIds);
+                    } else {
+                      selectedTaskIds.removeAll(visibleIds);
+                    }
+                  }),
         ),
         Text(
           allSelected ? '取消全选' : '全选当前结果',
@@ -7315,12 +8262,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             onChanged: taskId.isEmpty
                 ? null
                 : (value) => setState(() {
-                    if (value == true) {
-                      selectedTaskIds.add(taskId);
-                    } else {
-                      selectedTaskIds.remove(taskId);
-                    }
-                  }),
+                      if (value == true) {
+                        selectedTaskIds.add(taskId);
+                      } else {
+                        selectedTaskIds.remove(taskId);
+                      }
+                    }),
           ),
           Container(
             width: 34,
@@ -7455,16 +8402,16 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _cloudAccountPage() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
-    final available = wallet['available_points'] ?? 0;
-    final frozen = wallet['frozen_points'] ?? 0;
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
     return SingleChildScrollView(
       padding: const EdgeInsets.all(18),
       child: Column(
         children: [
           _pageHeading(
             '云端账户',
-            '管理云端登录、软件授权、点数余额和任务扣点明细。',
+            '管理云端登录、软件授权和剩余使用期限。',
             Icons.cloud_outlined,
             trailing: _ghostButton('刷新账户', () async {
               await loadCloudMe(silent: true);
@@ -7483,18 +8430,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             children: [
               Expanded(
                 child: _cloudMetricCard(
-                  '可用点数',
-                  '$available 点',
-                  Icons.toll_rounded,
+                  '剩余使用期限',
+                  _cloudUsageText,
+                  Icons.schedule_rounded,
                   const Color(0xFF51D8A5),
                 ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: _cloudMetricCard(
-                  '冻结点数',
-                  '$frozen 点',
-                  Icons.lock_clock_outlined,
+                  '到期时间',
+                  _cloudUsageExpiryText,
+                  Icons.event_available_outlined,
                   const Color(0xFFFFC857),
                 ),
               ),
@@ -7513,48 +8460,55 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ),
           const SizedBox(height: 14),
           _managementCard(
-            title: '最近点数明细',
-            subtitle: cloudLedger.isEmpty ? '暂无扣点记录' : '展示最近的账户变动',
-            icon: Icons.receipt_long_outlined,
-            child: cloudLedger.isEmpty
-                ? _emptyState('暂无点数明细', '完成云端任务后会在这里显示扣点记录')
-                : Column(
-                    children: [
-                      for (final item in cloudLedger.take(12))
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.bolt_rounded,
-                                size: 18,
-                                color: Color(0xFFB99AFF),
-                              ),
-                              const SizedBox(width: 9),
-                              Expanded(
-                                child: Text(
-                                  _ledgerTitle(item),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                item['points']?.toString() ??
-                                    item['amount']?.toString() ??
-                                    '',
-                                style: const TextStyle(
-                                  color: Color(0xFFFFC857),
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ],
+            title: '使用规则',
+            subtitle:
+                access['has_access'] == true ? '当前账号可使用云端功能' : '当前账号尚未开通使用期限',
+            icon: Icons.verified_user_outlined,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF181A27),
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: const Color(0xFF303348)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    access['has_access'] == true
+                        ? Icons.check_circle_rounded
+                        : Icons.schedule_rounded,
+                    color: access['has_access'] == true
+                        ? const Color(0xFF51D8A5)
+                        : const Color(0xFFFFC857),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          access['has_access'] == true
+                              ? '有效期内不限次数'
+                              : '剩余期限为 0天0小时0分',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          access['has_access'] == true
+                              ? '生成文案、声音和视频均免费'
+                              : '请联系管理员开通或增加使用期限',
+                          style: const TextStyle(
+                            color: Color(0x8AFFFFFF),
+                            fontSize: 12,
                           ),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -7991,9 +8945,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                           ),
                           const SizedBox(width: 10),
                           FilledButton.icon(
-                            onPressed: loading
-                                ? null
-                                : _activateSoftwareFromInput,
+                            onPressed:
+                                loading ? null : _activateSoftwareFromInput,
                             icon: const Icon(Icons.verified_user_outlined),
                             label: const Text('激活软件'),
                           ),
@@ -8108,7 +9061,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              '云端生成将按账号点数扣费',
+              '云端生成在账号有效期内不限次数使用',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
@@ -8140,15 +9093,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           color: active
               ? const Color(0xFFEEF0FF)
               : enabled
-              ? Colors.white
-              : const Color(0xFFF0F1F4),
+                  ? Colors.white
+                  : const Color(0xFFF0F1F4),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: active
                 ? const Color(0xFFC9CCFF)
                 : enabled
-                ? studioBorder
-                : const Color(0xFFE4E6EB),
+                    ? studioBorder
+                    : const Color(0xFFE4E6EB),
             width: active ? 1.4 : 1,
           ),
         ),
@@ -8161,8 +9114,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               color: active
                   ? studioPrimary
                   : enabled
-                  ? studioMuted
-                  : const Color(0xFFB4B8C3),
+                      ? studioMuted
+                      : const Color(0xFFB4B8C3),
             ),
             const SizedBox(width: 6),
             Text(
@@ -8234,9 +9187,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _digitalHumanRenderPanel() {
-    final userDigitalHumans = digitalHumans
-        .where((item) => item['built_in'] != true)
-        .toList();
+    final userDigitalHumans =
+        digitalHumans.where((item) => item['built_in'] != true).toList();
     final humanOptions = _limitedProfileOptions(
       userDigitalHumans,
       'digital_human_id',
@@ -8500,8 +9452,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final fileName = isCloud
         ? _cloudOutputLabel
         : path == null || path.isEmpty
-        ? '成品视频生成后自动关联'
-        : path.split(RegExp(r'[\\/]')).last;
+            ? '成品视频生成后自动关联'
+            : path.split(RegExp(r'[\\/]')).last;
     return Row(
       children: [
         Expanded(child: _readonlyBox(fileName)),
@@ -8515,6 +9467,108 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           const SizedBox(width: 8),
           _ghostButton('确认下载', () => confirmCloudDownload()),
         ],
+      ],
+    );
+  }
+
+  Widget _coverTemplatePicker() {
+    const templates = [
+      (id: 'bold-yellow-white', name: '黄白重磅', accent: Color(0xFFFFD400)),
+      (id: 'red-white-emphasis', name: '红白强调', accent: Color(0xFFFF3B30)),
+      (id: 'black-white-clean', name: '黑白极简', accent: Color(0xFFFFFFFF)),
+      (id: 'blue-white-clear', name: '蓝白清晰', accent: Color(0xFF35B8FF)),
+      (id: 'green-keyword', name: '荧光绿重点', accent: Color(0xFF58E36D)),
+      (id: 'orange-black-impact', name: '橙黑冲击', accent: Color(0xFFFF7A22)),
+      (id: 'purple-yellow-outline', name: '紫黄双描边', accent: Color(0xFFFFE65A)),
+      (id: 'offset-shadow', name: '黑白错位', accent: Color(0xFFFFFFFF)),
+      (id: 'gold-kaiti', name: '金色楷体', accent: Color(0xFFE7C36A)),
+      (id: 'vertical-kaiti', name: '竖排楷体', accent: Color(0xFFD9B45B)),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '透明纯文字封面模板 · 10 套',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '选择模板后点击“按模板生成”，封面会在最终合成时写入视频第 1 帧',
+          style: TextStyle(color: studioMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final template in templates)
+              SizedBox(
+                width: 174,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(11),
+                  onTap: () => setState(() {
+                    selectedCoverTemplate = template.id;
+                    finalOutputVideoPath = '';
+                    finalVideoKey = '';
+                  }),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: const EdgeInsets.all(9),
+                    decoration: BoxDecoration(
+                      color: selectedCoverTemplate == template.id
+                          ? const Color(0xFFF0F1FF)
+                          : Colors.white,
+                      borderRadius: BorderRadius.circular(11),
+                      border: Border.all(
+                        color: selectedCoverTemplate == template.id
+                            ? studioPrimary
+                            : studioBorder,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 42,
+                          height: 62,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2A2C34),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            template.id == 'vertical-kaiti' ? '口\n播' : '口播\n标题',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: template.accent,
+                              fontSize: 9,
+                              height: 1.05,
+                              fontWeight: FontWeight.w900,
+                              shadows: const [
+                                Shadow(color: Colors.black, blurRadius: 2),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Text(
+                            template.name,
+                            style: TextStyle(
+                              color: selectedCoverTemplate == template.id
+                                  ? studioPrimaryDark
+                                  : studioInk,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ],
     );
   }
@@ -8549,9 +9603,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               child: Container(
                 clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
-                  color: light
-                      ? const Color(0xFFF0F2F6)
-                      : const Color(0xFF25283A),
+                  color:
+                      light ? const Color(0xFFF0F2F6) : const Color(0xFF25283A),
                   borderRadius: BorderRadius.circular(light ? 12 : 8),
                   border: Border.all(
                     color: light
@@ -8809,20 +9862,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         decoration: BoxDecoration(
           color: active
               ? light
-                    ? const Color(0xFFEEF0FF)
-                    : const Color(0xFF25315A)
+                  ? const Color(0xFFEEF0FF)
+                  : const Color(0xFF25315A)
               : light
-              ? Colors.white
-              : panelBg2,
+                  ? Colors.white
+                  : panelBg2,
           borderRadius: BorderRadius.circular(light ? 10 : 8),
           border: Border.all(
             color: active
                 ? light
-                      ? studioPrimary
-                      : cyan
+                    ? studioPrimary
+                    : cyan
                 : light
-                ? studioBorder
-                : purpleLine.withValues(alpha: 0.45),
+                    ? studioBorder
+                    : purpleLine.withValues(alpha: 0.45),
           ),
         ),
         child: Row(
@@ -8833,11 +9886,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
               size: 17,
               color: active
                   ? light
-                        ? studioPrimary
-                        : cyan
+                      ? studioPrimary
+                      : cyan
                   : light
-                  ? studioMuted
-                  : Colors.white54,
+                      ? studioMuted
+                      : Colors.white54,
             ),
             const SizedBox(width: 6),
             Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
@@ -8959,12 +10012,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _messageBar() {
-    final bgColor = messageIsError
-        ? const Color(0xFF3A1420)
-        : const Color(0xFF123B2A);
-    final textColor = messageIsError
-        ? const Color(0xFFFFB0C2)
-        : const Color(0xFFB9F8D0);
+    final bgColor =
+        messageIsError ? const Color(0xFF3A1420) : const Color(0xFF123B2A);
+    final textColor =
+        messageIsError ? const Color(0xFFFFB0C2) : const Color(0xFFB9F8D0);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -9065,11 +10116,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return a.key.compareTo(b.key);
     });
 
-    final systemOptions =
-        (preferredSystemOptions.isNotEmpty
-                ? preferredSystemOptions
-                : fallbackSystemOptions)
-            .take(4);
+    final systemOptions = (preferredSystemOptions.isNotEmpty
+            ? preferredSystemOptions
+            : fallbackSystemOptions)
+        .take(4);
 
     return [
       ...systemOptions,
@@ -9081,9 +10131,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Widget _styleDropdown() {
-    final options = rewriteStyles
-        .map((s) => s['name'] as String)
-        .toList(growable: true);
+    final options =
+        rewriteStyles.map((s) => s['name'] as String).toList(growable: true);
     if (options.isEmpty) options.addAll(const ['同款口播', '带货', '种草']);
     if (!options.contains(selectedStyle)) options.insert(0, selectedStyle);
     return _dropdown(
@@ -9185,8 +10234,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         color: disabled
             ? (light ? const Color(0xFFE3E5EB) : Colors.white12)
             : light
-            ? studioPrimary
-            : null,
+                ? studioPrimary
+                : null,
         borderRadius: BorderRadius.circular(light ? 10 : 8),
       ),
       child: ElevatedButton(
@@ -9311,17 +10360,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       }
       return '$apiBase$providedUrl';
     }
-    final version =
-        profile?['last_used_at']?.toString() ??
+    final version = profile?['last_used_at']?.toString() ??
         profile?['asset_id']?.toString();
-    return Uri.parse('$apiBase/api/digital-humans/thumbnail')
-        .replace(
-          queryParameters: {
-            'digital_human_id': digitalHumanId,
-            if (version != null && version.isNotEmpty) 'v': version,
-          },
-        )
-        .toString();
+    return Uri.parse('$apiBase/api/digital-humans/thumbnail').replace(
+      queryParameters: {
+        'digital_human_id': digitalHumanId,
+        if (version != null && version.isNotEmpty) 'v': version,
+      },
+    ).toString();
   }
 
   Widget _digitalHumanPicker(List<String> options, Map<String, String> labels) {
@@ -9370,15 +10416,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         decoration: BoxDecoration(
           color: active
               ? light
-                    ? const Color(0xFFEEF0FF)
-                    : const Color(0xFF262B47)
+                  ? const Color(0xFFEEF0FF)
+                  : const Color(0xFF262B47)
               : Colors.transparent,
           border: Border(
             left: BorderSide(
               color: active
                   ? light
-                        ? studioPrimary
-                        : cyan
+                      ? studioPrimary
+                      : cyan
                   : Colors.transparent,
               width: 3,
             ),
@@ -9426,11 +10472,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                     style: TextStyle(
                       color: builtIn
                           ? light
-                                ? studioPrimary
-                                : const Color(0xFFBFA8FF)
+                              ? studioPrimary
+                              : const Color(0xFFBFA8FF)
                           : light
-                          ? studioSuccess
-                          : const Color(0xFF55E6A5),
+                              ? studioSuccess
+                              : const Color(0xFF55E6A5),
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                     ),
@@ -9461,6 +10507,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _videoSubPanel() {
     return Column(
       children: [
+        _subtitleTemplatePicker(),
+        const SizedBox(height: 16),
         Row(
           children: [
             Expanded(
@@ -9519,8 +10567,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           selectedBgm == 'none'
               ? '最终视频不会混入背景音乐。'
               : selectedBgm.startsWith('custom:')
-              ? '将使用你上传的背景音乐，并按音量混入最终视频。'
-              : '将使用模板背景音乐，并按音量混入最终视频。',
+                  ? '将使用你上传的背景音乐，并按音量混入最终视频。'
+                  : '将使用模板背景音乐，并按音量混入最终视频。',
           style: TextStyle(
             color: _studioLightControls ? studioMuted : Colors.white60,
             fontSize: 12,
@@ -9555,6 +10603,144 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       ...(templateIds.isNotEmpty ? templateIds : fallbackIds),
       ...customIds.take(10),
     ];
+  }
+
+  void _selectSubtitleTemplate(
+    String id, {
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final template = _subtitleTemplates.firstWhere((item) => item.id == id);
+    void applyTemplate() {
+      selectedSubtitleTemplate = template.id;
+      subtitleSize = template.fontSize;
+      subtitleColor = template.color;
+      subtitleKeywordColor = template.keywordColor;
+      subtitleOutlineColor = template.outline;
+      subtitleOutlineWidth = template.outlineWidth;
+      selectedSubtitleFont = template.font;
+      subtitlePosition = template.position;
+      subtitleMarginV = template.marginV;
+      subtitleX = 0.5;
+      subtitleY = template.position == 'middle'
+          ? 0.44
+          : (1 - template.marginV / 1920 - (template.fontSize * 1.8 + 8) / 1920)
+              .clamp(0.0, 0.9)
+              .toDouble();
+      subtitleMaxCharsPerLine = template.maxChars;
+      finalOutputVideoPath = '';
+      finalVideoKey = '';
+    }
+
+    if (updateDialog != null) {
+      updateDialog(applyTemplate);
+    } else {
+      setState(applyTemplate);
+    }
+    unawaited(refreshSubtitlePreview(silent: true));
+  }
+
+  Widget _subtitleTemplatePicker({
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '字幕样式模板 · 10 套',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '选择后同步字号、字体、颜色、描边、位置和断句长度',
+          style: TextStyle(color: studioMuted, fontSize: 11),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final template in _subtitleTemplates)
+              SizedBox(
+                width: 184,
+                height: 104,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(11),
+                  onTap: () => _selectSubtitleTemplate(
+                    template.id,
+                    updateDialog: updateDialog,
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: selectedSubtitleTemplate == template.id
+                          ? const Color(0xFFF0F1FF)
+                          : Colors.white,
+                      borderRadius: BorderRadius.circular(11),
+                      border: Border.all(
+                        color: selectedSubtitleTemplate == template.id
+                            ? studioPrimary
+                            : studioBorder,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${template.industry} · ${template.name}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: selectedSubtitleTemplate == template.id
+                                ? studioPrimaryDark
+                                : studioInk,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Expanded(
+                          child: Container(
+                            width: double.infinity,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF24262D),
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  template.first,
+                                  style: TextStyle(
+                                    color: template.color,
+                                    fontSize: 10,
+                                    fontFamily: template.font,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                Text(
+                                  template.second,
+                                  style: TextStyle(
+                                    color: template.keywordColor,
+                                    fontSize: 10,
+                                    fontFamily: template.font,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
   }
 
   Widget _subtitlePanel() {
@@ -9599,7 +10785,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                 _subtitleFontOptions,
                 (value) {
                   if (value == null) return;
-                  setState(() => selectedSubtitleFont = value);
+                  setState(() {
+                    selectedSubtitleFont = value;
+                    selectedSubtitleTemplate = 'custom';
+                    finalOutputVideoPath = '';
+                    finalVideoKey = '';
+                  });
                 },
                 labels: _subtitleFontLabels,
               ),
@@ -9626,9 +10817,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         _labeledSlider(
           '字号',
           subtitleSize,
-          12,
-          56,
-          (v) => setState(() => subtitleSize = v),
+          24,
+          72,
+          (v) => setState(() {
+            subtitleSize = v;
+            selectedSubtitleTemplate = 'custom';
+            finalOutputVideoPath = '';
+            finalVideoKey = '';
+          }),
           subtitleSize.round().toString(),
         ),
         const SizedBox(height: 8),
@@ -9665,7 +10861,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     return OutlinedButton(
       onPressed: () => updateDialog(() {
         subtitleColor = color;
+        subtitleKeywordColor = color;
         subtitleOutlineColor = outlineColor;
+        selectedSubtitleTemplate = 'custom';
       }),
       style: OutlinedButton.styleFrom(
         foregroundColor: Colors.white,
@@ -9772,13 +10970,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       return;
     }
     final widthDelta = details.delta.dx / canvasSize.width;
-    final heightDelta =
-        details.delta.dy /
+    final heightDelta = details.delta.dy /
         canvasSize.height /
         (_pipCanvasAspectRatio / _pipMediaAspectRatio);
-    final delta = widthDelta.abs() > heightDelta.abs()
-        ? widthDelta
-        : heightDelta;
+    final delta =
+        widthDelta.abs() > heightDelta.abs() ? widthDelta : heightDelta;
     _updatePreviewState(() {
       pipScale = (pipScale + delta).clamp(0.1, 0.95).toDouble();
       _clampPipCustomPosition();
@@ -9795,7 +10991,232 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
+  Rect _subtitleNormalizedRect() {
+    final width = ((subtitleMaxCharsPerLine * subtitleSize * 0.92 + 80) / 1080)
+        .clamp(0.34, 0.9)
+        .toDouble();
+    final height =
+        ((subtitleSize * 1.8 + 8) / 1920).clamp(0.055, 0.18).toDouble();
+    final left =
+        (subtitleX - width / 2).clamp(0.0, math.max(0.0, 1 - width)).toDouble();
+    final customTop =
+        subtitleY.clamp(0.0, math.max(0.0, 1 - height)).toDouble();
+    final top = switch (subtitlePosition) {
+      'custom' => customTop,
+      'top' => (subtitleMarginV / 1920)
+          .clamp(0.0, math.max(0.0, 1 - height))
+          .toDouble(),
+      'middle' || 'center' => (1 - height) / 2,
+      _ => (1 - subtitleMarginV / 1920 - height)
+          .clamp(0.0, math.max(0.0, 1 - height))
+          .toDouble(),
+    };
+    return Rect.fromLTWH(left, top, width, height);
+  }
+
+  Rect _subtitleCanvasRect(Size canvasSize) {
+    final rect = _subtitleNormalizedRect();
+    return Rect.fromLTWH(
+      rect.left * canvasSize.width,
+      rect.top * canvasSize.height,
+      rect.width * canvasSize.width,
+      rect.height * canvasSize.height,
+    );
+  }
+
+  void _dragSubtitleByDelta(
+    Offset delta,
+    Size canvasSize,
+    void Function(VoidCallback update)? updateDialog,
+  ) {
+    if (!subtitlesEnabled || canvasSize.width <= 0 || canvasSize.height <= 0) {
+      return;
+    }
+    final currentRect = _subtitleNormalizedRect();
+    _updatePreviewState(() {
+      if (subtitlePosition != 'custom') {
+        subtitleX = currentRect.center.dx;
+        subtitleY = currentRect.top;
+      }
+      subtitlePosition = 'custom';
+      selectedSubtitleTemplate = 'custom';
+      subtitleX = (subtitleX + delta.dx / canvasSize.width)
+          .clamp(currentRect.width / 2, 1 - currentRect.width / 2)
+          .toDouble();
+      subtitleY = (subtitleY + delta.dy / canvasSize.height)
+          .clamp(0.0, math.max(0.0, 1 - currentRect.height))
+          .toDouble();
+      finalOutputVideoPath = '';
+      finalVideoKey = '';
+    }, updateDialog);
+  }
+
+  Widget _subtitlePreviewLayer(
+    String previewText,
+    Size canvasSize, {
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final rect = _subtitleCanvasRect(canvasSize);
+    final previewLines =
+        previewText.split('\n').take(2).toList(growable: false);
+    final spans = <InlineSpan>[];
+    for (var index = 0; index < previewLines.length; index++) {
+      if (index > 0) spans.add(const TextSpan(text: '\n'));
+      spans.add(
+        TextSpan(
+          text: previewLines[index],
+          style: TextStyle(
+            color: index == previewLines.length - 1
+                ? subtitleKeywordColor
+                : subtitleColor,
+          ),
+        ),
+      );
+    }
+    return Positioned(
+      left: math.max(0, rect.left - 18),
+      top: math.max(0, rect.top - 14),
+      width: math.min(
+          canvasSize.width - math.max(0, rect.left - 18), rect.width + 36),
+      height: math.min(
+          canvasSize.height - math.max(0, rect.top - 14), rect.height + 28),
+      child: MouseRegion(
+        cursor: subtitlesEnabled
+            ? SystemMouseCursors.move
+            : SystemMouseCursors.basic,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onPanUpdate: subtitlesEnabled
+              ? (details) =>
+                  _dragSubtitleByDelta(details.delta, canvasSize, updateDialog)
+              : null,
+          onPanEnd: subtitlesEnabled
+              ? (_) => _scheduleRenderedSubtitlePreview(delay: Duration.zero)
+              : null,
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: subtitlesEnabled
+                    ? cyan.withValues(alpha: 0.75)
+                    : Colors.white24,
+              ),
+              borderRadius: BorderRadius.circular(5),
+              color: Colors.black.withValues(alpha: 0.05),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: _hasCurrentRenderedSubtitlePreview
+                ? const SizedBox.expand()
+                : Opacity(
+                    opacity: subtitlesEnabled ? 1 : 0.35,
+                    child: Text.rich(
+                      TextSpan(children: spans),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: (subtitleSize * canvasSize.height / 1920)
+                            .clamp(8.0, 22.0)
+                            .toDouble(),
+                        fontFamily: selectedSubtitleFont,
+                        fontWeight: FontWeight.w900,
+                        height: 1.08,
+                        shadows: [
+                          Shadow(
+                            offset: const Offset(1.2, 1.2),
+                            color: subtitleOutlineColor,
+                          ),
+                          Shadow(
+                            offset: const Offset(-1.2, -1.2),
+                            color: subtitleOutlineColor,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _subtitlePreviewBox({
+    void Function(VoidCallback update)? updateDialog,
+  }) {
+    final previewText = subtitlePreviewLines.isEmpty
+        ? (_renderScript.isEmpty ? '字幕预览' : _renderScript)
+        : subtitlePreviewLines.take(3).join('\n');
+    return SizedBox(
+      height: 320,
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: _pipCanvasAspectRatio,
+          child: Container(
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF27345F), Color(0xFF11131B)],
+              ),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: purpleLine.withValues(alpha: 0.45)),
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final canvasSize =
+                    Size(constraints.maxWidth, constraints.maxHeight);
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Center(
+                      child: Icon(
+                        Icons.person,
+                        size: 78,
+                        color: Colors.white.withValues(alpha: 0.45),
+                      ),
+                    ),
+                    if (pipEnabled)
+                      _pipPreviewLayer(canvasSize, updateDialog: updateDialog),
+                    if (_hasCurrentRenderedSubtitlePreview)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Image.memory(
+                            renderedSubtitlePreviewBytes!,
+                            fit: BoxFit.fill,
+                            gaplessPlayback: true,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                      ),
+                    _subtitlePreviewLayer(
+                      previewText,
+                      canvasSize,
+                      updateDialog: updateDialog,
+                    ),
+                    if (renderingSubtitlePreview)
+                      const Positioned(
+                        right: 8,
+                        top: 8,
+                        child: SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Retained temporarily for visual regression comparison during the PC port.
+  // ignore: unused_element
+  Widget _subtitlePreviewBoxLegacy({
     void Function(VoidCallback update)? updateDialog,
   }) {
     final previewText = subtitlePreviewLines.isEmpty
@@ -9959,8 +11380,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _pipPreviewMedia() {
     final previewUrl = '$apiBase/api/pip/$pipAssetId/preview';
     final lowerName = pipAssetName.toLowerCase();
-    final isImage =
-        lowerName.endsWith('.png') ||
+    final isImage = lowerName.endsWith('.png') ||
         lowerName.endsWith('.jpg') ||
         lowerName.endsWith('.jpeg') ||
         lowerName.endsWith('.webp');
@@ -9997,11 +11417,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       bottom: BorderSide(
                         color: selectedMediaSubTab == item.$1
                             ? light
-                                  ? studioPrimary
-                                  : const Color(0xFFD4A4FF)
+                                ? studioPrimary
+                                : const Color(0xFFD4A4FF)
                             : light
-                            ? studioBorder
-                            : const Color(0xFF414866),
+                                ? studioBorder
+                                : const Color(0xFF414866),
                         width: selectedMediaSubTab == item.$1 ? 2 : 1,
                       ),
                     ),
@@ -10014,11 +11434,11 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         size: 17,
                         color: selectedMediaSubTab == item.$1
                             ? light
-                                  ? studioPrimary
-                                  : const Color(0xFFBFA8FF)
+                                ? studioPrimary
+                                : const Color(0xFFBFA8FF)
                             : light
-                            ? studioMuted
-                            : const Color(0xFFBFA8FF),
+                                ? studioMuted
+                                : const Color(0xFFBFA8FF),
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -10036,8 +11456,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   }
 
   Map<String, dynamic>? _activeProgressStep(Map<String, dynamic>? currentTask) {
-    final steps =
-        (currentTask?['progress_steps'] as List?)
+    final steps = (currentTask?['progress_steps'] as List?)
             ?.cast<Map<String, dynamic>>() ??
         const [];
     for (final step in steps) {

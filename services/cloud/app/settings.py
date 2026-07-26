@@ -70,7 +70,15 @@ class Settings:
     max_render_duration_seconds: int = _int_env("MAX_RENDER_DURATION_SECONDS", 600)
     scheduler_interval_seconds: int = _int_env("SCHEDULER_INTERVAL_SECONDS", 60)
     running_job_timeout_seconds: int = _int_env("RUNNING_JOB_TIMEOUT_SECONDS", 7200)
+    uploading_job_timeout_seconds: int = _int_env(
+        "UPLOADING_JOB_TIMEOUT_SECONDS",
+        7200,
+    )
     queued_job_timeout_seconds: int = _int_env("QUEUED_JOB_TIMEOUT_SECONDS", 86400)
+    invalid_job_retention_seconds: int = _int_env(
+        "INVALID_JOB_RETENTION_SECONDS",
+        7 * 24 * 60 * 60,
+    )
     preprocess_running_job_timeout_seconds: int = _int_env(
         "PREPROCESS_RUNNING_JOB_TIMEOUT_SECONDS",
         300,

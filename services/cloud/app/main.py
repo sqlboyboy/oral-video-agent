@@ -20,7 +20,7 @@ from .object_storage import object_storage
 from .redis_state import RedisState
 from .rewrite import RewriteInput, rewrite_script
 from .settings import settings
-from .store import QueueStore, estimate_render_points, validate_password
+from .store import QueueStore, validate_password
 
 
 app = FastAPI(title="Oral Video Agent Cloud", version="0.1.0")
@@ -69,7 +69,12 @@ class AdminLoginRequest(BaseModel):
 
 class AdminUserCreateRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
-    initial_points: int = Field(default=0, ge=0, le=100_000_000)
+
+
+class AdminUserUsageRequest(BaseModel):
+    preset: str
+    expires_at: datetime | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=5_256_000)
 
 
 class AdminUserUpdateRequest(BaseModel):
@@ -334,6 +339,12 @@ def require_cloud_account(
     session: dict[str, Any] = Depends(require_client),
     activation: dict[str, Any] = Depends(require_device_activation),
 ) -> dict[str, Any]:
+    try:
+        session["usage_access"] = store.require_usage_access(
+            user_id=session["user"]["user_id"]
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     session["activation"] = activation
     return session
 
@@ -490,9 +501,7 @@ def create_license_key(req: AdminLicenseKeyRequest) -> dict[str, Any]:
         return store.create_license_key(
             license_key=req.license_key,
             max_activations=req.max_activations,
-            grant_points=req.grant_points
-            if req.grant_points is not None
-            else settings.license_activation_grant_points,
+            grant_points=0,
             expires_at=req.expires_at.isoformat() if req.expires_at else None,
         )
     except ValueError as exc:
@@ -522,10 +531,7 @@ def admin_dashboard() -> dict[str, Any]:
 
 @app.post("/api/admin/credit-codes", dependencies=[Depends(require_admin)])
 def create_credit_code(req: AdminCreditCodeRequest) -> dict[str, Any]:
-    try:
-        return store.create_credit_code(code=req.code, points=req.points)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    raise HTTPException(status_code=410, detail="point billing is disabled")
 
 
 @app.get("/api/admin/users", dependencies=[Depends(require_admin)])
@@ -536,7 +542,7 @@ def list_users(email: str | None = None, limit: int = 50) -> dict[str, Any]:
 @app.post("/api/admin/users", dependencies=[Depends(require_admin)])
 def create_admin_user(req: AdminUserCreateRequest) -> dict[str, Any]:
     try:
-        return store.create_admin_user(email=req.email, initial_points=req.initial_points)
+        return store.create_admin_user(email=req.email)
     except ValueError as exc:
         detail = str(exc)
         raise HTTPException(status_code=409 if "exists" in detail else 400, detail=detail) from exc
@@ -552,18 +558,23 @@ def get_admin_user(user_id: str) -> dict[str, Any]:
 
 @app.post("/api/admin/users/{user_id}/credits", dependencies=[Depends(require_admin)])
 def add_admin_user_credits(user_id: str, req: AdminUserCreditRequest) -> dict[str, Any]:
-    try:
-        return store.add_user_credits(user_id=user_id, points=req.points, note=req.note)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="user not found")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    raise HTTPException(status_code=410, detail="point billing is disabled")
 
 
 @app.post("/api/admin/users/{user_id}/debits", dependencies=[Depends(require_admin)])
 def deduct_admin_user_credits(user_id: str, req: AdminUserDebitRequest) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="point billing is disabled")
+
+
+@app.post("/api/admin/users/{user_id}/usage", dependencies=[Depends(require_admin)])
+def update_admin_user_usage(user_id: str, req: AdminUserUsageRequest) -> dict[str, Any]:
     try:
-        return store.deduct_user_credits(user_id=user_id, points=req.points, note=req.note)
+        return store.update_user_usage(
+            user_id=user_id,
+            preset=req.preset,
+            expires_at=req.expires_at.isoformat() if req.expires_at else None,
+            duration_minutes=req.duration_minutes,
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="user not found")
     except ValueError as exc:
@@ -582,6 +593,38 @@ def update_admin_user(user_id: str, req: AdminUserUpdateRequest) -> dict[str, An
         raise HTTPException(status_code=404, detail="user not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/admin/users/{user_id}", dependencies=[Depends(require_admin)])
+def delete_admin_user(user_id: str) -> dict[str, Any]:
+    stale_uploads = store.purge_stale_uploading_jobs(
+        timeout_seconds=settings.uploading_job_timeout_seconds,
+        user_id=user_id,
+    )
+    stale_objects_deleted = 0
+    for cos_key in stale_uploads["cos_keys"]:
+        try:
+            object_storage.delete_object(cos_key=cos_key)
+            stale_objects_deleted += 1
+        except Exception:
+            continue
+    try:
+        result = store.delete_user(user_id=user_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="user not found")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    deleted_objects = 0
+    for cos_key in result.pop("cos_keys", []):
+        try:
+            object_storage.delete_object(cos_key=cos_key)
+            deleted_objects += 1
+        except Exception:
+            continue
+    result["deleted_objects"] = deleted_objects
+    result["stale_upload_jobs_cleaned"] = stale_uploads["jobs"]
+    result["stale_upload_objects_deleted"] = stale_objects_deleted
+    return result
 
 
 @app.post("/api/admin/users/{user_id}/devices/reset", dependencies=[Depends(require_admin)])
@@ -870,27 +913,31 @@ def client_me(session: dict[str, Any] = Depends(require_client)) -> dict[str, An
 @app.get("/api/client/credits/ledger")
 def client_credit_ledger(
     limit: int = 50,
-    session: dict[str, Any] = Depends(require_cloud_account),
+    session: dict[str, Any] = Depends(require_client),
 ) -> dict[str, Any]:
     user_id = session["user"]["user_id"]
     return {
         "wallet": store.get_wallet(user_id=user_id),
-        "items": store.list_credit_ledger(user_id=user_id, limit=limit),
+        "usage_access": store.get_usage_access(user_id=user_id),
+        "items": [],
+    }
+
+
+@app.get("/api/client/usage")
+def client_usage(session: dict[str, Any] = Depends(require_client)) -> dict[str, Any]:
+    return {
+        "usage_access": store.get_usage_access(
+            user_id=session["user"]["user_id"]
+        )
     }
 
 
 @app.post("/api/client/credits/redeem")
 def redeem_client_credit_code(
     req: ClientCreditRedeemRequest,
-    session: dict[str, Any] = Depends(require_cloud_account),
+    session: dict[str, Any] = Depends(require_client),
 ) -> dict[str, Any]:
-    try:
-        return store.redeem_credit_code(
-            user_id=session["user"]["user_id"],
-            code=req.code,
-        )
-    except KeyError:
-        raise HTTPException(status_code=404, detail="credit code not found or already redeemed")
+    raise HTTPException(status_code=410, detail="point billing is disabled")
 
 
 @app.post("/api/client/jobs/estimate")
@@ -900,20 +947,16 @@ def estimate_client_job(
 ) -> dict[str, Any]:
     if req.duration_seconds > settings.max_render_duration_seconds:
         raise HTTPException(status_code=400, detail="single cloud job is limited to 10 minutes")
-    try:
-        points = estimate_render_points(
-            duration_seconds=req.duration_seconds,
-            resolution=req.resolution,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    if req.resolution != "1080p":
+        raise HTTPException(status_code=400, detail="MVP only supports 1080p cloud render jobs")
     wallet = store.get_wallet(user_id=session["user"]["user_id"])
     return {
         "duration_seconds": req.duration_seconds,
         "resolution": req.resolution,
-        "estimated_points": points,
+        "estimated_points": 0,
         "wallet": wallet,
-        "enough_credits": wallet["available_points"] >= points,
+        "usage_access": session["usage_access"],
+        "enough_credits": True,
     }
 
 

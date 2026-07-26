@@ -17,7 +17,7 @@ class Settings:
     deepseek_api_key: str | None = os.getenv("DEEPSEEK_API_KEY")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
-    deepseek_timeout_seconds: int = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "120"))
+    deepseek_timeout_seconds: int = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "240"))
     asr_provider: str = os.getenv("ASR_PROVIDER", "placeholder")
     whisper_model: str = os.getenv("WHISPER_MODEL", "small")
     voice_provider: str = os.getenv("VOICE_PROVIDER", "placeholder")

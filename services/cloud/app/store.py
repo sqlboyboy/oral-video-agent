@@ -229,6 +229,8 @@ class QueueStore:
                     "license_status": "TEXT NOT NULL DEFAULT 'inactive'",
                     "license_key": "TEXT",
                     "license_activated_at": "TEXT",
+                    "usage_expires_at": "TEXT",
+                    "usage_unlimited": "INTEGER NOT NULL DEFAULT 0",
                 },
             )
             db.execute(
@@ -445,6 +447,72 @@ class QueueStore:
                 )
                 """
             )
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    migration_key TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
+            self._migrate_to_duration_billing(db)
+
+    def _migrate_to_duration_billing(self, db: Any) -> None:
+        migration_key = "2026-07-25-duration-billing-v1"
+        applied = db.execute(
+            "SELECT migration_key FROM schema_migrations WHERE migration_key = ?",
+            (migration_key,),
+        ).fetchone()
+        if applied is not None:
+            return
+        now = utc_now()
+        db.execute(
+            """
+            UPDATE credit_wallets
+            SET bonus_balance = 0,
+                paid_balance = 0,
+                frozen_bonus = 0,
+                frozen_paid = 0,
+                updated_at = ?
+            """,
+            (now,),
+        )
+        db.execute(
+            """
+            UPDATE credit_holds
+            SET status = 'released',
+                bonus_points = 0,
+                paid_points = 0,
+                total_points = 0,
+                updated_at = ?,
+                released_at = ?,
+                reason = 'duration_billing_migration'
+            WHERE status = 'active'
+            """,
+            (now, now),
+        )
+        db.execute(
+            """
+            UPDATE users
+            SET usage_expires_at = NULL,
+                usage_unlimited = 0,
+                updated_at = ?
+            """,
+            (now,),
+        )
+        db.execute(
+            "UPDATE license_keys SET grant_points = 0 WHERE grant_points != 0"
+        )
+        db.execute(
+            "UPDATE credit_codes SET status = 'retired' WHERE status = 'active'"
+        )
+        db.execute(
+            """
+            INSERT INTO schema_migrations (migration_key, applied_at)
+            VALUES (?, ?)
+            """,
+            (migration_key, now),
+        )
 
     def _ensure_columns(
         self,
@@ -479,7 +547,7 @@ class QueueStore:
         *,
         license_key: str | None = None,
         max_activations: int = 1,
-        grant_points: int = 3000,
+        grant_points: int = 0,
         expires_at: str | None = None,
     ) -> dict[str, Any]:
         key = (license_key or secrets.token_urlsafe(12)).strip()
@@ -494,7 +562,7 @@ class QueueStore:
                 )
                 VALUES (?, 'active', ?, ?, ?, ?)
                 """,
-                (key, max_activations, grant_points, now, expires_at),
+                (key, max_activations, 0, now, expires_at),
             )
             row = db.execute(
                 "SELECT * FROM license_keys WHERE license_key = ?",
@@ -1447,11 +1515,8 @@ class QueueStore:
     ) -> dict[str, Any]:
         if duration_seconds <= 0 or duration_seconds > max_duration_seconds:
             raise ValueError("duration_seconds exceeds MVP limit")
-        points = estimate_render_points(
-            duration_seconds=duration_seconds,
-            resolution=resolution,
-        )
-        hold_id = str(uuid4())
+        if resolution != "1080p":
+            raise ValueError("MVP only supports 1080p cloud render jobs")
         now = utc_now()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -1489,65 +1554,12 @@ class QueueStore:
                     (user_id, job_id),
                 ).fetchall()
             ]
-            wallet = self._wallet_for_user(db, user_id)
-            daily_bonus_available = max(
-                0,
-                daily_bonus_limit - self._bonus_reserved_today(db, user_id=user_id),
-            )
-            bonus_points = min(int(wallet["bonus_balance"]), daily_bonus_available, points)
-            paid_points = points - bonus_points
-            if int(wallet["paid_balance"]) < paid_points:
-                raise ValueError("insufficient credits")
-            db.execute(
-                """
-                UPDATE credit_wallets
-                SET bonus_balance = bonus_balance - ?,
-                    paid_balance = paid_balance - ?,
-                    frozen_bonus = frozen_bonus + ?,
-                    frozen_paid = frozen_paid + ?,
-                    updated_at = ?
-                WHERE user_id = ?
-                """,
-                (bonus_points, paid_points, bonus_points, paid_points, now, user_id),
-            )
-            db.execute(
-                """
-                INSERT INTO credit_holds (
-                    hold_id, user_id, job_id, status, bonus_points, paid_points,
-                    total_points, created_at, updated_at, reason
-                )
-                VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, 'render_job_hold')
-                """,
-                (hold_id, user_id, job_id, bonus_points, paid_points, points, now, now),
-            )
-            if bonus_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="hold",
-                    points=-bonus_points,
-                    source="bonus",
-                    job_id=job_id,
-                    hold_id=hold_id,
-                    note="render job hold",
-                )
-            if paid_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="hold",
-                    points=-paid_points,
-                    source="paid",
-                    job_id=job_id,
-                    hold_id=hold_id,
-                    note="render job hold",
-                )
             queued_payload = dict(payload)
             queued_payload.update(
                 {
                     "duration_seconds": duration_seconds,
                     "resolution": resolution,
-                    "estimated_points": points,
+                    "estimated_points": 0,
                     "input_assets": assets,
                 }
             )
@@ -1566,10 +1578,10 @@ class QueueStore:
                 WHERE job_id = ? AND user_id = ? AND status = 'uploading'
                 """,
                 (
-                    hold_id,
+                    None,
                     priority,
                     json.dumps(queued_payload, ensure_ascii=False),
-                    points,
+                    0,
                     duration_seconds,
                     resolution,
                     now,
@@ -1581,7 +1593,7 @@ class QueueStore:
                 db,
                 job_id=job_id,
                 event_type="queued",
-                message=f"held {points} credits",
+                message="queued under active usage period",
             )
         return self.get_job_with_assets(job_id)
 
@@ -1813,6 +1825,7 @@ class QueueStore:
             for row in rows:
                 item = dict(row)
                 item.pop("password_hash", None)
+                item["usage_access"] = self._usage_access_from_user(item)
                 item["wallet"] = self._wallet_for_user(db, row["user_id"])
                 items.append(item)
         return items
@@ -1823,8 +1836,6 @@ class QueueStore:
         email: str,
         initial_points: int = 0,
     ) -> dict[str, Any]:
-        if initial_points < 0:
-            raise ValueError("initial_points must not be negative")
         address = normalize_email(email)
         now = utc_now()
         user_id = str(uuid4())
@@ -1849,9 +1860,9 @@ class QueueStore:
                 INSERT INTO credit_wallets (
                     user_id, bonus_balance, paid_balance, frozen_bonus, frozen_paid, updated_at
                 )
-                VALUES (?, 0, ?, 0, 0, ?)
+                VALUES (?, 0, 0, 0, 0, ?)
                 """,
-                (user_id, initial_points, now),
+                (user_id, now),
             )
             db.execute(
                 """
@@ -1863,15 +1874,6 @@ class QueueStore:
                 """,
                 (license_key, user_id, now),
             )
-            if initial_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="admin_credit",
-                    points=initial_points,
-                    source="paid",
-                    note="initial admin credit",
-                )
         detail = self.get_user_detail(user_id=user_id)
         detail["activation_code"] = license_key
         return detail
@@ -1892,6 +1894,21 @@ class QueueStore:
                        COALESCE(SUM(frozen_bonus + frozen_paid), 0) AS frozen
                 FROM credit_wallets
                 """
+            ).fetchone()
+            usage_counts = db.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN usage_unlimited = 1 THEN 1 ELSE 0 END) AS unlimited,
+                    SUM(CASE WHEN usage_unlimited = 0
+                                   AND usage_expires_at IS NOT NULL
+                                   AND usage_expires_at > ?
+                             THEN 1 ELSE 0 END) AS active,
+                    SUM(CASE WHEN usage_unlimited = 0
+                                   AND (usage_expires_at IS NULL OR usage_expires_at <= ?)
+                             THEN 1 ELSE 0 END) AS expired
+                FROM users
+                """,
+                (utc_now(), utc_now()),
             ).fetchone()
             license_counts = db.execute(
                 """
@@ -1915,9 +1932,14 @@ class QueueStore:
                 "active": int(user_counts["active"] or 0),
             },
             "wallets": {
-                "bonus_points": int(wallet_totals["bonus"] or 0),
-                "paid_points": int(wallet_totals["paid"] or 0),
-                "frozen_points": int(wallet_totals["frozen"] or 0),
+                "bonus_points": 0,
+                "paid_points": 0,
+                "frozen_points": 0,
+            },
+            "usage": {
+                "active": int(usage_counts["active"] or 0),
+                "unlimited": int(usage_counts["unlimited"] or 0),
+                "expired": int(usage_counts["expired"] or 0),
             },
             "licenses": {
                 "total": int(license_counts["total"] or 0),
@@ -2017,78 +2039,75 @@ class QueueStore:
             return [dict(row) for row in rows]
 
     def add_user_credits(self, *, user_id: str, points: int, note: str = "") -> dict[str, Any]:
-        if points <= 0:
-            raise ValueError("points must be positive")
-        now = utc_now()
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            self._user_for_id(db, user_id)
-            db.execute(
-                """
-                UPDATE credit_wallets
-                SET paid_balance = paid_balance + ?,
-                    updated_at = ?
-                WHERE user_id = ?
-                """,
-                (points, now, user_id),
-            )
-            self._insert_ledger(
-                db,
-                user_id=user_id,
-                event_type="admin_credit",
-                points=points,
-                source="paid",
-                note=note or "manual admin credit",
-            )
-            return {
-                "user": self._user_for_id(db, user_id),
-                "wallet": self._wallet_for_user(db, user_id),
-            }
+        raise ValueError("point billing is disabled; grant usage duration instead")
 
     def deduct_user_credits(self, *, user_id: str, points: int, note: str = "") -> dict[str, Any]:
-        if points <= 0:
-            raise ValueError("points must be positive")
-        now = utc_now()
+        raise ValueError("point billing is disabled; grant usage duration instead")
+
+    def update_user_usage(
+        self,
+        *,
+        user_id: str,
+        preset: str,
+        expires_at: str | None = None,
+        duration_minutes: int | None = None,
+    ) -> dict[str, Any]:
+        normalized = preset.strip().lower()
+        if normalized not in {
+            "1d",
+            "7d",
+            "custom",
+            "expires_at",
+            "unlimited",
+            "reset",
+        }:
+            raise ValueError(
+                "preset must be one of: 1d, 7d, custom, expires_at, unlimited, reset"
+            )
+        specified_expiry = parse_time(expires_at)
+        if normalized == "expires_at" and specified_expiry is None:
+            raise ValueError("expires_at is required")
+        if normalized == "custom" and (
+            duration_minutes is None or duration_minutes <= 0
+        ):
+            raise ValueError("duration_minutes must be greater than zero")
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            self._user_for_id(db, user_id)
-            wallet = self._wallet_for_user(db, user_id)
-            if int(wallet["available_points"]) < points:
-                raise ValueError("insufficient available points")
-            paid_points = min(points, int(wallet["paid_balance"]))
-            bonus_points = points - paid_points
+            user = self._user_for_id(db, user_id)
+            if normalized == "unlimited":
+                usage_expires_at = None
+                usage_unlimited = 1
+            elif normalized == "reset":
+                usage_expires_at = None
+                usage_unlimited = 0
+            elif normalized == "expires_at":
+                usage_expires_at = specified_expiry.isoformat()
+                usage_unlimited = 0
+            elif int(user.get("usage_unlimited") or 0) == 1:
+                usage_expires_at = user.get("usage_expires_at")
+                usage_unlimited = 1
+            else:
+                current_expiry = parse_time(user.get("usage_expires_at"))
+                base = current_expiry if current_expiry and current_expiry > now_dt else now_dt
+                if normalized == "custom":
+                    duration = timedelta(minutes=duration_minutes)
+                else:
+                    duration = timedelta(days=1 if normalized == "1d" else 7)
+                usage_expires_at = (base + duration).isoformat()
+                usage_unlimited = 0
             db.execute(
                 """
-                UPDATE credit_wallets
-                SET paid_balance = paid_balance - ?,
-                    bonus_balance = bonus_balance - ?,
+                UPDATE users
+                SET usage_expires_at = ?,
+                    usage_unlimited = ?,
                     updated_at = ?
                 WHERE user_id = ?
                 """,
-                (paid_points, bonus_points, now, user_id),
+                (usage_expires_at, usage_unlimited, now, user_id),
             )
-            if paid_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="admin_debit",
-                    points=-paid_points,
-                    source="paid",
-                    note=note or "manual admin debit",
-                )
-            if bonus_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="admin_debit",
-                    points=-bonus_points,
-                    source="bonus",
-                    note=note or "manual admin debit",
-                )
-            return {
-                "user": self._user_for_id(db, user_id),
-                "wallet": self._wallet_for_user(db, user_id),
-            }
+        return self.get_user_detail(user_id=user_id)
 
     def update_user(
         self,
@@ -2125,6 +2144,90 @@ class QueueStore:
             if cursor.rowcount == 0:
                 raise KeyError(user_id)
         return self.get_user_detail(user_id=user_id)
+
+    def delete_user(self, *, user_id: str) -> dict[str, Any]:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            user = self._user_for_id(db, user_id)
+            active_jobs = db.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM render_jobs
+                WHERE user_id = ?
+                  AND status IN ('uploading', 'queued', 'running')
+                """,
+                (user_id,),
+            ).fetchone()["count"]
+            if int(active_jobs):
+                raise RuntimeError("user has active cloud jobs")
+            cos_keys = [
+                str(row["cos_key"])
+                for row in db.execute(
+                    """
+                    SELECT cos_key
+                    FROM job_assets
+                    WHERE user_id = ? AND cos_key != ''
+                    """,
+                    (user_id,),
+                ).fetchall()
+            ]
+            counts = {
+                "jobs": int(
+                    db.execute(
+                        "SELECT COUNT(*) AS count FROM render_jobs WHERE user_id = ?",
+                        (user_id,),
+                    ).fetchone()["count"]
+                ),
+                "devices": int(
+                    db.execute(
+                        "SELECT COUNT(*) AS count FROM devices WHERE user_id = ?",
+                        (user_id,),
+                    ).fetchone()["count"]
+                ),
+                "assets": len(cos_keys),
+            }
+            db.execute(
+                """
+                DELETE FROM job_events
+                WHERE job_id IN (
+                    SELECT job_id FROM render_jobs WHERE user_id = ?
+                )
+                """,
+                (user_id,),
+            )
+            db.execute("DELETE FROM job_assets WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM render_jobs WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM credit_holds WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM credit_ledger WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM credit_wallets WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM devices WHERE user_id = ?", (user_id,))
+            db.execute("DELETE FROM license_activations WHERE user_id = ?", (user_id,))
+            db.execute(
+                """
+                UPDATE credit_codes
+                SET redeemed_by_user_id = NULL,
+                    redeemed_at = NULL
+                WHERE redeemed_by_user_id = ?
+                """,
+                (user_id,),
+            )
+            db.execute(
+                "DELETE FROM license_keys WHERE assigned_user_id = ?",
+                (user_id,),
+            )
+            email = str(user.get("email") or "").strip()
+            if email:
+                db.execute("DELETE FROM email_login_codes WHERE email = ?", (email,))
+            cursor = db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            if cursor.rowcount == 0:
+                raise KeyError(user_id)
+        return {
+            "deleted": True,
+            "user_id": user_id,
+            "email": user.get("email"),
+            "cos_keys": cos_keys,
+            **counts,
+        }
 
     def reset_user_devices(self, *, user_id: str) -> dict[str, Any]:
         now = utc_now()
@@ -2277,12 +2380,9 @@ class QueueStore:
     ) -> dict[str, Any]:
         if duration_seconds <= 0 or duration_seconds > max_duration_seconds:
             raise ValueError("duration_seconds exceeds MVP limit")
-        points = estimate_render_points(
-            duration_seconds=duration_seconds,
-            resolution=resolution,
-        )
+        if resolution != "1080p":
+            raise ValueError("MVP only supports 1080p cloud render jobs")
         job_id = str(uuid4())
-        hold_id = str(uuid4())
         now = utc_now()
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -2296,65 +2396,12 @@ class QueueStore:
             if queued >= 1:
                 raise RuntimeError("queued job limit reached")
 
-            wallet = self._wallet_for_user(db, user_id)
-            daily_bonus_available = max(
-                0,
-                daily_bonus_limit - self._bonus_reserved_today(db, user_id=user_id),
-            )
-            bonus_points = min(int(wallet["bonus_balance"]), daily_bonus_available, points)
-            paid_points = points - bonus_points
-            if int(wallet["paid_balance"]) < paid_points:
-                raise ValueError("insufficient credits")
-            db.execute(
-                """
-                UPDATE credit_wallets
-                SET bonus_balance = bonus_balance - ?,
-                    paid_balance = paid_balance - ?,
-                    frozen_bonus = frozen_bonus + ?,
-                    frozen_paid = frozen_paid + ?,
-                    updated_at = ?
-                WHERE user_id = ?
-                """,
-                (bonus_points, paid_points, bonus_points, paid_points, now, user_id),
-            )
-            db.execute(
-                """
-                INSERT INTO credit_holds (
-                    hold_id, user_id, job_id, status, bonus_points, paid_points,
-                    total_points, created_at, updated_at, reason
-                )
-                VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, 'render_job_hold')
-                """,
-                (hold_id, user_id, job_id, bonus_points, paid_points, points, now, now),
-            )
-            if bonus_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="hold",
-                    points=-bonus_points,
-                    source="bonus",
-                    job_id=job_id,
-                    hold_id=hold_id,
-                    note="render job hold",
-                )
-            if paid_points:
-                self._insert_ledger(
-                    db,
-                    user_id=user_id,
-                    event_type="hold",
-                    points=-paid_points,
-                    source="paid",
-                    job_id=job_id,
-                    hold_id=hold_id,
-                    note="render job hold",
-                )
             queued_payload = dict(payload)
             queued_payload.update(
                 {
                     "duration_seconds": duration_seconds,
                     "resolution": resolution,
-                    "estimated_points": points,
+                    "estimated_points": 0,
                 }
             )
             db.execute(
@@ -2369,11 +2416,11 @@ class QueueStore:
                 (
                     job_id,
                     user_id,
-                    hold_id,
+                    None,
                     priority,
                     job_type,
                     json.dumps(queued_payload, ensure_ascii=False),
-                    points,
+                    0,
                     duration_seconds,
                     resolution,
                     now,
@@ -2384,7 +2431,7 @@ class QueueStore:
                 db,
                 job_id=job_id,
                 event_type="queued",
-                message=f"held {points} credits",
+                message="queued under active usage period",
             )
         return self.get_job_with_assets(job_id)
 
@@ -2458,6 +2505,125 @@ class QueueStore:
             else:
                 raise RuntimeError("job cannot be canceled")
         return self.get_job_with_assets(job_id)
+
+    def _purge_job_rows(
+        self,
+        db: Any,
+        *,
+        rows: list[Any],
+        hold_reason: str,
+    ) -> dict[str, Any]:
+        if not rows:
+            return {"jobs": 0, "assets": 0, "job_ids": [], "cos_keys": []}
+        job_ids = [str(row["job_id"]) for row in rows]
+        placeholders = ",".join("?" for _ in job_ids)
+        asset_rows = db.execute(
+            f"""
+            SELECT cos_key, deleted_at
+            FROM job_assets
+            WHERE job_id IN ({placeholders})
+            """,
+            tuple(job_ids),
+        ).fetchall()
+        cos_keys = [
+            str(row["cos_key"])
+            for row in asset_rows
+            if row["cos_key"] and row["deleted_at"] is None
+        ]
+        for row in rows:
+            self._release_hold(
+                db,
+                hold_id=row["hold_id"],
+                reason=hold_reason,
+            )
+        db.execute(
+            f"DELETE FROM job_events WHERE job_id IN ({placeholders})",
+            tuple(job_ids),
+        )
+        db.execute(
+            f"DELETE FROM job_assets WHERE job_id IN ({placeholders})",
+            tuple(job_ids),
+        )
+        db.execute(
+            f"DELETE FROM credit_ledger WHERE job_id IN ({placeholders})",
+            tuple(job_ids),
+        )
+        db.execute(
+            f"DELETE FROM credit_holds WHERE job_id IN ({placeholders})",
+            tuple(job_ids),
+        )
+        db.execute(
+            f"DELETE FROM render_jobs WHERE job_id IN ({placeholders})",
+            tuple(job_ids),
+        )
+        return {
+            "jobs": len(job_ids),
+            "assets": len(asset_rows),
+            "job_ids": job_ids,
+            "cos_keys": list(dict.fromkeys(cos_keys)),
+        }
+
+    def purge_stale_uploading_jobs(
+        self,
+        *,
+        timeout_seconds: int,
+        user_id: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=max(1, timeout_seconds))
+        ).isoformat()
+        conditions = ["status = 'uploading'", "updated_at < ?"]
+        params: list[Any] = [cutoff]
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
+        params.append(max(1, min(limit, 500)))
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                f"""
+                SELECT * FROM render_jobs
+                WHERE {' AND '.join(conditions)}
+                ORDER BY updated_at ASC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+            return self._purge_job_rows(
+                db,
+                rows=list(rows),
+                hold_reason="stale_upload_cleanup",
+            )
+
+    def purge_expired_invalid_jobs(
+        self,
+        *,
+        retention_seconds: int,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=max(1, retention_seconds))
+        ).isoformat()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute(
+                """
+                SELECT * FROM render_jobs
+                WHERE status IN ('failed', 'canceled', 'timed_out')
+                  AND updated_at < ?
+                ORDER BY updated_at ASC
+                LIMIT ?
+                """,
+                (cutoff, max(1, min(limit, 500))),
+            ).fetchall()
+            return self._purge_job_rows(
+                db,
+                rows=list(rows),
+                hold_reason="invalid_job_retention_cleanup",
+            )
 
     def fail_stale_running_jobs(
         self,
@@ -2553,7 +2719,47 @@ class QueueStore:
             raise KeyError(user_id)
         item = dict(row)
         item.pop("password_hash", None)
+        item["usage_access"] = self._usage_access_from_user(item)
         return item
+
+    @staticmethod
+    def _usage_access_from_user(user: dict[str, Any]) -> dict[str, Any]:
+        unlimited = int(user.get("usage_unlimited") or 0) == 1
+        expires_at = parse_time(user.get("usage_expires_at"))
+        now = datetime.now(timezone.utc)
+        remaining_seconds = 0
+        if expires_at and expires_at > now:
+            remaining_seconds = max(0, int((expires_at - now).total_seconds()))
+        remaining_minutes_total = (
+            math.ceil(remaining_seconds / 60) if remaining_seconds > 0 else 0
+        )
+        remaining_days, remainder = divmod(remaining_minutes_total, 24 * 60)
+        remaining_hours, remaining_minutes = divmod(remainder, 60)
+        account_active = user.get("status") == "active"
+        has_access = account_active and (unlimited or remaining_seconds > 0)
+        status = "unlimited" if unlimited else ("active" if remaining_seconds > 0 else "expired")
+        if not account_active:
+            status = "disabled"
+        return {
+            "has_access": has_access,
+            "status": status,
+            "unlimited": unlimited,
+            "expires_at": user.get("usage_expires_at"),
+            "remaining_seconds": remaining_seconds,
+            "remaining_days": remaining_days,
+            "remaining_hours": remaining_hours,
+            "remaining_minutes": remaining_minutes,
+        }
+
+    def get_usage_access(self, *, user_id: str) -> dict[str, Any]:
+        with self.connect() as db:
+            return self._user_for_id(db, user_id)["usage_access"]
+
+    def require_usage_access(self, *, user_id: str) -> dict[str, Any]:
+        access = self.get_usage_access(user_id=user_id)
+        if not access["has_access"]:
+            raise PermissionError("usage period expired")
+        return access
 
     def _device_for_id(self, db: sqlite3.Connection, device_id: str) -> dict[str, Any]:
         row = db.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,)).fetchone()

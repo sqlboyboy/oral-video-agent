@@ -15,6 +15,7 @@ FALLBACK_OUTPUT_HEIGHT = 1920
 PIP_MEDIA_ASPECT_RATIO = 16 / 9
 PIP_MARGIN_X = 24
 PIP_MARGIN_Y = 24
+LOUDNESS_NORMALIZATION_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 
 
 def _ffmpeg_preset() -> str:
@@ -300,19 +301,61 @@ def _subtitle_alignment(position: str) -> int:
 
 def _subtitle_force_style(options: RenderOptions) -> str:
     style = options.subtitle_style
-    return ",".join(
-        [
-            f"FontName={style.font_family}",
-            f"FontSize={style.font_size}",
-            "Bold=1",
-            "BorderStyle=1",
-            f"Outline={style.outline_width}",
-            "Shadow=0",
-            f"PrimaryColour={_ass_color(style.color, '#FFE600')}",
-            f"OutlineColour={_ass_color(style.outline_color, '#000000')}",
-            f"Alignment={_subtitle_alignment(style.position)}",
-            f"MarginV={style.margin_v}",
-        ]
+    # libass parses SRT files on its 384 x 288 logical canvas and then scales
+    # that canvas to the output video. Product presets are authored against a
+    # 1080 x 1920 portrait canvas, so vertical sizes must be converted first.
+    scale = 288 / 1920
+    font_size = max(1.0, style.font_size * scale)
+    outline_width = max(0.0, style.outline_width * scale)
+    margin_v = max(0, int(style.margin_v * scale + 0.5))
+    alignment = _subtitle_alignment(style.position)
+    margin_l: int | None = None
+    margin_r: int | None = None
+    if (style.position or "").strip().lower() == "custom":
+        design_width = 1080
+        logical_width = 384
+        box_width = max(
+            360.0,
+            min(
+                980.0,
+                style.max_chars_per_line * style.font_size * 0.92 + 80,
+            ),
+        )
+        center_x = max(0.0, min(1.0, style.position_x)) * design_width
+        left = max(0.0, min(design_width - box_width, center_x - box_width / 2))
+        right = design_width - left - box_width
+        margin_l = max(0, int(left * logical_width / design_width + 0.5))
+        margin_r = max(0, int(right * logical_width / design_width + 0.5))
+        margin_v = max(0, int(max(0.0, min(1.0, style.position_y)) * 288 + 0.5))
+        alignment = 8
+
+    def ass_number(value: float) -> str:
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+
+    parts = [
+        f"FontName={style.font_family}",
+        f"FontSize={ass_number(font_size)}",
+        "Bold=1",
+        "BorderStyle=1",
+        f"Outline={ass_number(outline_width)}",
+        "Shadow=0",
+        f"PrimaryColour={_ass_color(style.color, '#FFE600')}",
+        f"OutlineColour={_ass_color(style.outline_color, '#000000')}",
+        f"Alignment={alignment}",
+        f"MarginV={margin_v}",
+    ]
+    if margin_l is not None and margin_r is not None:
+        parts.extend([f"MarginL={margin_l}", f"MarginR={margin_r}"])
+    return ",".join(parts)
+
+
+def _subtitle_filter(subtitle_file: Path, options: RenderOptions) -> str:
+    subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
+    if subtitle_file.suffix.lower() == ".ass":
+        return f"subtitles='{subtitle_path}'"
+    return (
+        f"subtitles='{subtitle_path}':"
+        f"force_style='{_subtitle_force_style(options)}'"
     )
 
 
@@ -485,6 +528,83 @@ def prepare_video_for_audio_duration(
 
 
 class Renderer:
+    def build_cover_first_frame_command(
+        self,
+        source_video: Path,
+        cover_image: Path,
+        output_path: Path,
+    ) -> List[str]:
+        ffmpeg = _ffmpeg_executable()
+        if ffmpeg is None:
+            raise ValueError("ffmpeg is required to apply the video cover")
+
+        canvas_width, canvas_height = _canvas_dimensions(source_video)
+        filter_complex = (
+            "[0:v]setpts=PTS-STARTPTS[basev];"
+            f"[1:v]scale={canvas_width}:{canvas_height}:force_original_aspect_ratio=increase,"
+            f"crop={canvas_width}:{canvas_height},setsar=1[coverv];"
+            "[basev][coverv]overlay=0:0:enable='eq(n\\,0)':eof_action=pass[vout]"
+        )
+        return [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(source_video),
+            "-loop",
+            "1",
+            "-i",
+            str(cover_image),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[vout]",
+            "-map",
+            "0:a?",
+            "-map_metadata",
+            "0",
+            "-c:v",
+            "libx264",
+            "-preset",
+            _ffmpeg_preset(),
+            "-crf",
+            _ffmpeg_crf(),
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+
+    def apply_cover_first_frame(
+        self,
+        source_video: Path,
+        cover_image: Path,
+        output_path: Path,
+        *,
+        cancel_event: threading.Event | None = None,
+    ) -> Path:
+        command = self.build_cover_first_frame_command(
+            source_video,
+            cover_image,
+            output_path,
+        )
+        process = subprocess.Popen(command)
+        while process.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                process.terminate()
+                time.sleep(0.5)
+                if process.poll() is None:
+                    process.kill()
+                output_path.unlink(missing_ok=True)
+                raise RuntimeError("用户已停止生成")
+            time.sleep(0.2)
+        if process.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            raise subprocess.CalledProcessError(process.returncode, command)
+        return output_path
+
     def build_ffmpeg_command(
         self,
         source_video: Optional[Path],
@@ -507,9 +627,12 @@ class Renderer:
         audio_inputs = "[aout]"
         pip_input_index = 2
 
-        voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={options.voice_volume}"
+        # The API prepares voice/BGM inputs at the same -16 LUFS baseline used
+        # by preview playback. Keep the render graph linear so each slider is
+        # applied exactly once and silence never reaches loudnorm inside amix.
+        voice_filter = f"volume={options.voice_volume}"
         bgm_filter = (
-            f"dynaudnorm=f=150:g=15:p=0.9,volume={options.bgm_volume},"
+            f"volume={options.bgm_volume},"
             "aloop=loop=-1:size=2147483647"
         )
         if bgm_audio is not None:
@@ -551,9 +674,9 @@ class Renderer:
             video_input = "[basev]"
 
         if has_subtitle_filter:
-            subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
-            force_style = _subtitle_force_style(options)
-            filter_parts.append(f"{video_input}subtitles='{subtitle_path}':force_style='{force_style}'[vout]")
+            filter_parts.append(
+                f"{video_input}{_subtitle_filter(subtitle_file, options)}[vout]"
+            )
             video_output = "[vout]"
         elif has_video_filter:
             filter_parts.append(f"{video_input}null[vout]")
@@ -601,6 +724,7 @@ class Renderer:
         output_path: Path,
         bgm_audio: Optional[Path] = None,
         pip_asset: Optional[Path] = None,
+        voice_audio: Optional[Path] = None,
     ) -> List[str]:
         ffmpeg = _ffmpeg_executable()
         if ffmpeg is None:
@@ -609,21 +733,29 @@ class Renderer:
         command = [ffmpeg, "-y", "-i", str(source_video)]
         filter_parts = []
         audio_inputs = "[aout]"
-        pip_input_index = 1
+        next_input_index = 1
+        voice_input_index = 0
+        if voice_audio is not None:
+            command.extend(["-i", str(voice_audio)])
+            voice_input_index = next_input_index
+            next_input_index += 1
 
-        voice_filter = f"dynaudnorm=f=150:g=15:p=0.9,volume={options.voice_volume}"
+        # Step 3 and the extracted fallback are normalized before this command.
+        # The step-5 slider therefore remains a single linear gain operation.
+        voice_filter = f"volume={options.voice_volume}"
         bgm_filter = (
-            f"dynaudnorm=f=150:g=15:p=0.9,volume={options.bgm_volume},"
+            f"volume={options.bgm_volume},"
             "aloop=loop=-1:size=2147483647"
         )
         if bgm_audio is not None:
             command.extend(["-i", str(bgm_audio)])
-            pip_input_index = 2
-            filter_parts.append(f"[0:a]{voice_filter}[voice]")
-            filter_parts.append(f"[1:a]{bgm_filter}[bgm]")
+            bgm_input_index = next_input_index
+            next_input_index += 1
+            filter_parts.append(f"[{voice_input_index}:a]{voice_filter}[voice]")
+            filter_parts.append(f"[{bgm_input_index}:a]{bgm_filter}[bgm]")
             filter_parts.append("[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[aout]")
         else:
-            filter_parts.append(f"[0:a]{voice_filter}[aout]")
+            filter_parts.append(f"[{voice_input_index}:a]{voice_filter}[aout]")
 
         has_pip_filter = options.pip_enabled and pip_asset is not None
         has_subtitle_filter = options.subtitle_enabled and subtitle_file is not None
@@ -634,6 +766,7 @@ class Renderer:
             video_input = "[mainv]"
             filter_parts.append(_portrait_main_video_filter(canvas_width, canvas_height))
         if has_pip_filter:
+            pip_input_index = next_input_index
             if pip_asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                 command.extend(["-loop", "1", "-i", str(pip_asset)])
             else:
@@ -655,9 +788,9 @@ class Renderer:
             video_input = "[basev]"
 
         if has_subtitle_filter:
-            subtitle_path = str(subtitle_file).replace("\\", "/").replace(":", "\\:")
-            force_style = _subtitle_force_style(options)
-            filter_parts.append(f"{video_input}subtitles='{subtitle_path}':force_style='{force_style}'[vout]")
+            filter_parts.append(
+                f"{video_input}{_subtitle_filter(subtitle_file, options)}[vout]"
+            )
             video_output = "[vout]"
         elif has_video_filter:
             filter_parts.append(f"{video_input}null[vout]")
@@ -705,6 +838,7 @@ class Renderer:
         output_path: Path,
         bgm_audio: Optional[Path] = None,
         pip_asset: Optional[Path] = None,
+        voice_audio: Optional[Path] = None,
     ) -> Path:
         command = self.build_postprocess_command(
             source_video,
@@ -713,6 +847,7 @@ class Renderer:
             output_path,
             bgm_audio,
             pip_asset,
+            voice_audio,
         )
         process = subprocess.Popen(command)
         process.wait()

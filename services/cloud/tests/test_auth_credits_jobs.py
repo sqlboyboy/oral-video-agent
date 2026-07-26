@@ -81,7 +81,7 @@ def test_web_admin_login_and_dashboard(monkeypatch, tmp_path):
     assert client.get("/api/admin/dashboard").status_code == 401
 
 
-def test_admin_creates_user_with_assigned_license_and_initial_points(monkeypatch, tmp_path):
+def test_admin_creates_user_with_zero_usage_and_zero_points(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     client.post(
         "/api/admin/session/login",
@@ -98,8 +98,13 @@ def test_admin_creates_user_with_assigned_license_and_initial_points(monkeypatch
     user_id = body["user"]["user_id"]
     activation_code = body["activation_code"]
     assert body["user"]["email"] == "new-user@example.com"
-    assert body["wallet"]["paid_balance"] == 250
-    assert body["ledger"][0]["event_type"] == "admin_credit"
+    assert body["wallet"]["paid_balance"] == 0
+    assert body["wallet"]["available_points"] == 0
+    assert body["ledger"] == []
+    assert body["user"]["usage_access"]["has_access"] is False
+    assert body["user"]["usage_access"]["remaining_days"] == 0
+    assert body["user"]["usage_access"]["remaining_hours"] == 0
+    assert body["user"]["usage_access"]["remaining_minutes"] == 0
 
     duplicate = client.post(
         "/api/admin/users",
@@ -124,10 +129,11 @@ def test_admin_creates_user_with_assigned_license_and_initial_points(monkeypatch
     assert activated.json()["user"]["user_id"] == user_id
     assert activated.json()["user"]["email"] == "new-user@example.com"
     assert activated.json()["user"]["license_status"] == "active"
-    assert activated.json()["wallet"]["available_points"] == 250
+    assert activated.json()["wallet"]["available_points"] == 0
+    assert activated.json()["user"]["usage_access"]["has_access"] is False
 
 
-def test_admin_deducts_available_points_and_records_ledger(monkeypatch, tmp_path):
+def test_admin_updates_user_usage_with_shortcuts_and_points_are_disabled(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     created = client.post(
         "/api/admin/users",
@@ -136,38 +142,339 @@ def test_admin_deducts_available_points_and_records_ledger(monkeypatch, tmp_path
     )
     user_id = created.json()["user"]["user_id"]
 
+    added_day = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "1d"},
+    )
+    assert added_day.status_code == 200
+    access = added_day.json()["user"]["usage_access"]
+    assert access["has_access"] is True
+    assert access["unlimited"] is False
+    assert access["remaining_days"] == 1
+
+    added_week = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "7d"},
+    )
+    assert added_week.status_code == 200
+    assert added_week.json()["user"]["usage_access"]["remaining_days"] == 8
+
+    previous_expiry = datetime.fromisoformat(
+        added_week.json()["user"]["usage_access"]["expires_at"]
+    )
+    custom_minutes = (2 * 24 * 60) + (3 * 60) + 4
+    custom = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "custom", "duration_minutes": custom_minutes},
+    )
+    assert custom.status_code == 200
+    custom_expiry = datetime.fromisoformat(
+        custom.json()["user"]["usage_access"]["expires_at"]
+    )
+    assert (custom_expiry - previous_expiry).total_seconds() == custom_minutes * 60
+
+    missing_custom_duration = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "custom"},
+    )
+    assert missing_custom_duration.status_code == 400
+
+    specified_expiry = datetime.now(timezone.utc) + timedelta(
+        days=12, hours=3, minutes=4
+    )
+    specified = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "expires_at", "expires_at": specified_expiry.isoformat()},
+    )
+    assert specified.status_code == 200
+    specified_access = specified.json()["user"]["usage_access"]
+    actual_expiry = datetime.fromisoformat(specified_access["expires_at"])
+    assert abs((actual_expiry - specified_expiry).total_seconds()) < 1
+
+    missing_expiry = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "expires_at"},
+    )
+    assert missing_expiry.status_code == 400
+
+    unlimited = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "unlimited"},
+    )
+    assert unlimited.status_code == 200
+    assert unlimited.json()["user"]["usage_access"]["unlimited"] is True
+
+    old_credit = client.post(
+        f"/api/admin/users/{user_id}/credits",
+        headers=_admin_headers(),
+        json={"points": 70},
+    )
+    assert old_credit.status_code == 410
+    old_debit = client.post(
+        f"/api/admin/users/{user_id}/debits",
+        headers=_admin_headers(),
+        json={"points": 10},
+    )
+    assert old_debit.status_code == 410
+
+
+def test_admin_deletes_user_after_active_cloud_jobs_are_cleared(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/admin/users",
+        headers=_admin_headers(),
+        json={"email": "delete-user@example.com"},
+    )
+    assert created.status_code == 200
+    user_id = created.json()["user"]["user_id"]
+    activation_code = created.json()["activation_code"]
+
+    activated = client.post(
+        "/api/client/activate",
+        json={
+            "license_key": activation_code,
+            "device_fingerprint": "delete-user-device",
+            "device_name": "Windows client",
+        },
+    )
+    assert activated.status_code == 200
+    device_token = activated.json()["device_token"]
+
+    granted = client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "unlimited"},
+    )
+    assert granted.status_code == 200
+    queued = client.post(
+        "/api/client/jobs",
+        headers=_device_headers(device_token),
+        json={"duration_seconds": 60, "resolution": "1080p"},
+    )
+    assert queued.status_code == 200
+
+    blocked = client.delete(
+        f"/api/admin/users/{user_id}",
+        headers=_admin_headers(),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "user has active cloud jobs"
+
+    canceled = client.post(
+        f"/api/client/jobs/{queued.json()['job_id']}/cancel",
+        headers=_device_headers(device_token),
+    )
+    assert canceled.status_code == 200
+
+    deleted = client.delete(
+        f"/api/admin/users/{user_id}",
+        headers=_admin_headers(),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert deleted.json()["user_id"] == user_id
+    assert deleted.json()["jobs"] == 1
+    assert deleted.json()["devices"] == 1
+
+    assert (
+        client.get(
+            f"/api/admin/users/{user_id}",
+            headers=_admin_headers(),
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/api/client/me",
+            headers=_device_headers(device_token),
+        ).status_code
+        == 401
+    )
+    licenses = client.get(
+        "/api/admin/license-keys",
+        headers=_admin_headers(),
+    ).json()["items"]
+    assert all(item["license_key"] != activation_code for item in licenses)
+
+
+def test_admin_delete_auto_cleans_stale_uploading_jobs(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/admin/users",
+        headers=_admin_headers(),
+        json={"email": "stale-upload-user@example.com"},
+    ).json()
+    user_id = created["user"]["user_id"]
+    activated = client.post(
+        "/api/client/activate",
+        json={
+            "license_key": created["activation_code"],
+            "device_fingerprint": "stale-upload-device",
+            "device_name": "Windows client",
+        },
+    )
+    device_token = activated.json()["device_token"]
+    client.post(
+        f"/api/admin/users/{user_id}/usage",
+        headers=_admin_headers(),
+        json={"preset": "unlimited"},
+    )
+    uploading = client.post(
+        "/api/client/jobs/upload-session",
+        headers=_device_headers(device_token),
+        json={
+            "assets": [
+                {
+                    "kind": "source_video",
+                    "file_name": "stale.mp4",
+                    "content_type": "video/mp4",
+                    "file_size_bytes": 1024,
+                }
+            ],
+            "payload": {"script": "stale upload"},
+        },
+    )
+    assert uploading.status_code == 200
+    assert uploading.json()["status"] == "uploading"
+
     import app.main as main_module
 
+    stale_time = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     with main_module.store.connect() as db:
         db.execute(
-            "UPDATE credit_wallets SET paid_balance = 50, bonus_balance = 30 WHERE user_id = ?",
-            (user_id,),
+            "UPDATE render_jobs SET updated_at = ? WHERE job_id = ?",
+            (stale_time, uploading.json()["job_id"]),
         )
 
-    deducted = client.post(
-        f"/api/admin/users/{user_id}/debits",
+    deleted = client.delete(
+        f"/api/admin/users/{user_id}",
         headers=_admin_headers(),
-        json={"points": 70, "note": "manual correction"},
     )
-    assert deducted.status_code == 200
-    assert deducted.json()["wallet"]["paid_balance"] == 0
-    assert deducted.json()["wallet"]["bonus_balance"] == 10
-    assert deducted.json()["wallet"]["available_points"] == 10
 
-    detail = client.get(f"/api/admin/users/{user_id}", headers=_admin_headers()).json()
-    debit_rows = [item for item in detail["ledger"] if item["event_type"] == "admin_debit"]
-    assert sum(item["points"] for item in debit_rows) == -70
-    assert {item["source"] for item in debit_rows} == {"paid", "bonus"}
+    assert deleted.status_code == 200
+    assert deleted.json()["stale_upload_jobs_cleaned"] == 1
+    assert (
+        client.get(
+            f"/api/admin/jobs/{uploading.json()['job_id']}",
+            headers=_admin_headers(),
+        ).status_code
+        == 404
+    )
 
-    insufficient = client.post(
-        f"/api/admin/users/{user_id}/debits",
+
+def test_expired_invalid_jobs_are_purged_after_retention(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    token = _activate(client)
+    uploading = client.post(
+        "/api/client/jobs",
+        headers=_device_headers(token),
+        json={"duration_seconds": 60, "resolution": "1080p"},
+    )
+    job_id = uploading.json()["job_id"]
+    canceled = client.post(
+        f"/api/client/jobs/{job_id}/cancel",
+        headers=_device_headers(token),
+    )
+    assert canceled.status_code == 200
+    assert canceled.json()["status"] == "canceled"
+
+    import app.main as main_module
+
+    stale_time = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    with main_module.store.connect() as db:
+        db.execute(
+            "UPDATE render_jobs SET updated_at = ? WHERE job_id = ?",
+            (stale_time, job_id),
+        )
+
+    purged = main_module.store.purge_expired_invalid_jobs(
+        retention_seconds=7 * 24 * 60 * 60,
+    )
+
+    assert purged["jobs"] == 1
+    assert purged["job_ids"] == [job_id]
+    assert (
+        client.get(
+            f"/api/admin/jobs/{job_id}",
+            headers=_admin_headers(),
+        ).status_code
+        == 404
+    )
+
+
+def test_duration_billing_migration_resets_existing_users(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    created = client.post(
+        "/api/admin/users",
         headers=_admin_headers(),
-        json={"points": 11},
+        json={"email": "legacy-points@example.com"},
+    ).json()
+    user_id = created["user"]["user_id"]
+
+    import app.main as main_module
+
+    now = datetime.now(timezone.utc).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    with main_module.store.connect() as db:
+        db.execute(
+            """
+            UPDATE credit_wallets
+            SET bonus_balance = 25, paid_balance = 75,
+                frozen_bonus = 5, frozen_paid = 10
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        db.execute(
+            """
+            UPDATE users
+            SET usage_expires_at = ?, usage_unlimited = 1
+            WHERE user_id = ?
+            """,
+            (future, user_id),
+        )
+        db.execute(
+            """
+            INSERT INTO credit_holds (
+                hold_id, user_id, status, bonus_points, paid_points,
+                total_points, created_at, updated_at, reason
+            )
+            VALUES ('legacy-hold', ?, 'active', 5, 10, 15, ?, ?, 'legacy')
+            """,
+            (user_id, now, now),
+        )
+        db.execute("UPDATE license_keys SET grant_points = 500")
+        db.execute(
+            "DELETE FROM schema_migrations WHERE migration_key = ?",
+            ("2026-07-25-duration-billing-v1",),
+        )
+
+    migrated = type(main_module.store)(
+        main_module.store.database_path,
+        database_url=main_module.store.database_url,
     )
-    assert insufficient.status_code == 400
-    assert client.get(f"/api/admin/users/{user_id}", headers=_admin_headers()).json()[
-        "wallet"
-    ]["available_points"] == 10
+    detail = migrated.get_user_detail(user_id=user_id)
+    assert detail["wallet"]["total_points"] == 0
+    assert detail["user"]["usage_access"]["has_access"] is False
+    assert detail["user"]["usage_access"]["remaining_days"] == 0
+    with migrated.connect() as db:
+        hold = db.execute(
+            "SELECT * FROM credit_holds WHERE hold_id = 'legacy-hold'"
+        ).fetchone()
+        license_row = db.execute(
+            "SELECT * FROM license_keys WHERE assigned_user_id = ?",
+            (user_id,),
+        ).fetchone()
+    assert hold["status"] == "released"
+    assert hold["total_points"] == 0
+    assert license_row["grant_points"] == 0
 
 
 def test_admin_displays_and_edits_license_expiration(monkeypatch, tmp_path):
@@ -288,12 +595,13 @@ def _activate(client: TestClient, license_key: str = "LIC-MVP") -> str:
     assert body["wallet"]["available_points"] == 0
     token, body = _bind_email(client, token)
     assert body["user"]["email"] == "client@example.com"
-    credited = client.post(
-        f"/api/admin/users/{body['user']['user_id']}/credits",
+    granted = client.post(
+        f"/api/admin/users/{body['user']['user_id']}/usage",
         headers=_admin_headers(),
-        json={"points": 3000, "note": "test credit"},
+        json={"preset": "unlimited"},
     )
-    assert credited.status_code == 200
+    assert granted.status_code == 200
+    assert granted.json()["user"]["usage_access"]["unlimited"] is True
     return token
 
 
@@ -316,8 +624,7 @@ def test_software_activation_required_before_email_account_and_cloud_job(monkeyp
         headers=_device_headers(token),
         json={"duration_seconds": 60, "resolution": "1080p"},
     )
-    assert estimated_without_account.status_code == 200
-    assert estimated_without_account.json()["enough_credits"] is False
+    assert estimated_without_account.status_code == 403
 
     ledger_without_account = client.get(
         "/api/client/credits/ledger",
@@ -332,15 +639,30 @@ def test_software_activation_required_before_email_account_and_cloud_job(monkeyp
     me = client.get("/api/client/me", headers=_device_headers(token))
     assert me.status_code == 200
     assert me.json()["wallet"]["available_points"] == 0
+    assert me.json()["user"]["usage_access"]["has_access"] is False
     assert me.json()["device"]["device_fingerprint"] == "windows-device-1"
 
+    expired_estimate = client.post(
+        "/api/client/jobs/estimate",
+        headers=_device_headers(token),
+        json={"duration_seconds": 60, "resolution": "1080p"},
+    )
+    assert expired_estimate.status_code == 403
+
+    granted = client.post(
+        f"/api/admin/users/{bound['user']['user_id']}/usage",
+        headers=_admin_headers(),
+        json={"preset": "1d"},
+    )
+    assert granted.status_code == 200
     estimated = client.post(
         "/api/client/jobs/estimate",
         headers=_device_headers(token),
         json={"duration_seconds": 60, "resolution": "1080p"},
     )
     assert estimated.status_code == 200
-    assert estimated.json()["enough_credits"] is False
+    assert estimated.json()["estimated_points"] == 0
+    assert estimated.json()["enough_credits"] is True
 
 
 def test_client_rewrite_runs_directly_without_queue(monkeypatch, tmp_path):
@@ -558,7 +880,7 @@ def test_account_device_limit_applies_even_when_license_allows_more(monkeypatch,
     assert "device limit" in blocked.json()["detail"]
 
 
-def test_admin_adds_paid_credits_and_lists_user_by_email(monkeypatch, tmp_path):
+def test_admin_grants_usage_and_lists_user_by_email(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token, _ = _activate_software(client, license_key="LIC-PAID", fingerprint="device-1")
     account_token, body = _bind_email(
@@ -566,25 +888,25 @@ def test_admin_adds_paid_credits_and_lists_user_by_email(monkeypatch, tmp_path):
     )
     user_id = body["user"]["user_id"]
 
-    credited = client.post(
-        f"/api/admin/users/{user_id}/credits",
+    granted = client.post(
+        f"/api/admin/users/{user_id}/usage",
         headers=_admin_headers(),
-        json={"points": 200, "note": "manual topup"},
+        json={"preset": "7d"},
     )
-    assert credited.status_code == 200
-    assert credited.json()["wallet"]["paid_balance"] == 200
+    assert granted.status_code == 200
+    assert granted.json()["user"]["usage_access"]["remaining_days"] == 7
 
     detail = client.get(f"/api/admin/users/{user_id}", headers=_admin_headers())
     assert detail.status_code == 200
-    assert detail.json()["ledger"][0]["event_type"] == "admin_credit"
+    assert detail.json()["wallet"]["available_points"] == 0
+    assert detail.json()["ledger"] == []
 
-    client_ledger = client.get(
-        "/api/client/credits/ledger",
+    client_usage = client.get(
+        "/api/client/usage",
         headers=_device_headers(account_token),
     )
-    assert client_ledger.status_code == 200
-    assert client_ledger.json()["wallet"]["available_points"] == 200
-    assert client_ledger.json()["items"][0]["event_type"] == "admin_credit"
+    assert client_usage.status_code == 200
+    assert client_usage.json()["usage_access"]["has_access"] is True
 
     listed = client.get(
         "/api/admin/users",
@@ -733,7 +1055,7 @@ def test_password_registration_login_and_reset(monkeypatch, tmp_path):
     assert new_password.status_code == 200, new_password.text
 
 
-def test_credit_code_redeem_adds_paid_balance(monkeypatch, tmp_path):
+def test_credit_codes_are_disabled(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -742,7 +1064,7 @@ def test_credit_code_redeem_adds_paid_balance(monkeypatch, tmp_path):
         headers=_admin_headers(),
         json={"code": "TOPUP-100", "points": 100},
     )
-    assert code.status_code == 200
+    assert code.status_code == 410
 
     redeemed = client.post(
         "/api/client/credits/redeem",
@@ -750,12 +1072,10 @@ def test_credit_code_redeem_adds_paid_balance(monkeypatch, tmp_path):
         json={"code": "TOPUP-100"},
     )
 
-    assert redeemed.status_code == 200
-    assert redeemed.json()["wallet"]["paid_balance"] == 3100
-    assert redeemed.json()["wallet"]["available_points"] == 3100
+    assert redeemed.status_code == 410
 
 
-def test_client_job_freezes_and_worker_completion_captures_credits(monkeypatch, tmp_path):
+def test_client_job_uses_active_period_without_points(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -765,7 +1085,7 @@ def test_client_job_freezes_and_worker_completion_captures_credits(monkeypatch, 
         json={"duration_seconds": 600, "resolution": "1080p"},
     )
     assert estimated.status_code == 200
-    assert estimated.json()["estimated_points"] == 30
+    assert estimated.json()["estimated_points"] == 0
 
     created = client.post(
         "/api/client/jobs",
@@ -774,11 +1094,12 @@ def test_client_job_freezes_and_worker_completion_captures_credits(monkeypatch, 
     )
     assert created.status_code == 200
     job_id = created.json()["job_id"]
-    assert created.json()["estimated_points"] == 30
+    assert created.json()["estimated_points"] == 0
+    assert created.json()["hold_id"] is None
 
     after_hold = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
-    assert after_hold["paid_balance"] == 2970
-    assert after_hold["frozen_paid"] == 30
+    assert after_hold["paid_balance"] == 0
+    assert after_hold["frozen_paid"] == 0
 
     claimed = client.post(
         "/api/worker/claim-job",
@@ -797,9 +1118,9 @@ def test_client_job_freezes_and_worker_completion_captures_credits(monkeypatch, 
     assert completed.json()["status"] == "completed"
 
     wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
-    assert wallet["paid_balance"] == 2970
+    assert wallet["paid_balance"] == 0
     assert wallet["frozen_paid"] == 0
-    assert wallet["total_points"] == 2970
+    assert wallet["total_points"] == 0
 
 
 def test_upload_session_submit_worker_urls_and_download_link(monkeypatch, tmp_path):
@@ -851,7 +1172,8 @@ def test_upload_session_submit_worker_urls_and_download_link(monkeypatch, tmp_pa
     )
     assert submitted.status_code == 200
     assert submitted.json()["status"] == "queued"
-    assert submitted.json()["estimated_points"] == 30
+    assert submitted.json()["estimated_points"] == 0
+    assert submitted.json()["hold_id"] is None
 
     claimed = client.post(
         "/api/worker/claim-job",
@@ -1048,7 +1370,7 @@ def test_worker_does_not_claim_second_running_job_for_same_user(monkeypatch, tmp
     assert next_claim.json()["job"]["job_id"] == second_job_id
 
 
-def test_failed_job_releases_all_frozen_credits(monkeypatch, tmp_path):
+def test_failed_job_keeps_zero_point_wallet(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -1072,11 +1394,11 @@ def test_failed_job_releases_all_frozen_credits(monkeypatch, tmp_path):
 
     assert failed.status_code == 200
     wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
-    assert wallet["paid_balance"] == 3000
+    assert wallet["paid_balance"] == 0
     assert wallet["frozen_points"] == 0
 
 
-def test_cancel_queued_refunds_and_cancel_running_captures_30_percent(monkeypatch, tmp_path):
+def test_cancel_jobs_does_not_change_zero_point_wallet(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -1092,7 +1414,7 @@ def test_cancel_queued_refunds_and_cancel_running_captures_30_percent(monkeypatc
     )
     assert canceled_queued.status_code == 200
     assert canceled_queued.json()["status"] == "canceled"
-    assert client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]["total_points"] == 3000
+    assert client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]["total_points"] == 0
 
     running = client.post(
         "/api/client/jobs",
@@ -1114,11 +1436,11 @@ def test_cancel_queued_refunds_and_cancel_running_captures_30_percent(monkeypatc
     assert canceled_running.status_code == 200
     assert canceled_running.json()["status"] == "canceled"
     wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
-    assert wallet["total_points"] == 2991
+    assert wallet["total_points"] == 0
     assert wallet["frozen_points"] == 0
 
 
-def test_admin_paid_credits_are_not_capped_by_bonus_daily_limit(monkeypatch, tmp_path):
+def test_unlimited_usage_is_not_capped_by_old_bonus_daily_limit(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -1151,7 +1473,7 @@ def test_admin_paid_credits_are_not_capped_by_bonus_daily_limit(monkeypatch, tmp
     assert allowed.status_code == 200
 
 
-def test_scheduler_timeout_releases_frozen_credits(monkeypatch, tmp_path):
+def test_scheduler_timeout_keeps_zero_point_wallet(monkeypatch, tmp_path):
     client = _client(monkeypatch, tmp_path)
     token = _activate(client)
 
@@ -1174,7 +1496,7 @@ def test_scheduler_timeout_releases_frozen_credits(monkeypatch, tmp_path):
     assert [job["job_id"] for job in failed_jobs] == [job_id]
     assert failed_jobs[0]["status"] == "failed"
     wallet = client.get("/api/client/me", headers=_device_headers(token)).json()["wallet"]
-    assert wallet["paid_balance"] == 3000
+    assert wallet["paid_balance"] == 0
     assert wallet["frozen_points"] == 0
 
 

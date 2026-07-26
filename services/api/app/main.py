@@ -1,11 +1,13 @@
 import json
 import math
 import re
+import shutil
 import struct
 import subprocess
 import threading
 import wave
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -16,10 +18,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from .asset_store import asset_store, ensure_voice_reference_wav, save_upload
-from .models import BgmTrack, CreateTaskRequest, DigitalHumanProfile, OralVideoTask, PostprocessVideoRequest, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, project_root, storage_dir
+from .models import BgmTrack, CreateScriptTaskRequest, CreateTaskRequest, CreatorScriptBatchResponse, CreatorScriptGenerateRequest, DigitalHumanProfile, OralVideoTask, PostprocessVideoRequest, PublishContentSuggestion, PublishRequest, RenderOptions, RewriteRequest, SubtitlePreviewRequest, TaskStatus, TaskSummary, UpdateTaskRequest, VoiceProfile, project_root, storage_dir
 from .mouth_quality import build_mouth_quality_report, collect_mouth_quality_signals
-from .pipeline.cover import extract_first_frame_cover_png, generate_cover_png
+from .pipeline.cover import (
+    COVER_TEMPLATES,
+    DEFAULT_COVER_TEMPLATE,
+    extract_first_frame_cover_png,
+    generate_cover_png,
+)
 from .pipeline.renderer import (
+    LOUDNESS_NORMALIZATION_FILTER,
     Renderer,
     _ffmpeg_executable,
     is_playable_mp4,
@@ -27,10 +35,17 @@ from .pipeline.renderer import (
     prepare_video_for_audio_duration,
 )
 from .progress import complete_progress, fail_progress, start_progress
-from .pipeline.subtitles import generate_srt, preview_subtitles, subtitle_time_range_for_text
+from .pipeline.subtitles import generate_ass, preview_subtitles, subtitle_time_range_for_text
+from .pipeline.subtitle_templates import SUBTITLE_TEMPLATES
 from .providers.asr import create_asr_provider
 from .providers.catalog import BUILT_IN_BGM, BUILT_IN_VOICES
+from .providers.creator_scripts import create_creator_script_provider, format_spoken_script
 from .providers.digital_human import create_digital_human_provider
+from .providers.douyin_creator import (
+    DouyinCreatorCollector,
+    DouyinCreatorFetchError,
+    DouyinCreatorInputError,
+)
 from .providers.rewrite import create_rewrite_provider
 from .providers.rewrite_styles import REWRITE_STYLE_PRESETS
 from .providers.tts import create_voice_provider
@@ -71,9 +86,11 @@ app.include_router(publisher_router)
 settings = get_settings()
 asr_provider = create_asr_provider(settings)
 rewrite_provider = create_rewrite_provider(settings)
+creator_script_provider = create_creator_script_provider(settings)
 voice_provider = create_voice_provider(settings)
 digital_human_provider = create_digital_human_provider(settings)
 video_importer = VideoImporter()
+douyin_creator_collector = DouyinCreatorCollector()
 renderer = Renderer()
 
 DIGITAL_HUMAN_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
@@ -91,6 +108,17 @@ VOICE_TEMPLATE_ORDER = {
     "温和男声": 2,
     "元气女生": 3,
 }
+
+
+def _subtitle_timing_tokens(audio_path: str | Path | None):
+    """Best-effort word timing; final rendering still works if ASR is unavailable."""
+
+    if audio_path is None:
+        return []
+    try:
+        return asr_provider.transcribe_timed(Path(audio_path))
+    except Exception:
+        return []
 BGM_TEMPLATE_ORDER = {
     "宣传类口播": 0,
     "通用类口播": 1,
@@ -369,40 +397,59 @@ def ensure_voice_preview_wav(path: Path, voice_id: str) -> Path:
     return ensure_loudness_preview_wav(path, "voice_previews", voice_id)
 
 
-def ensure_loudness_preview_wav(path: Path, cache_group: str, cache_id: str) -> Path:
+def ensure_loudness_preview_wav(
+    path: Path,
+    cache_group: str,
+    cache_id: str,
+    *,
+    required: bool = False,
+) -> Path:
     ffmpeg = _ffmpeg_executable()
     if ffmpeg is None:
+        if required:
+            raise RuntimeError("FFmpeg 未配置，无法统一试听与成片的音频响度")
         return path
     try:
-        stamp = int(path.stat().st_mtime)
+        stat = path.stat()
+        stamp = f"{stat.st_mtime_ns}_{stat.st_size}"
     except OSError:
-        stamp = 0
+        stamp = "0_0"
     output = storage_dir(cache_group) / (
         f"{_safe_cache_name(cache_id)}_{stamp}_lufs16.wav"
     )
     if output.exists() and output.stat().st_size > 44:
         return output
     output.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        [
-            ffmpeg,
-            "-y",
-            "-i",
-            str(path),
-            "-vn",
-            "-af",
-            "loudnorm=I=-16:TP=-1.5:LRA=11",
-            "-ar",
-            "44100",
-            str(output),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=30,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(path),
+                "-vn",
+                "-af",
+                LOUDNESS_NORMALIZATION_FILTER,
+                "-ar",
+                "44100",
+                str(output),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        output.unlink(missing_ok=True)
+        if required:
+            raise RuntimeError(f"音频响度归一化失败：{exc}") from exc
+        return path
     if completed.returncode == 0 and output.exists() and output.stat().st_size > 44:
         return output
+    output.unlink(missing_ok=True)
+    if required:
+        detail = completed.stderr.decode("utf-8", errors="replace")[-800:]
+        raise RuntimeError(f"音频响度归一化失败：{detail or completed.returncode}")
     return path
 
 
@@ -1191,6 +1238,9 @@ def list_rewrite_styles():
 @app.get("/api/bootstrap", tags=["system"])
 def bootstrap_catalog():
     return {
+        "features": {
+            "creator_style_scripts": True,
+        },
         "providers": provider_status(),
         "voices": build_voice_catalog()["items"],
         "digital_humans": build_digital_human_catalog()["items"],
@@ -1204,6 +1254,91 @@ def subtitle_preview(req: SubtitlePreviewRequest):
     return {
         "lines": preview_subtitles(req.script, req.style),
         "style": req.style,
+    }
+
+
+def _render_subtitle_preview_png(req: SubtitlePreviewRequest) -> Path:
+    """Render a transparent subtitle frame with the same ASS/libass path as export."""
+    ffmpeg = _ffmpeg_executable()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg 未配置，无法生成真实字幕预览")
+
+    cache_payload = json.dumps(
+        {
+            "render_version": 1,
+            **req.model_dump(mode="json"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    cache_key = sha256(cache_payload.encode("utf-8")).hexdigest()
+    preview_dir = storage_dir("subtitle_previews")
+    output_path = preview_dir / f"{cache_key}.png"
+    if output_path.exists() and output_path.stat().st_size > 0:
+        return output_path
+
+    subtitle_path = preview_dir / f"{cache_key}.ass"
+    generate_ass(req.script, req.style, subtitle_path, duration_seconds=1.0)
+    escaped_subtitle_path = (
+        str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+    )
+    temporary_path = preview_dir / f"{cache_key}-{uuid4().hex}.tmp.png"
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black@0.0:s=1080x1920:r=10:d=1,format=rgba",
+                "-vf",
+                f"subtitles='{escaped_subtitle_path}':alpha=1",
+                "-ss",
+                "0.1",
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                str(temporary_path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or "FFmpeg 字幕预览渲染失败"
+            raise RuntimeError(detail)
+        temporary_path.replace(output_path)
+        return output_path
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+@app.post("/api/subtitles/render-preview", tags=["subtitles"])
+def rendered_subtitle_preview(req: SubtitlePreviewRequest):
+    try:
+        output_path = _render_subtitle_preview_png(req)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return FileResponse(
+        output_path,
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/api/subtitles/templates", tags=["subtitles"])
+def list_subtitle_templates():
+    return {
+        "items": [
+            {"template_id": template_id, **metadata}
+            for template_id, metadata in SUBTITLE_TEMPLATES.items()
+        ]
     }
 
 
@@ -1401,6 +1536,22 @@ def create_task(req: CreateTaskRequest) -> OralVideoTask:
     return task
 
 
+@app.post("/api/tasks/from-script", tags=["tasks"])
+def create_task_from_script(req: CreateScriptTaskRequest) -> OralVideoTask:
+    rewritten_script = req.rewritten_script.strip()
+    if not rewritten_script:
+        raise HTTPException(status_code=400, detail="请选择一篇有效文案")
+    task = OralVideoTask(
+        task_id=f"cloud-deep-{uuid4()}",
+        title=(req.title or "").strip() or generate_title(rewritten_script),
+        original_script=req.original_script.strip(),
+        rewritten_script=rewritten_script,
+        status=TaskStatus.rewritten,
+    )
+    complete_progress(task, "extract", "rewrite")
+    return repo.put(task)
+
+
 @app.post("/api/tasks/upload", tags=["tasks"])
 def upload_video(file: UploadFile = File(...)) -> OralVideoTask:
     try:
@@ -1452,6 +1603,8 @@ def delete_task(task_id: str):
         task.output_video_path,
         task.cover_path,
     ]
+    if task.output_video_path:
+        paths.append(str(_cover_source_video_path(Path(task.output_video_path))))
     if task.mouth_quality:
         paths.extend([
             task.mouth_quality.mouth_state_path,
@@ -1463,6 +1616,59 @@ def delete_task(task_id: str):
         if path:
             Path(path).unlink(missing_ok=True)
     return {"ok": True}
+
+
+@app.post(
+    "/api/creator-scripts/generate",
+    response_model=CreatorScriptBatchResponse,
+    tags=["tasks"],
+)
+def generate_creator_scripts(
+    req: CreatorScriptGenerateRequest,
+) -> CreatorScriptBatchResponse:
+    keyword = req.keyword.strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="请输入创作关键词")
+
+    try:
+        style_profile = req.style_profile
+        if style_profile is None:
+            if not req.share_text.strip():
+                raise DouyinCreatorInputError("请粘贴包含抖音主页链接的完整分享文案")
+            snapshot = douyin_creator_collector.collect(req.share_text)
+            style_profile = creator_script_provider.analyze_style(snapshot)
+
+        items = creator_script_provider.generate_scripts(
+            style_profile,
+            keyword=keyword,
+            count=req.count,
+            duration_seconds=req.duration_seconds,
+            generation_round=req.generation_round,
+            exclude_titles=req.exclude_titles,
+            exclude_scripts=req.exclude_scripts,
+        )
+        items = [
+            item.model_copy(update={"script": format_spoken_script(item.script)})
+            for item in items
+        ]
+    except DouyinCreatorInputError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (DouyinCreatorFetchError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if len(items) != req.count:
+        raise HTTPException(
+            status_code=502,
+            detail=f"文案生成结果数量异常：期望 {req.count} 篇，实际 {len(items)} 篇",
+        )
+    return CreatorScriptBatchResponse(
+        batch_id=str(uuid4()),
+        creator_name=style_profile.creator_name or "抖音创作者",
+        keyword=keyword,
+        generation_round=req.generation_round,
+        style_profile=style_profile,
+        items=items,
+    )
 
 
 @app.post("/api/tasks/{task_id}/rewrite", tags=["tasks"])
@@ -1517,12 +1723,60 @@ def generate_task_publish_content(task_id: str) -> PublishContentSuggestion:
     return suggestion
 
 
-def _generate_task_cover_file(task: OralVideoTask, script: str, cover_path: Path) -> Path:
+def _cover_source_video_path(video_path: Path) -> Path:
+    return video_path.with_name(f"{video_path.stem}_cover_source{video_path.suffix}")
+
+
+def _cover_background_video_path(video_path: Path) -> Path:
+    source_path = _cover_source_video_path(video_path)
+    return source_path if source_path.exists() else video_path
+
+
+def _apply_cover_to_video_first_frame(
+    video_path: Path,
+    cover_path: Path,
+    *,
+    refresh_source: bool = False,
+    cancel_event: threading.Event | None = None,
+) -> Path:
+    if not video_path.exists():
+        raise FileNotFoundError(video_path)
+    if not cover_path.exists():
+        raise FileNotFoundError(cover_path)
+
+    source_path = _cover_source_video_path(video_path)
+    if refresh_source or not source_path.exists():
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(video_path, source_path)
+
+    temporary_path = video_path.with_name(f"{video_path.stem}_covering{video_path.suffix}")
+    temporary_path.unlink(missing_ok=True)
+    try:
+        renderer.apply_cover_first_frame(
+            source_path,
+            cover_path,
+            temporary_path,
+            cancel_event=cancel_event,
+        )
+        temporary_path.replace(video_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return video_path
+
+
+def _generate_task_cover_file(
+    task: OralVideoTask,
+    script: str,
+    cover_path: Path,
+    *,
+    template_id: str | None = None,
+) -> Path:
     frame_path: Path | None = None
     if task.output_video_path and Path(task.output_video_path).exists():
         frame_path = cover_path.with_name(f"{cover_path.stem}_frame.png")
         try:
-            extract_first_frame_cover_png(Path(task.output_video_path), frame_path)
+            output_path = Path(task.output_video_path)
+            extract_first_frame_cover_png(_cover_background_video_path(output_path), frame_path)
         except Exception:
             frame_path = None
     try:
@@ -1531,10 +1785,21 @@ def _generate_task_cover_file(task: OralVideoTask, script: str, cover_path: Path
             script,
             cover_path,
             background_image_path=frame_path,
+            template_id=template_id or task.cover_template_id or DEFAULT_COVER_TEMPLATE,
         )
     finally:
         if frame_path is not None:
             frame_path.unlink(missing_ok=True)
+
+
+@app.get("/api/covers/templates", tags=["tasks"])
+def list_cover_templates():
+    return {
+        "items": [
+            {"template_id": template_id, **metadata}
+            for template_id, metadata in COVER_TEMPLATES.items()
+        ]
+    }
 
 
 @app.post("/api/covers/generate", tags=["tasks"])
@@ -1542,6 +1807,7 @@ def generate_standalone_cover(payload: dict) -> Dict[str, str]:
     title = str(payload.get("title") or "").strip()
     script = str(payload.get("script") or "").strip()
     background = str(payload.get("background_path") or "").strip()
+    template_id = str(payload.get("template_id") or DEFAULT_COVER_TEMPLATE).strip()
     if not title and not script:
         raise HTTPException(status_code=400, detail="没有可生成封面的标题或文案")
     cover_path = storage_dir("covers") / f"{uuid4()}.png"
@@ -1553,22 +1819,34 @@ def generate_standalone_cover(payload: dict) -> Dict[str, str]:
             if candidate.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"}:
                 frame_path = cover_path.with_name(f"{cover_path.stem}_frame.png")
                 try:
-                    extract_first_frame_cover_png(candidate, frame_path)
+                    extract_first_frame_cover_png(_cover_background_video_path(candidate), frame_path)
                     background_path = frame_path
                 except Exception:
                     background_path = None
             elif candidate.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                 background_path = candidate
     try:
-        generate_cover_png(title, script, cover_path, background_image_path=background_path)
+        generate_cover_png(
+            title,
+            script,
+            cover_path,
+            background_image_path=background_path,
+            template_id=template_id,
+        )
     finally:
         if frame_path is not None:
             frame_path.unlink(missing_ok=True)
-    return {"cover_path": str(cover_path)}
+    return {
+        "cover_path": str(cover_path),
+        "template_id": template_id if template_id in COVER_TEMPLATES else DEFAULT_COVER_TEMPLATE,
+    }
 
 
 @app.post("/api/tasks/{task_id}/cover", tags=["tasks"])
-def generate_task_cover(task_id: str) -> OralVideoTask:
+def generate_task_cover(
+    task_id: str,
+    template_id: str = DEFAULT_COVER_TEMPLATE,
+) -> OralVideoTask:
     try:
         task = repo.get(task_id)
     except KeyError:
@@ -1582,7 +1860,13 @@ def generate_task_cover(task_id: str) -> OralVideoTask:
         task.title = task.video_title
         complete_progress(task, "title")
     cover_path = storage_dir("covers") / f"{task_id}.png"
-    _generate_task_cover_file(task, script, cover_path)
+    task.cover_template_id = template_id if template_id in COVER_TEMPLATES else DEFAULT_COVER_TEMPLATE
+    _generate_task_cover_file(
+        task,
+        script,
+        cover_path,
+        template_id=task.cover_template_id,
+    )
     task.cover_path = str(cover_path)
     complete_progress(task, "cover")
     return repo.put(task)
@@ -1600,6 +1884,7 @@ def upload_task_cover(task_id: str, file: UploadFile = File(...)) -> OralVideoTa
         raise HTTPException(status_code=400, detail=str(exc))
     start_progress(task, "cover")
     task.cover_path = str(Path(asset.path))
+    task.cover_template_id = "custom"
     if not task.video_title:
         script = task.rewritten_script or task.original_script
         if script:
@@ -1607,6 +1892,31 @@ def upload_task_cover(task_id: str, file: UploadFile = File(...)) -> OralVideoTa
             task.title = task.video_title
     complete_progress(task, "cover")
     return repo.put(task)
+
+
+@app.post("/api/videos/cover-first-frame", tags=["tasks"])
+def apply_video_cover_first_frame(payload: dict):
+    video_path = Path(str(payload.get("source_video_path") or "")).expanduser()
+    cover_path = Path(str(payload.get("cover_path") or "")).expanduser()
+    if not video_path.exists() or not video_path.is_file():
+        raise HTTPException(status_code=404, detail="待设置封面的视频不存在")
+    if not is_playable_mp4(video_path):
+        raise HTTPException(status_code=400, detail="待设置封面的视频不是可播放的 MP4")
+    if not cover_path.exists() or not cover_path.is_file():
+        raise HTTPException(status_code=404, detail="封面图片不存在")
+    if cover_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="封面图片格式不受支持")
+    try:
+        rendered_path = _apply_cover_to_video_first_frame(video_path, cover_path)
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(status_code=500, detail=f"封面写入视频失败：{exc.returncode}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"封面写入视频失败：{exc}") from exc
+    return {
+        "ready": is_playable_mp4(rendered_path),
+        "path": str(rendered_path),
+        "size_bytes": rendered_path.stat().st_size,
+    }
 
 
 @app.post("/api/tasks/{task_id}/publish", tags=["tasks"])
@@ -1634,11 +1944,30 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
     script = options.script or task.rewritten_script or task.original_script
     if not script:
         raise HTTPException(status_code=400, detail="没有可合成的文案")
+    if options.defer_packaging:
+        options = options.model_copy(
+            update={
+                "bgm_id": "none",
+                "bgm_volume": 0,
+                "voice_volume": 1.0,
+                "subtitle_enabled": False,
+                "pip_enabled": False,
+                "pip_asset_id": None,
+                "cover_path": None,
+            }
+        )
     selected_engine, active_digital_human_provider = selected_digital_human_provider(
         options.digital_human_engine
     )
     voice_ref = voice_reference_path(options.voice_id, options.voice_reference_asset_id)
     bgm_audio = resolve_bgm_audio(options.bgm_id)
+    if bgm_audio is not None:
+        bgm_audio = ensure_loudness_preview_wav(
+            bgm_audio,
+            "bgm_previews",
+            options.bgm_id or bgm_audio.name,
+            required=True,
+        )
     pip_asset = resolve_pip_asset(options)
     digital_human_video = digital_human_reference_path(options.digital_human_id)
     _record_recent_usage("voice", options.voice_id)
@@ -1655,16 +1984,48 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
 
     try:
         ensure_not_cancelled(task, cancel_event)
-        audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
+        generated_audio_path = storage_dir("extracted_audio") / f"{task_id}_voice.wav"
+        existing_audio_path = (
+            Path(task.extracted_audio_path)
+            if options.defer_packaging and task.extracted_audio_path
+            else None
+        )
+        audio_path = (
+            existing_audio_path
+            if existing_audio_path is not None and existing_audio_path.exists()
+            else generated_audio_path
+        )
         start_progress(task, "voice")
         repo.put(task)
-        voice_provider.synthesize(script, options.voice_id, audio_path, reference_audio=voice_ref)
+        if audio_path == generated_audio_path:
+            voice_provider.synthesize(
+                script,
+                options.voice_id,
+                audio_path,
+                reference_audio=voice_ref,
+            )
         ensure_not_cancelled(task, cancel_event)
         task.extracted_audio_path = str(audio_path)
+        render_voice_audio = ensure_loudness_preview_wav(
+            audio_path,
+            "generated_voice_previews",
+            task_id,
+            required=True,
+        )
         complete_progress(task, "voice")
         repo.put(task)
 
-        audio_duration = media_duration_seconds(audio_path)
+        audio_duration = media_duration_seconds(render_voice_audio)
+        subtitle_timing_tokens = (
+            _subtitle_timing_tokens(render_voice_audio)
+            if options.subtitle_enabled
+            or (
+                options.pip_enabled
+                and (options.pip_timing_mode or "").strip().lower()
+                == "sentence"
+            )
+            else []
+        )
         if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
             range_text = (options.pip_trigger_text or "").strip()
             time_range = subtitle_time_range_for_text(
@@ -1672,6 +2033,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
                 options.subtitle_style,
                 range_text,
                 duration_seconds=audio_duration,
+                timed_tokens=subtitle_timing_tokens,
             )
             if time_range is None:
                 raise RuntimeError("没有在文案字幕中找到画中画触发句，请换一句更完整的话或改用按秒显示。")
@@ -1688,7 +2050,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         if source_video is not None:
             prepared_reference_video = prepare_video_for_audio_duration(
                 source_video,
-                audio_path,
+                render_voice_audio,
                 storage_dir("outputs") / f"{task_id}_reference_matched.mp4",
                 cancel_event=cancel_event,
             )
@@ -1698,8 +2060,14 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         start_progress(task, "subtitle")
         repo.put(task)
         if options.subtitle_enabled:
-            subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
-            generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=audio_duration)
+            subtitle_path = storage_dir("subtitles") / f"{task_id}.ass"
+            generate_ass(
+                script,
+                options.subtitle_style,
+                subtitle_path,
+                duration_seconds=audio_duration,
+                timed_tokens=subtitle_timing_tokens,
+            )
             task.subtitle_path = str(subtitle_path)
         else:
             task.subtitle_path = None
@@ -1715,7 +2083,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
         active_digital_human_provider.render(
             reference_video=prepared_reference_video,
-            driving_audio=audio_path,
+            driving_audio=render_voice_audio,
             script=script,
             options=options,
             output_path=digital_path,
@@ -1726,7 +2094,7 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         repo.put(task)
         render_kwargs = {
             "source_video": digital_path,
-            "voice_audio": audio_path,
+            "voice_audio": render_voice_audio,
             "subtitle_file": subtitle_path,
             "bgm_audio": bgm_audio,
             "cancel_event": cancel_event,
@@ -1756,11 +2124,33 @@ def render_task(task_id: str, options: RenderOptions) -> OralVideoTask:
         task.title = task.video_title
         complete_progress(task, "title")
         repo.put(task)
+        if options.defer_packaging:
+            task.status = TaskStatus.completed
+            return repo.put(task)
         start_progress(task, "cover")
         repo.put(task)
-        cover_path = storage_dir("covers") / f"{task_id}.png"
-        _generate_task_cover_file(task, script, cover_path)
+        existing_cover = Path(task.cover_path) if task.cover_path else None
+        if (
+            task.cover_template_id == "custom"
+            and existing_cover is not None
+            and existing_cover.exists()
+        ):
+            cover_path = existing_cover
+        else:
+            cover_path = storage_dir("covers") / f"{task_id}.png"
+            _generate_task_cover_file(
+                task,
+                script,
+                cover_path,
+                template_id=task.cover_template_id,
+            )
         task.cover_path = str(cover_path)
+        _apply_cover_to_video_first_frame(
+            Path(task.output_video_path),
+            cover_path,
+            refresh_source=True,
+            cancel_event=cancel_event,
+        )
         complete_progress(task, "cover")
         repo.put(task)
         task.status = TaskStatus.completed
@@ -1860,11 +2250,20 @@ def generate_task_subtitles(task_id: str, options: RenderOptions) -> OralVideoTa
     task.render_options = options
     start_progress(task, "subtitle")
     if options.subtitle_enabled:
-        subtitle_path = storage_dir("subtitles") / f"{task_id}.srt"
+        subtitle_path = storage_dir("subtitles") / f"{task_id}.ass"
         duration = media_duration_seconds(task.extracted_audio_path)
         if duration is None and task.source_video:
             duration = media_duration_seconds(task.source_video.path)
-        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        timing_source = task.extracted_audio_path
+        if not timing_source and task.source_video:
+            timing_source = task.source_video.path
+        generate_ass(
+            script,
+            options.subtitle_style,
+            subtitle_path,
+            duration_seconds=duration,
+            timed_tokens=_subtitle_timing_tokens(timing_source),
+        )
         task.subtitle_path = str(subtitle_path)
     else:
         task.subtitle_path = None
@@ -1950,8 +2349,30 @@ def postprocess_video(request: PostprocessVideoRequest):
     options = request.options
     script = (options.script or "").strip()
     bgm_audio = resolve_bgm_audio(options.bgm_id)
+    if bgm_audio is not None:
+        bgm_audio = ensure_loudness_preview_wav(
+            bgm_audio,
+            "bgm_previews",
+            options.bgm_id or bgm_audio.name,
+            required=True,
+        )
     pip_asset = resolve_pip_asset(options)
     duration = media_duration_seconds(source_path)
+    voice_audio = ensure_loudness_preview_wav(
+        source_path,
+        "postprocess_voice",
+        source_path.stem,
+        required=True,
+    )
+    subtitle_timing_tokens = (
+        _subtitle_timing_tokens(voice_audio)
+        if options.subtitle_enabled
+        or (
+            options.pip_enabled
+            and (options.pip_timing_mode or "").strip().lower() == "sentence"
+        )
+        else []
+    )
 
     if options.pip_enabled and (options.pip_timing_mode or "").strip().lower() == "sentence":
         range_text = (options.pip_trigger_text or "").strip()
@@ -1960,6 +2381,7 @@ def postprocess_video(request: PostprocessVideoRequest):
             options.subtitle_style,
             range_text,
             duration_seconds=duration,
+            timed_tokens=subtitle_timing_tokens,
         )
         if time_range is None:
             raise HTTPException(status_code=400, detail="没有在文案字幕中找到画中画触发句，请换一句更完整的话或改用按秒显示。")
@@ -1973,8 +2395,14 @@ def postprocess_video(request: PostprocessVideoRequest):
     postprocess_id = f"postprocess-{uuid4()}"
     subtitle_path: Path | None = None
     if options.subtitle_enabled:
-        subtitle_path = storage_dir("subtitles") / f"{postprocess_id}.srt"
-        generate_srt(script, options.subtitle_style, subtitle_path, duration_seconds=duration)
+        subtitle_path = storage_dir("subtitles") / f"{postprocess_id}.ass"
+        generate_ass(
+            script,
+            options.subtitle_style,
+            subtitle_path,
+            duration_seconds=duration,
+            timed_tokens=subtitle_timing_tokens,
+        )
 
     output_path = storage_dir("outputs") / f"{postprocess_id}.mp4"
     try:
@@ -1985,7 +2413,15 @@ def postprocess_video(request: PostprocessVideoRequest):
             output_path,
             bgm_audio=bgm_audio,
             pip_asset=pip_asset,
+            voice_audio=voice_audio,
         )
+        cover_path = Path(options.cover_path).expanduser() if options.cover_path else None
+        if cover_path is not None and cover_path.exists():
+            _apply_cover_to_video_first_frame(
+                rendered_path,
+                cover_path,
+                refresh_source=True,
+            )
     except subprocess.CalledProcessError as exc:
         raise HTTPException(status_code=500, detail=f"本地后处理合成失败：{exc.returncode}") from exc
     except Exception as exc:

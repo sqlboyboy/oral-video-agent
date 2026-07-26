@@ -89,9 +89,8 @@ extension _MobileWorkbench on _WorkbenchPageState {
                 width: double.infinity,
                 height: 52,
                 child: FilledButton.icon(
-                  onPressed: loading
-                      ? null
-                      : () => _showCloudAuthDialog('register'),
+                  onPressed:
+                      loading ? null : () => _showCloudAuthDialog('register'),
                   icon: const Icon(Icons.person_add_alt_1_rounded),
                   label: const Text(
                     '注册账号',
@@ -104,9 +103,8 @@ extension _MobileWorkbench on _WorkbenchPageState {
                 width: double.infinity,
                 height: 50,
                 child: OutlinedButton.icon(
-                  onPressed: loading
-                      ? null
-                      : () => _showCloudAuthDialog('login'),
+                  onPressed:
+                      loading ? null : () => _showCloudAuthDialog('login'),
                   icon: const Icon(Icons.login_rounded),
                   label: const Text('已有账号，直接登录'),
                 ),
@@ -164,8 +162,6 @@ extension _MobileWorkbench on _WorkbenchPageState {
   }
 
   Widget _mobileWorkbenchScaffold() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
-    final points = wallet['available_points'] ?? 0;
     final pages = [
       _mobileStudioPage(),
       _mobileTasksPage(),
@@ -198,8 +194,8 @@ extension _MobileWorkbench on _WorkbenchPageState {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Chip(
-              avatar: const Icon(Icons.toll_rounded, size: 17),
-              label: Text('$points 点'),
+              avatar: const Icon(Icons.schedule_rounded, size: 17),
+              label: Text(_cloudUsageText),
               side: BorderSide(
                 color: _WorkbenchPageState.purpleLine.withValues(alpha: 0.55),
               ),
@@ -252,9 +248,8 @@ extension _MobileWorkbench on _WorkbenchPageState {
   }
 
   Widget _mobileMessageBanner() {
-    final color = messageIsError
-        ? const Color(0xFFFF7892)
-        : const Color(0xFF65DDB0);
+    final color =
+        messageIsError ? const Color(0xFFFF7892) : const Color(0xFF65DDB0);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
@@ -296,7 +291,7 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final douyinStatus = cloudDouyinTranscription?['status']?.toString() ?? '';
     final douyinProgress =
         (cloudDouyinTranscription?['progress_percent'] as num?)?.toDouble() ??
-        0;
+            0;
     final douyinProgressMessage =
         cloudDouyinTranscription?['progress_message']?.toString() ?? '';
     return RefreshIndicator(
@@ -322,11 +317,11 @@ extension _MobileWorkbench on _WorkbenchPageState {
                   keyboardType: TextInputType.url,
                   autocorrect: false,
                   enableSuggestions: false,
-                  decoration: _mobileInputDecoration('粘贴抖音分享链接或完整分享口令')
-                      .copyWith(
-                        prefixIcon: const Icon(Icons.link_rounded),
-                        alignLabelWithHint: true,
-                      ),
+                  decoration:
+                      _mobileInputDecoration('粘贴抖音分享链接或完整分享口令').copyWith(
+                    prefixIcon: const Icon(Icons.link_rounded),
+                    alignLabelWithHint: true,
+                  ),
                 ),
                 const SizedBox(height: 7),
                 const Text(
@@ -385,8 +380,8 @@ extension _MobileWorkbench on _WorkbenchPageState {
                   onChanged: loading
                       ? null
                       : (value) => _updateMobile(
-                          () => selectedStyle = value ?? selectedStyle,
-                        ),
+                            () => selectedStyle = value ?? selectedStyle,
+                          ),
                 ),
                 const SizedBox(height: 10),
                 TextField(
@@ -784,10 +779,10 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final operation = payload?['operation']?.toString() ?? '';
     final title = jobType == 'preprocess'
         ? (operation == 'voice'
-              ? '声音克隆任务'
-              : operation == 'extract'
-              ? '文案提取任务'
-              : '云端预处理任务')
+            ? '声音克隆任务'
+            : operation == 'extract'
+                ? '文案提取任务'
+                : '云端预处理任务')
         : '数字人成片任务';
     return Container(
       padding: const EdgeInsets.all(14),
@@ -908,7 +903,9 @@ extension _MobileWorkbench on _WorkbenchPageState {
   }
 
   Widget _mobileAccountPage() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
     final email = _cloudUser?['email']?.toString() ?? '未登录';
     return RefreshIndicator(
       onRefresh: () async {
@@ -950,16 +947,16 @@ extension _MobileWorkbench on _WorkbenchPageState {
                   children: [
                     Expanded(
                       child: _mobileMetric(
-                        '可用点数',
-                        '${wallet['available_points'] ?? 0}',
+                        '剩余使用期限',
+                        _cloudUsageText,
                         const Color(0xFF65DDB0),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: _mobileMetric(
-                        '冻结点数',
-                        '${wallet['frozen_points'] ?? 0}',
+                        '到期时间',
+                        _cloudUsageExpiryText,
                         const Color(0xFFFFC857),
                       ),
                     ),
@@ -989,30 +986,30 @@ extension _MobileWorkbench on _WorkbenchPageState {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '最近点数明细',
+                  '使用规则',
                   style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 10),
-                if (cloudLedger.isEmpty)
-                  _mobileEmptyState('暂无点数明细', '云端任务的点数变化会显示在这里')
-                else
-                  for (final item in cloudLedger.take(12))
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(
-                        Icons.bolt_rounded,
-                        color: Color(0xFFB99AFF),
-                      ),
-                      title: Text(_ledgerTitle(item)),
-                      trailing: Text(
-                        '${item['points'] ?? ''}',
-                        style: const TextStyle(
-                          color: Color(0xFFFFC857),
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    access['has_access'] == true
+                        ? Icons.check_circle_rounded
+                        : Icons.schedule_rounded,
+                    color: access['has_access'] == true
+                        ? const Color(0xFF65DDB0)
+                        : const Color(0xFFFFC857),
+                  ),
+                  title: Text(
+                    access['has_access'] == true ? '有效期内不限次数' : '剩余期限为 0天0小时0分',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    access['has_access'] == true
+                        ? '生成文案、声音和视频均免费'
+                        : '请联系管理员开通或增加使用期限',
+                  ),
+                ),
               ],
             ),
           ),

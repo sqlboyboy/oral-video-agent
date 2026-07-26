@@ -93,11 +93,12 @@ def test_bootstrap_catalog_returns_client_startup_data():
     assert any(item["name"] == "同款口播" for item in body["rewrite_styles"])
 
 
-def test_subtitle_style_defaults_to_douyin_yellow():
+def test_subtitle_style_defaults_to_first_template():
     style = SubtitleStyle()
 
-    assert style.color == "#FFE600"
-    assert style.outline_color == "#000000"
+    assert style.template_id == "renovation_pitfall_yellow"
+    assert style.color == "#FFFFFF"
+    assert style.outline_color == "#111111"
 
 
 def test_task_subtitle_generation_writes_srt():
@@ -149,6 +150,37 @@ def test_renderer_subtitle_filter_uses_douyin_yellow_style(monkeypatch):
     assert "FontName=Microsoft YaHei" in filter_complex
     assert "PrimaryColour=&H0000E6FF&" in filter_complex
     assert "OutlineColour=&H00000000&" in filter_complex
+
+
+def test_deferred_render_creates_unpacked_digital_human_video():
+    task = _create_task_via_upload()
+
+    rendered = client.post(
+        f"/api/tasks/{task['task_id']}/render",
+        json={
+            "script": "先生成数字人中间视频，再选择封面、字幕和背景音乐。",
+            "voice_id": "classic-female",
+            "voice_volume": 0.2,
+            "bgm_id": "default-light",
+            "subtitle_enabled": True,
+            "pip_enabled": True,
+            "pip_asset_id": None,
+            "cover_path": "not-applied.png",
+            "defer_packaging": True,
+        },
+    )
+
+    assert rendered.status_code == 200
+    rendered_task = rendered.json()
+    assert rendered_task["status"] == "completed"
+    assert rendered_task["output_video_path"]
+    assert rendered_task["subtitle_path"] is None
+    assert rendered_task["cover_path"] is None
+    assert rendered_task["render_options"]["defer_packaging"] is True
+    assert rendered_task["render_options"]["voice_volume"] == 1.0
+    assert rendered_task["render_options"]["bgm_id"] == "none"
+    assert rendered_task["render_options"]["subtitle_enabled"] is False
+    assert rendered_task["render_options"]["pip_enabled"] is False
 
 
 def test_pip_upload_returns_asset():

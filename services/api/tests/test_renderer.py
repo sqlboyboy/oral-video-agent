@@ -33,13 +33,13 @@ def test_build_ffmpeg_command_maps_video_voice_bgm_and_subtitles(tmp_path):
     assert str(bgm) in command
     assert "-filter_complex" in command
     filter_complex = command[command.index("-filter_complex") + 1]
-    assert "dynaudnorm=f=150:g=15:p=0.9,volume=0.45" in filter_complex
+    assert "[1:a]volume=0.45[voice]" in filter_complex
     assert "volume=0.25" in filter_complex
     assert "amix=inputs=2" in filter_complex
     assert "normalize=0" in filter_complex
     assert "subtitles=" in filter_complex
-    assert "Outline=2" in filter_complex
-    assert "MarginV=70" in filter_complex
+    assert "Outline=0.75" in filter_complex
+    assert "MarginV=77" in filter_complex
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-crf") + 1] == "18"
     assert "-r" not in command
@@ -162,7 +162,7 @@ def test_build_postprocess_command_preserves_source_audio_and_fullscreen_pip(tmp
 
     filter_complex = command[command.index("-filter_complex") + 1]
     assert command[1:4] == ["-y", "-i", str(source)]
-    assert "[0:a]dynaudnorm=f=150:g=15:p=0.9,volume=0.45[aout]" in filter_complex
+    assert "[0:a]volume=0.45[aout]" in filter_complex
     assert "[0:v]scale=720:1280:flags=lanczos,setsar=1,setpts=PTS-STARTPTS[mainv]" in filter_complex
     assert "[1:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,setsar=1,setpts=PTS-STARTPTS[pip]" in filter_complex
     assert "[mainv][pip]overlay=0:0:eof_action=pass" in filter_complex
