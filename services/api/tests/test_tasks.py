@@ -976,8 +976,8 @@ def test_custom_voice_and_bgm_uploads_are_listed():
     assert any(item["bgm_id"] == uploaded_bgm["bgm_id"] for item in bgm.json()["items"])
 
 
-def test_voice_reference_only_rejects_files_longer_than_five_minutes(monkeypatch):
-    monkeypatch.setattr(main_module, "media_duration_seconds", lambda _path: 301.0)
+def test_voice_reference_rejects_files_longer_than_three_minutes(monkeypatch):
+    monkeypatch.setattr(main_module, "media_duration_seconds", lambda _path: 181.0)
 
     response = client.post(
         "/api/voices/upload",
@@ -985,7 +985,18 @@ def test_voice_reference_only_rejects_files_longer_than_five_minutes(monkeypatch
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "声音参考文件最长不能超过 5 分钟"
+    assert response.json()["detail"] == "声音参考文件最长不能超过 3 分钟"
+
+
+def test_voice_reference_up_to_three_minutes_is_allowed(monkeypatch):
+    monkeypatch.setattr(main_module, "media_duration_seconds", lambda _path: 180.0)
+
+    response = client.post(
+        "/api/voices/upload",
+        files={"file": ("three-minutes.wav", _wav_bytes(), "audio/wav")},
+    )
+
+    assert response.status_code == 200
 
 
 def test_voice_reference_shorter_than_fifteen_seconds_is_allowed(monkeypatch):

@@ -23,6 +23,7 @@ import numpy as np
 DIRECT_WAV_SUFFIXES = {".wav"}
 TRANSCODE_SUFFIXES = {".mp3", ".m4a", ".aac", ".flac", ".mp4", ".mov", ".mkv", ".webm"}
 TTS_PUNCTUATION = "，。！？；："
+COSYVOICE_REFERENCE_MAX_SECONDS = 29.5
 
 
 def _read_script(path: Path) -> str:
@@ -68,9 +69,7 @@ def _write_wav(path: Path, samples: np.ndarray, sample_rate: int) -> None:
 def _extract_reference_wav(reference: Path, output_dir: Path) -> Path:
     output = output_dir / f"{reference.stem}_16k.wav"
     suffix = reference.suffix.lower()
-    if suffix in DIRECT_WAV_SUFFIXES:
-        return reference
-    if suffix not in TRANSCODE_SUFFIXES:
+    if suffix not in DIRECT_WAV_SUFFIXES | TRANSCODE_SUFFIXES:
         raise SystemExit(f"unsupported reference format: {reference.suffix}")
 
     container = av.open(str(reference))
@@ -80,12 +79,19 @@ def _extract_reference_wav(reference: Path, output_dir: Path) -> Path:
 
     resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
     chunks: list[np.ndarray] = []
+    remaining_samples = int(16000 * COSYVOICE_REFERENCE_MAX_SECONDS)
     for frame in container.decode(audio_stream):
         resampled = resampler.resample(frame)
         frames = resampled if isinstance(resampled, list) else [resampled]
         for audio_frame in frames:
-            array = audio_frame.to_ndarray()
-            chunks.append(array.reshape(-1).astype(np.float32) / 32768.0)
+            array = audio_frame.to_ndarray().reshape(-1)
+            if remaining_samples <= 0:
+                break
+            limited = array[:remaining_samples]
+            chunks.append(limited.astype(np.float32) / 32768.0)
+            remaining_samples -= limited.size
+        if remaining_samples <= 0:
+            break
     container.close()
     if not chunks:
         raise SystemExit("reference video audio decode produced no samples")

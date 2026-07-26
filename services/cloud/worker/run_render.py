@@ -72,6 +72,10 @@ PIP_MEDIA_ASPECT_RATIO = 16 / 9
 PIP_MARGIN_X = 24
 LOUDNESS_NORMALIZATION_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
 PIP_MARGIN_Y = 24
+VOICE_REFERENCE_UPLOAD_MAX_SECONDS = 180.0
+# CosyVoice-300M-25Hz rejects prompt audio longer than 30 seconds.
+# Leave a small margin for container/sample rounding after transcoding.
+COSYVOICE_REFERENCE_MAX_SECONDS = 29.5
 
 TRADITIONAL_PHRASE_REPLACEMENTS = (
     ("畫中畫", "画中画"),
@@ -1384,6 +1388,12 @@ def prepare_cosyvoice_reference_audio(source_path: Path, output_path: Path) -> P
     """Convert every uploaded reference to the WAV format accepted by CosyVoice."""
     if not source_path.exists() or source_path.stat().st_size == 0:
         raise RuntimeError(f"voice reference is empty: {source_path}")
+    duration_seconds = media_duration_seconds(source_path)
+    if (
+        duration_seconds is not None
+        and duration_seconds > VOICE_REFERENCE_UPLOAD_MAX_SECONDS
+    ):
+        raise RuntimeError("声音参考文件最长不能超过 3 分钟")
     ffmpeg = ffmpeg_executable()
     if ffmpeg is None:
         raise RuntimeError("ffmpeg is required to prepare the CosyVoice reference audio")
@@ -1394,6 +1404,8 @@ def prepare_cosyvoice_reference_audio(source_path: Path, output_path: Path) -> P
             "-y",
             "-i",
             str(source_path),
+            "-t",
+            str(COSYVOICE_REFERENCE_MAX_SECONDS),
             "-vn",
             "-ac",
             "1",

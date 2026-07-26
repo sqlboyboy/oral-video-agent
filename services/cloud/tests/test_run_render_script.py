@@ -7,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import worker.run_render as run_render_module
 from worker.run_render import (
     build_render_payload,
@@ -266,6 +268,11 @@ def test_prepare_cosyvoice_reference_converts_m4a_to_mono_16k_wav(monkeypatch, t
         return type("Completed", (), {"returncode": 0, "stderr": b""})()
 
     monkeypatch.setattr(run_render_module, "ffmpeg_executable", lambda: "ffmpeg")
+    monkeypatch.setattr(
+        run_render_module,
+        "media_duration_seconds",
+        lambda _path: 180.0,
+    )
     monkeypatch.setattr(run_render_module.subprocess, "run", fake_run)
 
     assert prepare_cosyvoice_reference_audio(source, output) == output
@@ -273,9 +280,29 @@ def test_prepare_cosyvoice_reference_converts_m4a_to_mono_16k_wav(monkeypatch, t
     assert command[command.index("-ac") + 1] == "1"
     assert command[command.index("-ar") + 1] == "16000"
     assert command[command.index("-c:a") + 1] == "pcm_s16le"
+    assert command[command.index("-t") + 1] == str(
+        run_render_module.COSYVOICE_REFERENCE_MAX_SECONDS
+    )
     with wave.open(str(output), "rb") as wav_file:
         assert wav_file.getnchannels() == 1
         assert wav_file.getframerate() == 16000
+
+
+def test_prepare_cosyvoice_reference_rejects_audio_longer_than_three_minutes(
+    monkeypatch,
+    tmp_path,
+):
+    source = tmp_path / "too-long.wav"
+    source.write_bytes(b"wav-reference")
+    output = tmp_path / "reference.wav"
+    monkeypatch.setattr(
+        run_render_module,
+        "media_duration_seconds",
+        lambda _path: 180.01,
+    )
+
+    with pytest.raises(RuntimeError, match="最长不能超过 3 分钟"):
+        prepare_cosyvoice_reference_audio(source, output)
 
 
 def test_find_source_asset_prefers_source_video_kind(tmp_path):
