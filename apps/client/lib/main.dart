@@ -373,6 +373,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Map<String, dynamic>? output;
   Map<String, dynamic>? cloudSession;
   Map<String, dynamic>? cloudWallet;
+  Map<String, dynamic>? cloudUsageAccess;
   Map<String, dynamic>? cloudJob;
   Map<String, dynamic>? cloudDouyinTranscription;
   Map<String, dynamic>? cloudEstimate;
@@ -759,6 +760,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先登录云端账号');
       return false;
     }
+    if (cloudUsageAccess != null && cloudUsageAccess?['has_access'] != true) {
+      showError('剩余使用期限为 0天0小时0分，请联系管理员开通使用期限');
+      return false;
+    }
     return true;
   }
 
@@ -919,6 +924,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
+      cloudUsageAccess = null;
       cloudLedger = const [];
       cloudAccountSignedOut = false;
       cloudAuthMode = 'login';
@@ -931,6 +937,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
+      cloudUsageAccess = null;
       cloudLedger = const [];
       cloudAccountSignedOut = true;
       cloudAuthMode = 'login';
@@ -993,6 +1000,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
         final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (user?['usage_access'] as Map?)?.cast<String, dynamic>();
         final email = user?['email'] as String? ?? '';
         if (email.isNotEmpty) cloudEmailController.text = email;
         if (!silent) {
@@ -1022,10 +1031,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (!mounted) return;
       setState(() {
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (body['usage_access'] as Map?)?.cast<String, dynamic>();
         cloudLedger =
             (body['items'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
         if (!silent) {
-          message = '点数明细已刷新';
+          message = '使用期限已刷新';
           messageIsError = false;
         }
       });
@@ -1191,6 +1202,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudDeviceToken = body['device_token'] as String? ?? cloudDeviceToken;
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (user?['usage_access'] as Map?)?.cast<String, dynamic>();
         cloudEmailCodeController.clear();
         cloudPasswordController.clear();
         cloudPasswordConfirmController.clear();
@@ -1278,6 +1292,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudDeviceToken = body['device_token'] as String? ?? '';
         cloudSession = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
+        final user = (body['user'] as Map?)?.cast<String, dynamic>();
+        cloudUsageAccess =
+            (user?['usage_access'] as Map?)?.cast<String, dynamic>();
         cloudEmailCodeController.clear();
         cloudPasswordController.clear();
         cloudPasswordConfirmController.clear();
@@ -1321,9 +1338,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         cloudDeviceToken = '';
         cloudSession = null;
         cloudWallet = null;
+        cloudUsageAccess = null;
         cloudAccountSignedOut = false;
         cloudActivationCodeController.clear();
-        message = '软件已激活，请绑定邮箱账号管理点数';
+        message = '软件已激活，请绑定邮箱账号并开通使用期限';
         messageIsError = false;
       });
       await _saveCloudAuth();
@@ -1807,7 +1825,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       setState(() {
         cloudEstimate = body;
         cloudWallet = (body['wallet'] as Map?)?.cast<String, dynamic>();
-        message = '云端任务已预估';
+        cloudUsageAccess =
+            (body['usage_access'] as Map?)?.cast<String, dynamic>();
+        message = '云端任务可在有效期内直接使用';
         messageIsError = false;
       });
     });
@@ -3480,6 +3500,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       cloudDeviceToken = '';
       cloudSession = null;
       cloudWallet = null;
+      cloudUsageAccess = null;
       cloudLedger = const [];
       cloudEmailController.clear();
       cloudEmailCodeController.clear();
@@ -6302,6 +6323,29 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     final email = _cloudUser?['email'] as String? ?? '';
     if (email.trim().isEmpty) return '未绑定邮箱账号';
     return email;
+  }
+
+  String get _cloudUsageText {
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>();
+    if (access?['unlimited'] == true) return '不限期';
+    final days = access?['remaining_days'] ?? 0;
+    final hours = access?['remaining_hours'] ?? 0;
+    final minutes = access?['remaining_minutes'] ?? 0;
+    return '$days天$hours小时$minutes分';
+  }
+
+  String get _cloudUsageExpiryText {
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>();
+    if (access?['unlimited'] == true) return '永久可用';
+    final value = access?['expires_at']?.toString() ?? '';
+    if (value.isEmpty) return '尚未开通';
+    final parsed = DateTime.tryParse(value)?.toLocal();
+    if (parsed == null) return value;
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${parsed.year}-${two(parsed.month)}-${two(parsed.day)} '
+        '${two(parsed.hour)}:${two(parsed.minute)}';
   }
 
   bool get _cloudVoiceJobActive {

@@ -350,8 +350,6 @@ extension _MobileWorkbench on _WorkbenchPageState {
   }
 
   Widget _mobileWorkbenchScaffold() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
-    final points = wallet['available_points'] ?? 0;
     final pages = [
       _mobileStudioPage(),
       _mobileVideoPage(),
@@ -384,8 +382,8 @@ extension _MobileWorkbench on _WorkbenchPageState {
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Chip(
-              avatar: const Icon(Icons.toll_rounded, size: 17),
-              label: Text('$points 点'),
+              avatar: const Icon(Icons.schedule_rounded, size: 17),
+              label: Text(_cloudUsageText),
               side: BorderSide(
                 color: _WorkbenchPageState.purpleLine.withValues(alpha: 0.55),
               ),
@@ -1847,7 +1845,9 @@ extension _MobileWorkbench on _WorkbenchPageState {
   }
 
   Widget _mobileAccountPage() {
-    final wallet = cloudWallet ?? const <String, dynamic>{};
+    final access = cloudUsageAccess ??
+        (_cloudUser?['usage_access'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
     final email = _cloudUser?['email']?.toString() ?? '未登录';
     return RefreshIndicator(
       onRefresh: () async {
@@ -1887,16 +1887,16 @@ extension _MobileWorkbench on _WorkbenchPageState {
                   children: [
                     Expanded(
                       child: _mobileMetric(
-                        '可用点数',
-                        '${wallet['available_points'] ?? 0}',
+                        '剩余使用期限',
+                        _cloudUsageText,
                         const Color(0xFF65DDB0),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: _mobileMetric(
-                        '冻结点数',
-                        '${wallet['frozen_points'] ?? 0}',
+                        '到期时间',
+                        _cloudUsageExpiryText,
                         const Color(0xFFFFC857),
                       ),
                     ),
@@ -1957,28 +1957,30 @@ extension _MobileWorkbench on _WorkbenchPageState {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '最近点数明细',
+                  '使用规则',
                   style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
                 ),
                 const SizedBox(height: 10),
-                if (cloudLedger.isEmpty)
-                  _mobileEmptyState('暂无点数明细', '云端任务的点数变化会显示在这里')
-                else
-                  for (final item in cloudLedger.take(12))
-                    ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.bolt_rounded,
-                          color: Color(0xFFB99AFF)),
-                      title: Text(_ledgerTitle(item)),
-                      trailing: Text(
-                        '${item['points'] ?? ''}',
-                        style: const TextStyle(
-                          color: Color(0xFFFFC857),
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    access['has_access'] == true
+                        ? Icons.check_circle_rounded
+                        : Icons.schedule_rounded,
+                    color: access['has_access'] == true
+                        ? const Color(0xFF65DDB0)
+                        : const Color(0xFFFFC857),
+                  ),
+                  title: Text(
+                    access['has_access'] == true ? '有效期内不限次数' : '剩余期限为 0天0小时0分',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    access['has_access'] == true
+                        ? '生成文案、声音和视频均免费'
+                        : '请联系管理员开通或增加使用期限',
+                  ),
+                ),
               ],
             ),
           ),
@@ -2001,10 +2003,20 @@ extension _MobileWorkbench on _WorkbenchPageState {
           Text(label,
               style: const TextStyle(color: Colors.white54, fontSize: 12)),
           const SizedBox(height: 4),
-          Text(
-            '$value 点',
-            style: TextStyle(
-                color: color, fontSize: 21, fontWeight: FontWeight.w900),
+          SizedBox(
+            width: double.infinity,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 21,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
           ),
         ],
       ),
