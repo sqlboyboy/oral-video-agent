@@ -75,6 +75,33 @@ const _mobileFallbackCoverTemplates = <Map<String, dynamic>>[
   },
 ];
 
+const _mobileBuiltInBgmTracks = <Map<String, String>>[
+  {
+    'id': 'mobile:builtin:hot-2',
+    'name': '热门bgm2',
+    'asset_path': 'assets/bgm/热门bgm2.mp3',
+    'file_name': '热门bgm2.mp3',
+  },
+  {
+    'id': 'mobile:builtin:hot-1',
+    'name': '热门bgm1',
+    'asset_path': 'assets/bgm/热门bgm1.mp3',
+    'file_name': '热门bgm1.mp3',
+  },
+  {
+    'id': 'mobile:builtin:cheerful-voice-1',
+    'name': '欢快配音1',
+    'asset_path': 'assets/bgm/欢快配音1.mp3',
+    'file_name': '欢快配音1.mp3',
+  },
+  {
+    'id': 'mobile:builtin:cheerful-bgm-2',
+    'name': '欢快背景音乐2',
+    'asset_path': 'assets/bgm/欢快背景音乐2.mp3',
+    'file_name': '欢快背景音乐2.mp3',
+  },
+];
+
 extension _MobileWorkbench on _WorkbenchPageState {
   Future<Map<String, dynamic>> _mobileVideoTemplateCatalog() {
     return _mobileVideoTemplateCatalogFuture ??=
@@ -190,6 +217,42 @@ extension _MobileWorkbench on _WorkbenchPageState {
       finalOutputVideoPath = '';
       finalVideoKey = '';
     });
+  }
+
+  Future<void> _selectMobileBuiltInBgm(Map<String, String> track) async {
+    final assetPath = track['asset_path'] ?? '';
+    final fileName = track['file_name'] ?? '';
+    final bgmId = track['id'] ?? '';
+    if (assetPath.isEmpty || fileName.isEmpty || bgmId.isEmpty) return;
+    try {
+      await _stopBgmPreview();
+      final data = await rootBundle.load(assetPath);
+      final supportDir = await getApplicationSupportDirectory();
+      final bgmDir = Directory(
+        '${supportDir.path}${Platform.pathSeparator}built_in_bgm',
+      );
+      await bgmDir.create(recursive: true);
+      final file = File('${bgmDir.path}${Platform.pathSeparator}$fileName');
+      final bytes = data.buffer.asUint8List(
+        data.offsetInBytes,
+        data.lengthInBytes,
+      );
+      if (!await file.exists() || await file.length() != bytes.length) {
+        await file.writeAsBytes(bytes, flush: true);
+      }
+      if (!mounted) return;
+      _updateMobile(() {
+        selectedBgm = bgmId;
+        mobileBgmPath = file.path;
+        mobileBgmName = track['name'] ?? fileName;
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
+        message = '已选择内置 BGM：${track['name'] ?? fileName}';
+        messageIsError = false;
+      });
+    } catch (error) {
+      showError('读取内置 BGM 失败：$error');
+    }
   }
 
   Future<String> _mobileDeviceFingerprint() async {
@@ -1052,9 +1115,22 @@ extension _MobileWorkbench on _WorkbenchPageState {
     final selected = selectedCoverTemplate == id;
     final style =
         Map<String, dynamic>.from(template['style'] as Map? ?? const {});
-    final preview = (template['preview_copy'] as List? ?? const [])
+    final templatePreview = (template['preview_copy'] as List? ?? const [])
         .map((item) => item.toString())
         .toList(growable: false);
+    final customText =
+        coverTextController.text.trim().replaceAll(RegExp(r'\s+'), '');
+    final cappedCustomText = customText.length > 14
+        ? customText.substring(0, 14)
+        : customText;
+    final splitAt = (cappedCustomText.length / 2).ceil();
+    final preview = selected && cappedCustomText.isNotEmpty
+        ? <String>[
+            cappedCustomText.substring(0, splitAt),
+            if (splitAt < cappedCustomText.length)
+              cappedCustomText.substring(splitAt),
+          ]
+        : templatePreview;
     final fill = _mobileTemplateColor(style['fill'], Colors.white);
     final keyword = _mobileTemplateColor(style['keyword_fill'], fill);
     const shadows = [
@@ -1159,6 +1235,28 @@ extension _MobileWorkbench on _WorkbenchPageState {
     );
   }
 
+  Widget _mobileBuiltInBgmPicker() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final track in _mobileBuiltInBgmTracks)
+          ChoiceChip(
+            avatar: const Icon(Icons.music_note_rounded, size: 16),
+            label: Text(track['name'] ?? ''),
+            selected: selectedBgm == track['id'],
+            onSelected: loading
+                ? null
+                : (selected) {
+                    if (selected) {
+                      _selectMobileBuiltInBgm(track);
+                    }
+                  },
+          ),
+      ],
+    );
+  }
+
   Widget _mobilePackagingControls() {
     final hasBgm = selectedBgm != 'none' && mobileBgmPath.isNotEmpty;
     final currentCover = _currentCoverPath;
@@ -1182,9 +1280,11 @@ extension _MobileWorkbench on _WorkbenchPageState {
         const Divider(height: 28),
         const Text('背景音乐', style: TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
+        _mobileBuiltInBgmPicker(),
+        const SizedBox(height: 10),
         _mobileFileBar(
           label: hasBgm ? mobileBgmName : '不使用背景音乐',
-          buttonText: hasBgm ? '更换 BGM' : '选择 BGM',
+          buttonText: '选择本地 BGM',
           onPressed: uploadBgm,
         ),
         if (hasBgm) ...[
@@ -1202,16 +1302,36 @@ extension _MobileWorkbench on _WorkbenchPageState {
           ),
           Align(
             alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              onPressed: loading
-                  ? null
-                  : () => _updateMobile(() {
-                        mobileBgmPath = '';
-                        mobileBgmName = '';
-                        selectedBgm = 'none';
-                      }),
-              icon: const Icon(Icons.delete_outline_rounded),
-              label: const Text('移除 BGM'),
+            child: Wrap(
+              spacing: 4,
+              children: [
+                TextButton.icon(
+                  onPressed: loading ? null : playBgm,
+                  icon: Icon(
+                    _isPlayingBgm
+                        ? Icons.stop_rounded
+                        : Icons.play_arrow_rounded,
+                  ),
+                  label: Text(_isPlayingBgm ? '停止试听' : '试听'),
+                ),
+                TextButton.icon(
+                  onPressed: loading
+                      ? null
+                      : () async {
+                          await _stopBgmPreview();
+                          if (!mounted) return;
+                          _updateMobile(() {
+                            mobileBgmPath = '';
+                            mobileBgmName = '';
+                            selectedBgm = 'none';
+                            finalOutputVideoPath = '';
+                            finalVideoKey = '';
+                          });
+                        },
+                  icon: const Icon(Icons.delete_outline_rounded),
+                  label: const Text('移除 BGM'),
+                ),
+              ],
             ),
           ),
         ],
@@ -1284,6 +1404,23 @@ extension _MobileWorkbench on _WorkbenchPageState {
         ),
         const SizedBox(height: 9),
         _mobileCoverTemplatePicker(),
+        const SizedBox(height: 9),
+        TextField(
+          controller: coverTextController,
+          maxLength: 14,
+          inputFormatters: [LengthLimitingTextInputFormatter(14)],
+          decoration: _mobileInputDecoration('自定义封面文字（最多 14 字）'),
+          onChanged: (_) => _updateMobile(() {
+            coverPath = '';
+            finalOutputVideoPath = '';
+            finalVideoKey = '';
+          }),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          '留空时自动使用视频标题；输入后，所选模板会使用这里的文字。',
+          style: TextStyle(color: Colors.white54, fontSize: 11),
+        ),
         const SizedBox(height: 9),
         Wrap(
           spacing: 8,

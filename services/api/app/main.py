@@ -124,8 +124,10 @@ def _subtitle_timing_tokens(audio_path: str | Path | None):
 
 
 BGM_TEMPLATE_ORDER = {
-    "宣传类口播": 0,
-    "通用类口播": 1,
+    "热门bgm2": 0,
+    "热门bgm1": 1,
+    "欢快配音1": 2,
+    "欢快背景音乐2": 3,
 }
 
 
@@ -1784,7 +1786,7 @@ def _generate_task_cover_file(
             frame_path = None
     try:
         return generate_cover_png(
-            task.video_title or task.title or "",
+            task.cover_text or task.video_title or task.title or "",
             script,
             cover_path,
             background_image_path=frame_path,
@@ -1849,6 +1851,7 @@ def generate_standalone_cover(payload: dict) -> Dict[str, str]:
 def generate_task_cover(
     task_id: str,
     template_id: str = DEFAULT_COVER_TEMPLATE,
+    cover_text: str = "",
 ) -> OralVideoTask:
     try:
         task = repo.get(task_id)
@@ -1864,6 +1867,7 @@ def generate_task_cover(
         complete_progress(task, "title")
     cover_path = storage_dir("covers") / f"{task_id}.png"
     task.cover_template_id = template_id if template_id in COVER_TEMPLATES else DEFAULT_COVER_TEMPLATE
+    task.cover_text = limit_title(" ".join(cover_text.split()), max_chars=14) or None
     _generate_task_cover_file(
         task,
         script,

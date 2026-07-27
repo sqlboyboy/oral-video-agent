@@ -811,6 +811,36 @@ def test_title_cover_and_publish_endpoints():
     assert set(published.json()["publish_results"]) == {"douyin", "xiaohongshu"}
 
 
+def test_task_cover_uses_custom_text_with_system_template():
+    task = _create_task_via_upload()
+    task_id = task["task_id"]
+    rewritten = client.post(
+        f"/api/tasks/{task_id}/rewrite",
+        json={"style": "同款口播", "source_script": "系统模板自定义封面文字测试"},
+    )
+    assert rewritten.status_code == 200
+
+    with patch("app.main.generate_cover_png") as mocked_generate:
+        def create_cover(title, script, output_path, **kwargs):
+            Path(output_path).write_bytes(b"custom-cover")
+            return Path(output_path)
+
+        mocked_generate.side_effect = create_cover
+        covered = client.post(
+            f"/api/tasks/{task_id}/cover",
+            params={
+                "template_id": "blue-white-clear",
+                "cover_text": "这是自定义封面内容",
+            },
+        )
+
+    assert covered.status_code == 200
+    covered_task = covered.json()
+    assert covered_task["cover_template_id"] == "blue-white-clear"
+    assert covered_task["cover_text"] == "这是自定义封面内容"
+    assert mocked_generate.call_args.args[0] == "这是自定义封面内容"
+
+
 def test_apply_cover_endpoint_writes_cover_to_video_first_frame(tmp_path, monkeypatch):
     video = tmp_path / "video.mp4"
     cover = tmp_path / "cover.png"
@@ -1078,19 +1108,28 @@ def test_clone_folder_voice_templates_are_listed_first(tmp_path, monkeypatch):
 
 
 def test_bgm_folder_templates_use_file_names(tmp_path, monkeypatch):
-    (tmp_path / "宣传类口播.mp3").write_bytes(b"bgm")
-    (tmp_path / "通用类口播.mp3").write_bytes(b"bgm")
+    (tmp_path / "欢快背景音乐2.mp3").write_bytes(b"bgm")
+    (tmp_path / "热门bgm1.mp3").write_bytes(b"bgm")
+    (tmp_path / "欢快配音1.mp3").write_bytes(b"bgm")
+    (tmp_path / "热门bgm2.mp3").write_bytes(b"bgm")
     monkeypatch.setattr(main_module, "bgm_templates_dir", lambda: tmp_path)
     monkeypatch.setattr(main_module.asset_store, "list", lambda kind=None: [])
 
     catalog = main_module.build_bgm_catalog()
 
     assert [item.bgm_id for item in catalog["items"]] == [
-        "template:宣传类口播.mp3",
-        "template:通用类口播.mp3",
+        "template:热门bgm2.mp3",
+        "template:热门bgm1.mp3",
+        "template:欢快配音1.mp3",
+        "template:欢快背景音乐2.mp3",
     ]
-    assert [item.name for item in catalog["items"]] == ["宣传类口播", "通用类口播"]
-    assert main_module.resolve_bgm_audio("template:宣传类口播.mp3") == tmp_path / "宣传类口播.mp3"
+    assert [item.name for item in catalog["items"]] == [
+        "热门bgm2",
+        "热门bgm1",
+        "欢快配音1",
+        "欢快背景音乐2",
+    ]
+    assert main_module.resolve_bgm_audio("template:热门bgm2.mp3") == tmp_path / "热门bgm2.mp3"
 
 
 def test_recent_custom_items_keeps_ten_recent_unique(monkeypatch):

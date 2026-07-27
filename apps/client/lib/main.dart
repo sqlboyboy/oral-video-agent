@@ -355,6 +355,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final creatorKeywordController = TextEditingController();
   final publisherNicknameController = TextEditingController();
   final publishTitleController = TextEditingController();
+  final coverTextController = TextEditingController();
   final publishBodyController = TextEditingController();
   final publishTopicsController = TextEditingController();
   final cloudApiController =
@@ -529,6 +530,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     creatorKeywordController.dispose();
     publisherNicknameController.dispose();
     publishTitleController.dispose();
+    coverTextController.dispose();
     publishBodyController.dispose();
     publishTopicsController.dispose();
     cloudApiController.dispose();
@@ -2297,6 +2299,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         currentTask['original_script'] as String? ?? '';
     rewrittenScriptController.text =
         currentTask['rewritten_script'] as String? ?? '';
+    coverTextController.text = currentTask['cover_text'] as String? ?? '';
     if (generatedVoiceKey.isNotEmpty &&
         generatedVoiceKey != _voiceKeyFor(_renderScript)) {
       _invalidateGeneratedVoice();
@@ -2345,6 +2348,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         output = null;
         outputRefresh++;
         coverPath = '';
+        coverTextController.clear();
         _invalidateGeneratedVoice();
         publishContentGeneratedKey = '';
         publishTitleController.clear();
@@ -2415,6 +2419,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
             output = null;
             outputRefresh++;
             coverPath = '';
+            coverTextController.clear();
             _invalidateGeneratedVoice();
             message = '服务器已完成抖音视频下载和口播文案提取';
             messageIsError = false;
@@ -2489,6 +2494,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         output = null;
         outputRefresh++;
         coverPath = '';
+        coverTextController.clear();
         _invalidateGeneratedVoice();
         message = '云端文案提取完成';
         messageIsError = false;
@@ -2811,6 +2817,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         generatedVideoKey = '';
         finalVideoKey = '';
         coverPath = '';
+        coverTextController.clear();
         _invalidateGeneratedVoice();
         subtitlePreviewLines = const [];
         renderedSubtitlePreviewBytes = null;
@@ -2853,6 +2860,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     if (!_ensureSoftwareActivated()) return;
     final taskId = task?['task_id'] as String?;
     final script = _renderScript;
+    final customCoverText = coverTextController.text.trim();
     if (taskId == null && script.isEmpty) {
       showError('请先生成文案后再生成封面');
       return;
@@ -2874,7 +2882,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       if (taskId != null && !taskId.startsWith('cloud-')) {
         final res = await http.post(
           Uri.parse('$apiBase/api/tasks/$taskId/cover').replace(
-            queryParameters: {'template_id': selectedCoverTemplate},
+            queryParameters: {
+              'template_id': selectedCoverTemplate,
+              'cover_text': customCoverText,
+            },
           ),
         );
         _check(res);
@@ -2895,8 +2906,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         Uri.parse('$apiBase/api/covers/generate'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
-          'title':
-              (task?['title'] as String? ?? publishTitleController.text).trim(),
+          'title': customCoverText.isNotEmpty
+              ? customCoverText
+              : (task?['title'] as String? ?? publishTitleController.text)
+                  .trim(),
           'script': script,
           'background_path': intermediateVideoPath.isNotEmpty
               ? intermediateVideoPath
@@ -2973,18 +2986,14 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     const height = 1280;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final sourceTitle = publishTitleController.text.trim().isNotEmpty
-        ? publishTitleController.text.trim()
-        : script.trim().replaceAll(RegExp(r'\s+'), '');
+    final customCoverText = coverTextController.text.trim();
+    final sourceTitle = customCoverText.isNotEmpty
+        ? customCoverText
+        : publishTitleController.text.trim().isNotEmpty
+            ? publishTitleController.text.trim()
+            : script.trim().replaceAll(RegExp(r'\s+'), '');
     final title = sourceTitle.isEmpty ? '视频标题' : sourceTitle;
-    final maxChars = switch (selectedCoverTemplate) {
-      'red-white-emphasis' => 10,
-      'blue-white-clear' => 12,
-      'offset-shadow' => 11,
-      'vertical-kaiti' => 9,
-      'bold-yellow-white' || 'green-keyword' || 'gold-kaiti' => 14,
-      _ => 15,
-    };
+    const maxChars = 14;
     final compactTitle = title.replaceAll(RegExp(r'\s+'), '');
     final cappedTitle = compactTitle.length > maxChars
         ? compactTitle.substring(0, maxChars)
@@ -3876,7 +3885,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       showError('请先选择背景音乐');
       return;
     }
-    final bgmUrl = _selectedBgmUrl;
     try {
       if (_isPlayingBgm) {
         await _stopBgmPreview();
@@ -3886,7 +3894,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       await _stopBgmPreview();
       _bgmPlayer = Player();
       setState(() => _isPlayingBgm = true);
-      final localPath = await _downloadPreviewToTempFile(bgmUrl, 'bgm');
+      final localPath = _isAndroidClient
+          ? mobileBgmPath
+          : await _downloadPreviewToTempFile(_selectedBgmUrl, 'bgm');
+      if (localPath.isEmpty || !await File(localPath).exists()) {
+        throw Exception('背景音乐文件不存在，请重新选择');
+      }
       await _bgmPlayer!.setVolume(_bgmPreviewVolume);
       await _bgmPlayer!.open(Media(_playableMediaSource(localPath)));
       await _bgmPlayer!.setVolume(_bgmPreviewVolume);
@@ -4147,6 +4160,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         mobileBgmPath = path;
         mobileBgmName = file.name;
         selectedBgm = 'mobile:custom';
+        finalOutputVideoPath = '';
+        finalVideoKey = '';
         message = '已选择背景音乐';
         messageIsError = false;
       });
@@ -6241,6 +6256,9 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           : pipTriggerController.text.trim(),
       'cover_template_id':
           generatedCoverUsesTemplate ? selectedCoverTemplate : null,
+      'cover_text': coverTextController.text.trim().isEmpty
+          ? null
+          : coverTextController.text.trim(),
       'cover_path': currentCoverPath,
     };
   }

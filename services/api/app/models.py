@@ -217,6 +217,7 @@ class OralVideoTask(BaseModel):
     video_title: Optional[str] = None
     cover_path: Optional[str] = None
     cover_template_id: str = "bold-yellow-white"
+    cover_text: Optional[str] = None
     publish_results: Dict[str, str] = Field(default_factory=dict)
     output_video_path: Optional[str] = None
     mouth_quality: Optional[MouthQualitySignals] = None
