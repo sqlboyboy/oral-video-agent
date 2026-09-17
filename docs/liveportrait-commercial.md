@@ -23,7 +23,7 @@
 后端新增 `liveportrait-commercial` 数字人引擎，前端显示为“高清模式”：
 
 - `DIGITAL_HUMAN_PROVIDER=liveportrait-commercial`
-- `LIVEPORTRAIT_REPO=<workspace>\engines\LivePortrait`
+- `LIVEPORTRAIT_REPO=<workspace>/engines\LivePortrait`
 - `LIVEPORTRAIT_PYTHON=python`
 - `LIVEPORTRAIT_DETECTOR=mediapipe`
 - 可选 `LIVEPORTRAIT_COMMAND` 挂接完成版商业适配器。

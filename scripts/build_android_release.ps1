@@ -1,5 +1,6 @@
-﻿param(
-    [string]$CloudApiBase = "https://api.example.com",
+param(
+    [string]$CloudApiBase = $env:CLOUD_API_BASE,
+    [string]$FlutterExe = "flutter",
     [string]$OutputDirectory = "",
     [int]$MinSupportedVersionCode = 3,
     [switch]$ForceUpdate,
@@ -13,11 +14,11 @@
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $clientRoot = Join-Path $repoRoot "apps\client"
-$flutter = "<workspace>\flutter\bin\flutter.bat"
+$flutter = (Get-Command $FlutterExe -ErrorAction Stop).Source
 $pubspecPath = Join-Path $clientRoot "pubspec.yaml"
 $keyPropertiesPath = Join-Path $clientRoot "android\key.properties"
 
-if (-not $CloudApiBase.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
+if ([string]::IsNullOrWhiteSpace($CloudApiBase) -or $CloudApiBase -eq "https://api.example.com" -or -not $CloudApiBase.StartsWith("https://", [StringComparison]::OrdinalIgnoreCase)) {
     throw "正式安卓包只允许使用 HTTPS 云端地址。"
 }
 if (-not (Test-Path -LiteralPath $keyPropertiesPath)) {

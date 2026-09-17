@@ -1,0 +1,12 @@
+title = "Oral Video Agent secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known non-secret database migration identifier and documented sample token"
+regexTarget = "secret"
+regexes = [
+    '''^2026\-07\-25\-duration\-billing\-v1$''',
+    '''^change-admin-token$''',
+]

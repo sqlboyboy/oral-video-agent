@@ -3,7 +3,7 @@ set -euo pipefail
 
 STAGING_DIR="${1:?Usage: deploy_android_update_backend.sh <staging-dir> [deploy-root]}"
 DEPLOY_ROOT="${2:-/opt/oral-video-agent/cloud}"
-PUBLIC_BASE_URL="https://api.example.com"
+PUBLIC_BASE_URL="${CLOUD_PUBLIC_BASE_URL:?Set CLOUD_PUBLIC_BASE_URL to your cloud API URL}"
 TIMESTAMP="$(date -u +%Y%m%d-%H%M%S)"
 
 for file in app/main.py app/settings.py app/store.py; do
