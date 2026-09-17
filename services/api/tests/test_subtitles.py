@@ -19,7 +19,7 @@ def test_subtitle_style_defaults_to_first_template():
     style = SubtitleStyle()
 
     assert style.template_id == "renovation_pitfall_yellow"
-    assert style.font_size == 64
+    assert style.font_size == 66
     assert style.max_chars_per_line == 9
     assert style.outline_width == 5
     assert style.margin_v == 510

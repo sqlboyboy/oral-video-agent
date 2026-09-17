@@ -32,20 +32,32 @@ class CreatorScriptProvider(Protocol):
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    match = re.search(r"\{.*\}", cleaned, flags=re.S)
-    if match:
-        cleaned = match.group(0)
-    try:
-        payload = json.loads(cleaned)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise RuntimeError("大模型没有返回有效 JSON") from exc
-    if not isinstance(payload, dict):
+    cleaned = str(text or "").lstrip("\ufeff").strip()
+    decoder = json.JSONDecoder()
+    candidates = re.findall(
+        r"```(?:json)?\s*(.*?)```",
+        cleaned,
+        flags=re.I | re.S,
+    )
+    candidates.append(cleaned)
+
+    found_non_object = False
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate:
+            continue
+        for start in [0, *(match.start() for match in re.finditer(r"\{", candidate))]:
+            try:
+                payload, _ = decoder.raw_decode(candidate, start)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(payload, dict):
+                return payload
+            found_non_object = True
+
+    if found_non_object:
         raise RuntimeError("大模型返回内容不是 JSON 对象")
-    return payload
+    raise RuntimeError("大模型没有返回有效 JSON")
 
 
 def _string_list(value: Any, *, limit: int = 8) -> list[str]:
@@ -307,32 +319,50 @@ class DeepSeekCreatorScriptProvider:
     def _call_json(
         self, *, system_prompt: str, user_prompt: str, max_tokens: int, temperature: float
     ) -> dict[str, Any]:
-        try:
-            response = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": False,
-                },
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-            raise RuntimeError(f"DeepSeek 请求失败：{exc}") from exc
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("DeepSeek 返回了空内容")
-        return _extract_json_object(content)
+        last_content_error: RuntimeError | None = None
+        for attempt in range(2):
+            try:
+                response = httpx.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": (
+                            temperature if attempt == 0 else min(temperature, 0.3)
+                        ),
+                        "max_tokens": max_tokens,
+                        "response_format": {"type": "json_object"},
+                        "thinking": {"type": "disabled"},
+                        "stream": False,
+                    },
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                content = choice["message"]["content"]
+                finish_reason = str(choice.get("finish_reason") or "").strip()
+            except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+                raise RuntimeError(f"DeepSeek 请求失败：{exc}") from exc
+
+            if finish_reason == "length":
+                last_content_error = RuntimeError("DeepSeek 返回内容被截断")
+            elif not isinstance(content, str) or not content.strip():
+                last_content_error = RuntimeError("DeepSeek 返回了空内容")
+            else:
+                try:
+                    return _extract_json_object(content)
+                except RuntimeError as exc:
+                    last_content_error = exc
+
+        detail = str(last_content_error or "DeepSeek 没有返回有效内容")
+        raise RuntimeError(f"{detail}，自动重试后仍未恢复")
 
     def analyze_style(self, snapshot: DouyinCreatorSnapshot) -> CreatorStyleProfile:
         source_data = {

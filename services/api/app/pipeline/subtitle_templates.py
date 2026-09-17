@@ -10,7 +10,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "强钩子、避坑清单、预算警示",
         "preview_copy": ["这3个装修坑", "千万别踩"],
         "style": {
-            "font_size": 64,
+            "font_size": 66,
             "color": "#FFFFFF",
             "outline_color": "#111111",
             "outline_width": 5,
@@ -27,7 +27,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "设计理念、案例讲解、高客单审美",
         "preview_copy": ["高级感不靠堆钱", "靠的是细节"],
         "style": {
-            "font_size": 54,
+            "font_size": 56,
             "color": "#F7F3EA",
             "outline_color": "#232323",
             "outline_width": 2,
@@ -44,7 +44,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "工艺标准、验收步骤、材料参数",
         "preview_copy": ["水电验收", "先看这4点"],
         "style": {
-            "font_size": 60,
+            "font_size": 62,
             "color": "#FFFFFF",
             "outline_color": "#0B2239",
             "outline_width": 4,
@@ -61,7 +61,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "老板观点、经营反差、加盟避坑",
         "preview_copy": ["菜品好吃", "不等于生意好"],
         "style": {
-            "font_size": 68,
+            "font_size": 70,
             "color": "#FFD82E",
             "outline_color": "#16100A",
             "outline_width": 6,
@@ -78,7 +78,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "团购价格、午市套餐、限时活动",
         "preview_copy": ["工作日午市", "只要29.9元"],
         "style": {
-            "font_size": 58,
+            "font_size": 60,
             "color": "#FFFFFF",
             "outline_color": "#6E130F",
             "outline_width": 2,
@@ -95,7 +95,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "后厨实拍、老店故事、菜品工艺",
         "preview_copy": ["这口锅气", "才是老店灵魂"],
         "style": {
-            "font_size": 56,
+            "font_size": 58,
             "color": "#FFF8E7",
             "outline_color": "#27160D",
             "outline_width": 4,
@@ -112,7 +112,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "家庭教育、方法论、反常识结论",
         "preview_copy": ["孩子学不会", "往往不是不努力"],
         "style": {
-            "font_size": 60,
+            "font_size": 62,
             "color": "#FFFFFF",
             "outline_color": "#111111",
             "outline_width": 5,
@@ -129,7 +129,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "课程知识点、教师 IP、学习规划",
         "preview_copy": ["提分关键", "是建立知识框架"],
         "style": {
-            "font_size": 54,
+            "font_size": 56,
             "color": "#F8FBFF",
             "outline_color": "#0F2841",
             "outline_width": 3,
@@ -146,7 +146,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "经典解读、修身智慧、中式美学",
         "preview_copy": ["心若安定", "万事从容"],
         "style": {
-            "font_size": 58,
+            "font_size": 60,
             "color": "#F6E7C7",
             "outline_color": "#1A1712",
             "outline_width": 2,
@@ -163,7 +163,7 @@ SUBTITLE_TEMPLATES: dict[str, dict[str, Any]] = {
         "description": "短句箴言、人物故事、情绪疗愈",
         "preview_copy": ["知止不殆", "可以长久"],
         "style": {
-            "font_size": 54,
+            "font_size": 56,
             "color": "#F8F1E2",
             "outline_color": "#241F19",
             "outline_width": 1,

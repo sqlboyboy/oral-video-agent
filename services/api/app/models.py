@@ -20,7 +20,7 @@ class TaskStatus(str, Enum):
 
 class SubtitleStyle(BaseModel):
     template_id: str = "renovation_pitfall_yellow"
-    font_size: int = Field(default=64, ge=8, le=96)
+    font_size: int = Field(default=66, ge=8, le=96)
     color: str = "#FFFFFF"
     keyword_color: Optional[str] = "#FFE23B"
     outline_color: str = "#111111"

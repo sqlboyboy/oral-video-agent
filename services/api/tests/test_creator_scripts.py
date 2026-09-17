@@ -4,6 +4,7 @@ from app import main as main_module
 from app.main import app
 from app.models import CreatorScriptCandidate, CreatorStyleProfile
 from app.providers.creator_scripts import (
+    DeepSeekCreatorScriptProvider,
     PlaceholderCreatorScriptProvider,
     _extract_json_object,
     create_creator_script_provider,
@@ -139,6 +140,78 @@ def test_json_parser_accepts_markdown_code_fence():
     result = _extract_json_object('```json\n{"items": []}\n```')
 
     assert result == {"items": []}
+
+
+def test_json_parser_accepts_wrapped_object_without_greedy_capture():
+    result = _extract_json_object(
+        '下面是结果：\n{"summary":"允许字符串包含 } 符号"}\n{"ignored":true}'
+    )
+
+    assert result == {"summary": "允许字符串包含 } 符号"}
+
+
+def test_deepseek_json_call_enforces_json_mode_and_retries_truncated_output(
+    monkeypatch,
+):
+    requests = []
+    responses = [
+        {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {"content": '{"summary":"不完整'},
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": '{"summary":"已恢复"}'},
+                }
+            ]
+        },
+    ]
+
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._body
+
+    def fake_post(*_args, **kwargs):
+        requests.append(kwargs["json"])
+        return FakeResponse(responses[len(requests) - 1])
+
+    monkeypatch.setattr("app.providers.creator_scripts.httpx.post", fake_post)
+    provider = DeepSeekCreatorScriptProvider(
+        api_key="test-key",
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.com",
+    )
+
+    result = provider._call_json(
+        system_prompt="只输出 JSON",
+        user_prompt="生成结果",
+        max_tokens=100,
+        temperature=0.9,
+    )
+
+    assert result == {"summary": "已恢复"}
+    assert len(requests) == 2
+    assert all(
+        request["response_format"] == {"type": "json_object"}
+        for request in requests
+    )
+    assert all(
+        request["thinking"] == {"type": "disabled"} for request in requests
+    )
+    assert requests[0]["temperature"] == 0.9
+    assert requests[1]["temperature"] == 0.3
 
 
 def test_format_spoken_script_removes_punctuation_and_keeps_semantic_pauses():

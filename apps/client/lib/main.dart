@@ -12,6 +12,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'cloud_upload_matcher.dart';
 import 'creator_script_lab.dart';
 
 part 'mobile.dart';
@@ -145,7 +146,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '装修',
       first: '这3个装修坑',
       second: '千万别踩',
-      fontSize: 64.0,
+      fontSize: 66.0,
       color: Color(0xFFFFFFFF),
       keywordColor: Color(0xFFFFE23B),
       outline: Color(0xFF111111),
@@ -161,7 +162,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '装修',
       first: '高级感不靠堆钱',
       second: '靠的是细节',
-      fontSize: 54.0,
+      fontSize: 56.0,
       color: Color(0xFFF7F3EA),
       keywordColor: Color(0xFFD8895B),
       outline: Color(0xFF232323),
@@ -177,7 +178,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '装修',
       first: '水电验收',
       second: '先看这4点',
-      fontSize: 60.0,
+      fontSize: 62.0,
       color: Color(0xFFFFFFFF),
       keywordColor: Color(0xFF43B8FF),
       outline: Color(0xFF0B2239),
@@ -193,7 +194,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '餐饮',
       first: '菜品好吃',
       second: '不等于生意好',
-      fontSize: 68.0,
+      fontSize: 70.0,
       color: Color(0xFFFFD82E),
       keywordColor: Color(0xFFFFFFFF),
       outline: Color(0xFF16100A),
@@ -209,7 +210,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '餐饮',
       first: '工作日午市',
       second: '只要29.9元',
-      fontSize: 58.0,
+      fontSize: 60.0,
       color: Color(0xFFFFFFFF),
       keywordColor: Color(0xFFFFE873),
       outline: Color(0xFF6E130F),
@@ -225,7 +226,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '餐饮',
       first: '这口锅气',
       second: '才是老店灵魂',
-      fontSize: 56.0,
+      fontSize: 58.0,
       color: Color(0xFFFFF8E7),
       keywordColor: Color(0xFFFFB547),
       outline: Color(0xFF27160D),
@@ -241,7 +242,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '培训',
       first: '孩子学不会',
       second: '往往不是不努力',
-      fontSize: 60.0,
+      fontSize: 62.0,
       color: Color(0xFFFFFFFF),
       keywordColor: Color(0xFFFFE042),
       outline: Color(0xFF111111),
@@ -257,7 +258,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '培训',
       first: '提分关键',
       second: '是建立知识框架',
-      fontSize: 54.0,
+      fontSize: 56.0,
       color: Color(0xFFF8FBFF),
       keywordColor: Color(0xFF59BFFF),
       outline: Color(0xFF0F2841),
@@ -273,7 +274,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '国学',
       first: '心若安定',
       second: '万事从容',
-      fontSize: 58.0,
+      fontSize: 60.0,
       color: Color(0xFFF6E7C7),
       keywordColor: Color(0xFFD9B45B),
       outline: Color(0xFF1A1712),
@@ -289,7 +290,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       industry: '国学',
       first: '知止不殆',
       second: '可以长久',
-      fontSize: 54.0,
+      fontSize: 56.0,
       color: Color(0xFFF8F1E2),
       keywordColor: Color(0xFFB6382B),
       outline: Color(0xFF241F19),
@@ -437,7 +438,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   double speechRate = 1.0;
   double voicePreviewVolume = 0.45;
   double bgmVolume = 0.35;
-  double subtitleSize = 64;
+  double subtitleSize = 66;
   bool subtitlesEnabled = true;
   String selectedSubtitleFont = 'Microsoft YaHei';
   Color subtitleColor = const Color(0xFFFFFFFF);
@@ -2640,6 +2641,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         task = body;
         output = null;
         outputRefresh++;
+        coverPath = '';
         publishContentGeneratedKey = '';
         publishTitleController.clear();
         publishBodyController.clear();
@@ -4132,12 +4134,13 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         '字号',
                         subtitleSize,
                         24,
-                        72,
+                        96,
                         (value) => updateDialog(() {
-                          subtitleSize = value;
+                          subtitleSize = value.roundToDouble();
                           selectedSubtitleTemplate = 'custom';
                         }),
                         subtitleSize.round().toString(),
+                        divisions: 72,
                       ),
                       const SizedBox(height: 12),
                       Row(
@@ -4626,9 +4629,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         throw Exception('云端没有返回素材上传链接');
       }
       final jobId = uploadJob['job_id'] as String;
+      final typedAssets = assets
+          .map((asset) => (asset as Map).cast<String, dynamic>())
+          .toList();
+      final uploadOrder = matchCloudUploadAssetOrder(
+        assets: typedAssets,
+        uploads: uploadFiles
+            .map(
+              (item) => CloudUploadDescriptor(
+                kind: item.kind,
+                fileName: item.fileName,
+              ),
+            )
+            .toList(),
+      );
       for (var index = 0; index < assets.length; index++) {
-        final asset = (assets[index] as Map).cast<String, dynamic>();
-        final uploadFile = uploadFiles[index];
+        final asset = typedAssets[index];
+        final uploadFile = uploadFiles[uploadOrder[index]];
         final upload = (asset['upload'] as Map).cast<String, dynamic>();
         final uploadSize = await uploadFile.file.length();
 
@@ -5415,8 +5432,10 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         await Process.start('explorer.exe', ['/select,', path]);
       } else if (Platform.isMacOS) {
         await Process.start('open', ['-R', path]);
-      } else {
+      } else if (Platform.isLinux) {
         await Process.start('xdg-open', [File(path).parent.path]);
+      } else {
+        showError('当前平台暂不支持定位文件，请在文件管理器中打开：$path');
       }
     } catch (e) {
       showError('打开视频失败：$e');
@@ -6773,14 +6792,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           icon: Icons.movie_creation_outlined,
           child: Column(
             children: [
-              Row(
-                children: [
-                  Expanded(child: _studioChoiceTile('单形象', '稳定生成，适合口播', true)),
-                  const SizedBox(width: 10),
-                  Expanded(child: _studioChoiceTile('多镜头', '即将开放', false)),
-                ],
-              ),
-              const SizedBox(height: 14),
               _stepButton(
                 renderingVideo ? '停止生成' : '生成数字人成品视频',
                 renderingVideo ? stopRender : render,
@@ -6864,6 +6875,18 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   Widget _studioPreviewPanel() {
     final sourceUrl = _sourceVideoUrl;
     final outputUrl = _outputVideoUrl;
+    final outputPath = _outputVideoPath;
+    final hasLocalOutput = outputPath != null &&
+        outputPath.isNotEmpty &&
+        File(outputPath).existsSync();
+    final outputLocation = outputUrl == null
+        ? '等待生成后可预览与打开所在文件夹'
+        : hasLocalOutput
+            ? outputPath
+            : '云端成品尚未下载到本机';
+    final avatarVideoUrl = studioStep == 2 && selectedDigitalHuman.isNotEmpty
+        ? _digitalHumanReferenceUrl(selectedDigitalHuman)
+        : null;
     final avatarUrl = selectedDigitalHuman.isEmpty
         ? null
         : _digitalHumanThumbnailUrl(selectedDigitalHuman);
@@ -6928,8 +6951,8 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                       ),
                     ],
                   ),
-                  child: outputUrl != null
-                      ? _OutputVideoPreview(url: outputUrl)
+                  child: outputUrl != null || avatarVideoUrl != null
+                      ? _OutputVideoPreview(url: outputUrl ?? avatarVideoUrl!)
                       : avatarUrl != null
                           ? _digitalHumanPreviewImage(avatarUrl)
                           : sourceUrl != null
@@ -6968,17 +6991,32 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        outputUrl != null ? _cloudOutputLabel : '等待生成后可预览与下载',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: studioMuted,
-                          fontSize: 10,
+                      Tooltip(
+                        message: outputLocation,
+                        child: Text(
+                          outputLocation,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: studioMuted,
+                            fontSize: 10,
+                          ),
                         ),
                       ),
                     ],
                   ),
+                ),
+                IconButton(
+                  tooltip: hasLocalOutput
+                      ? '打开视频所在文件夹'
+                      : outputUrl == null
+                          ? '视频生成后可打开所在文件夹'
+                          : '请先将云端视频下载到本机',
+                  onPressed: hasLocalOutput
+                      ? () => _openLocalVideoPath(outputPath)
+                      : null,
+                  icon: const Icon(Icons.folder_open_rounded),
+                  color: studioPrimary,
                 ),
                 IconButton(
                   tooltip: '预览成品',
@@ -7164,47 +7202,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _studioChoiceTile(String title, String subtitle, bool active) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 12),
-      decoration: BoxDecoration(
-        color: active ? const Color(0xFFF2F3FF) : const Color(0xFFF7F8FA),
-        borderRadius: BorderRadius.circular(11),
-        border: Border.all(
-          color: active ? const Color(0xFFC9CCFF) : studioBorder,
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            active ? Icons.radio_button_checked : Icons.lock_outline_rounded,
-            color: active ? studioPrimary : studioMuted,
-            size: 19,
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: const TextStyle(color: studioMuted, fontSize: 9),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -9209,20 +9206,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         children: [
           _sectionHeader('5. 数字人生成成品视频', '视频服务：', '已启动'),
           const SizedBox(height: 10),
-          Row(
-            children: [
-              _modeChip('单形象', true),
-              const SizedBox(width: 8),
-              _modeChip('多镜头', false),
-              const Spacer(),
-              Text(
-                _engineStatusText(),
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w800,
-                ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              _engineStatusText(),
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w800,
               ),
-            ],
+            ),
           ),
           const SizedBox(height: 12),
           Row(
@@ -9477,23 +9469,23 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
       (id: 'red-white-emphasis', name: '红白强调', accent: Color(0xFFFF3B30)),
       (id: 'black-white-clean', name: '黑白极简', accent: Color(0xFFFFFFFF)),
       (id: 'blue-white-clear', name: '蓝白清晰', accent: Color(0xFF35B8FF)),
-      (id: 'green-keyword', name: '荧光绿重点', accent: Color(0xFF58E36D)),
-      (id: 'orange-black-impact', name: '橙黑冲击', accent: Color(0xFFFF7A22)),
-      (id: 'purple-yellow-outline', name: '紫黄双描边', accent: Color(0xFFFFE65A)),
-      (id: 'offset-shadow', name: '黑白错位', accent: Color(0xFFFFFFFF)),
-      (id: 'gold-kaiti', name: '金色楷体', accent: Color(0xFFE7C36A)),
-      (id: 'vertical-kaiti', name: '竖排楷体', accent: Color(0xFFD9B45B)),
+      (id: 'green-keyword', name: '绿白醒目', accent: Color(0xFF58E36D)),
+      (id: 'orange-black-impact', name: '橙白醒目', accent: Color(0xFFFF7A22)),
+      (id: 'purple-yellow-outline', name: '紫黄明亮', accent: Color(0xFFFFE65A)),
+      (id: 'offset-shadow', name: '青白清爽', accent: Color(0xFF35E1E8)),
+      (id: 'gold-kaiti', name: '金白质感', accent: Color(0xFFE7C36A)),
+      (id: 'vertical-kaiti', name: '粉白活力', accent: Color(0xFFFF6FAE)),
     ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          '透明纯文字封面模板 · 10 套',
+          '横排居中上方封面 · 10 套配色',
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 4),
         const Text(
-          '选择模板后点击“按模板生成”，封面会在最终合成时写入视频第 1 帧',
+          '选择模板后点击“生成封面”，最终会写入视频第 1 帧',
           style: TextStyle(color: studioMuted, fontSize: 11),
         ),
         const SizedBox(height: 10),
@@ -9530,23 +9522,32 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
                         Container(
                           width: 42,
                           height: 62,
-                          alignment: Alignment.center,
                           decoration: BoxDecoration(
                             color: const Color(0xFF2A2C34),
                             borderRadius: BorderRadius.circular(6),
                           ),
-                          child: Text(
-                            template.id == 'vertical-kaiti' ? '口\n播' : '口播\n标题',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: template.accent,
-                              fontSize: 9,
-                              height: 1.05,
-                              fontWeight: FontWeight.w900,
-                              shadows: const [
-                                Shadow(color: Colors.black, blurRadius: 2),
-                              ],
-                            ),
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                left: 2,
+                                top: 7,
+                                right: 2,
+                                child: Text(
+                                  '口播\n标题',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: template.accent,
+                                    fontSize: 9,
+                                    height: 1.05,
+                                    fontWeight: FontWeight.w900,
+                                    shadows: const [
+                                      Shadow(
+                                          color: Colors.black, blurRadius: 2),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: 9),
@@ -10281,22 +10282,6 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     );
   }
 
-  Widget _modeChip(String text, bool active) {
-    return Container(
-      height: 38,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: active ? const Color(0xFF25315A) : panelBg2,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: active ? cyan : purpleLine.withValues(alpha: 0.55),
-        ),
-      ),
-      child: Text(text, style: const TextStyle(fontWeight: FontWeight.w900)),
-    );
-  }
-
   Widget _tab(String text, IconData icon, bool active) {
     return Container(
       height: 38,
@@ -10367,6 +10352,12 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
         'digital_human_id': digitalHumanId,
         if (version != null && version.isNotEmpty) 'v': version,
       },
+    ).toString();
+  }
+
+  String _digitalHumanReferenceUrl(String digitalHumanId) {
+    return Uri.parse('$apiBase/api/digital-humans/reference').replace(
+      queryParameters: {'digital_human_id': digitalHumanId},
     ).toString();
   }
 
@@ -10818,14 +10809,15 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           '字号',
           subtitleSize,
           24,
-          72,
+          96,
           (v) => setState(() {
-            subtitleSize = v;
+            subtitleSize = v.roundToDouble();
             selectedSubtitleTemplate = 'custom';
             finalOutputVideoPath = '';
             finalVideoKey = '';
           }),
           subtitleSize.round().toString(),
+          divisions: 72,
         ),
         const SizedBox(height: 8),
         _readonlyBox(_pipSummaryText),
@@ -11484,13 +11476,20 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     double min,
     double max,
     ValueChanged<double> onChanged,
-    String trailing,
-  ) {
+    String trailing, {
+    int? divisions,
+  }) {
     return Row(
       children: [
         SizedBox(width: 72, child: Text(label)),
         Expanded(
-          child: Slider(value: value, min: min, max: max, onChanged: onChanged),
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: divisions,
+            onChanged: onChanged,
+          ),
         ),
         SizedBox(width: 44, child: Text(trailing, textAlign: TextAlign.right)),
       ],

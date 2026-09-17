@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 from app.pipeline.cover import COVER_SIZE, COVER_TEMPLATES, generate_cover_png
 
 
-def test_cover_templates_only_draw_user_title_and_create_distinct_layouts(
+def test_cover_templates_only_change_colors_and_share_centered_upper_layout(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -20,6 +20,7 @@ def test_cover_templates_only_draw_user_title_and_create_distinct_layouts(
 
     monkeypatch.setattr(ImageDraw.ImageDraw, "text", capture_text)
     outputs: list[bytes] = []
+    text_bounds: list[tuple[int, int, int, int]] = []
     for template_id in COVER_TEMPLATES:
         output = tmp_path / f"{template_id}.png"
         generate_cover_png(
@@ -37,9 +38,25 @@ def test_cover_templates_only_draw_user_title_and_create_distinct_layouts(
                 100,
                 120,
             )
+        layout_output = tmp_path / f"{template_id}-layout.png"
+        generate_cover_png(
+            "朋友一起见证成长",
+            "",
+            layout_output,
+            template_id=template_id,
+        )
+        with Image.open(layout_output) as image:
+            bounds = image.getchannel("A").getbbox()
+            assert bounds is not None
+            text_bounds.append(bounds)
         outputs.append(output.read_bytes())
 
     assert len(set(outputs)) == len(COVER_TEMPLATES)
+    assert len(set(text_bounds)) == 1
+    left, top, right, bottom = text_bounds[0]
+    assert abs(((left + right) / 2) - (COVER_SIZE[0] / 2)) <= 12
+    assert 35 <= top < bottom <= 270
+    assert all(len(text) > 1 for text in drawn_text)
     assert "杰速口播" not in drawn_text
     assert "口播干货" not in drawn_text
     assert "让好内容更容易被看见" not in drawn_text
