@@ -1,4 +1,6 @@
 # 智能口播智能体
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 <img width="2558" height="1460" alt="image" src="private-screenshot-removed" />
 
 这个智能体主要功能是批量制作抖音的爆款视频，只需要用户做3件事，就能生成爆款视频：1、复制抖音爆款短视频链接（或者复制抖音短视频博主主页链接） 2、上传一段自己的录音 3、上传一段不说话的口播视频。智能体会生成 口播文案、克隆声音、封面、BGM、字幕、标题文案等。
@@ -198,6 +200,8 @@ cd apps/client
 - [HeyGem 接入说明](docs/digital-human-engine.md)
 
 ## 合规要求
+
+本项目原创代码采用 [MIT 许可证](LICENSE)。第三方依赖、模型权重及外部服务仍遵循各自的许可证和使用条款。
 
 - 只处理用户有权使用的视频、声音和音乐。
 - 声音克隆必须获得本人或权利人授权。
