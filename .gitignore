@@ -55,6 +55,7 @@ storage/thumbnails/*
 storage/voice_previews/*
 storage/bgm_previews/*
 storage/generated_voice_previews/*
+storage/postprocess_voice/*
 storage/models/*
 storage/experiments/*
 storage/logs/*
