@@ -1,12 +1,20 @@
+param(
+    [string]$SshHost = $env:HEYGEM_SSH_HOST,
+    [int]$SshPort = $(if ($env:HEYGEM_SSH_PORT) { [int]$env:HEYGEM_SSH_PORT } else { 22 }),
+    [string]$SshUser = "root",
+    [string]$KeyPath = $(if ($env:HEYGEM_SSH_KEY_PATH) { $env:HEYGEM_SSH_KEY_PATH } else { Join-Path $env:USERPROFILE ".ssh\oral_video_autodl" })
+)
+
 $ErrorActionPreference = "Stop"
 
-$hostName = "gpu.example.com"
-$sshPort = 22
+if ([string]::IsNullOrWhiteSpace($SshHost) -or $SshHost -eq "gpu.example.com") {
+    throw "Set -SshHost or HEYGEM_SSH_HOST to your GPU server hostname."
+}
+$hostName = $SshHost
 $heygemLocalPort = 16008
 $heygemRemotePort = 6008
 $voiceLocalPort = 16010
 $voiceRemotePort = 6010
-$keyPath = Join-Path $env:USERPROFILE ".ssh\oral_video_autodl"
 
 if (-not (Test-Path -LiteralPath $keyPath)) {
     throw "SSH key not found: $keyPath"
@@ -30,7 +38,7 @@ if (-not $existing) {
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
-            "root@$hostName"
+            "${SshUser}@$hostName"
         ) `
         -WindowStyle Hidden
     Start-Sleep -Seconds 3

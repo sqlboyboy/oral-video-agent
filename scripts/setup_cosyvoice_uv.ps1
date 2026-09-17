@@ -1,9 +1,14 @@
+param(
+    [string]$EngineRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) "engines"),
+    [string]$ModelRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) "storage\models")
+)
+
 $ErrorActionPreference = "Stop"
 
-$repo = "<workspace>\engines\CosyVoice"
-$model = "<workspace>\models\CosyVoice-300M-25Hz"
+$repo = (Join-Path $EngineRoot "CosyVoice")
+$model = (Join-Path $ModelRoot "CosyVoice-300M-25Hz")
 
-New-Item -ItemType Directory -Force -Path "<workspace>\engines", "<workspace>\models" | Out-Null
+New-Item -ItemType Directory -Force -Path $EngineRoot, $ModelRoot | Out-Null
 
 if (-not (Test-Path -LiteralPath $repo)) {
     git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git $repo

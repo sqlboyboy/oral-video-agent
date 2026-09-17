@@ -88,7 +88,7 @@ class Settings:
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     deepseek_timeout_seconds: int = _int_env("DEEPSEEK_TIMEOUT_SECONDS", 30)
-    cloud_public_base_url: str = os.getenv("CLOUD_PUBLIC_BASE_URL", "https://api.example.com").strip()
+    cloud_public_base_url: str = os.getenv("CLOUD_PUBLIC_BASE_URL", "http://127.0.0.1:18080").strip()
     object_storage_backend: str = os.getenv("OBJECT_STORAGE_BACKEND", "local").strip().lower()
     object_storage_root: Path = Path(os.getenv("OBJECT_STORAGE_ROOT", "./data/object_storage"))
     object_storage_public_base_url: str = os.getenv("OBJECT_STORAGE_PUBLIC_BASE_URL", "").strip()

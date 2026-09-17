@@ -1,1 +1,1 @@
-cache-dir = "<repo>/.uv-cache"
+cache-dir = "../../.uv-cache"

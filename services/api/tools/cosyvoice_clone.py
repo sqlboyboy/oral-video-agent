@@ -1,8 +1,8 @@
 r"""Local CosyVoice zero-shot voice clone wrapper.
 
 Expected engine layout:
-  <workspace>\engines\CosyVoice          # cloned CosyVoice repository
-  <workspace>\models\CosyVoice-300M-25Hz # downloaded model directory
+  <repo>/engines/CosyVoice          # cloned CosyVoice repository
+  <repo>/storage/models/CosyVoice-300M-25Hz # downloaded model directory
 
 The script accepts an audio or video reference. Video/audio decoding is done
 with PyAV so the main app does not require a system ffmpeg binary.
@@ -126,12 +126,12 @@ def main() -> int:
     parser.add_argument(
         "--repo",
         type=Path,
-        default=Path(os.getenv("COSYVOICE_REPO", r"<workspace>\engines\CosyVoice")),
+        default=Path(os.getenv("COSYVOICE_REPO", str(Path(__file__).resolve().parents[3] / "engines" / "CosyVoice"))),
     )
     parser.add_argument(
         "--model",
         type=Path,
-        default=Path(os.getenv("COSYVOICE_MODEL", r"<workspace>\models\CosyVoice-300M-25Hz")),
+        default=Path(os.getenv("COSYVOICE_MODEL", str(Path(__file__).resolve().parents[3] / "storage" / "models" / "CosyVoice-300M-25Hz"))),
     )
     args = parser.parse_args()
 

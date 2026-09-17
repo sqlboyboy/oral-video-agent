@@ -1,6 +1,7 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-    [string]$FlutterExe = "<workspace>\flutter\bin\flutter.bat",
+    [string]$FlutterExe = "flutter",
+    [string]$CloudApiBase = $env:CLOUD_API_BASE,
     [switch]$SkipFlutterBuild,
     [switch]$SkipInstaller
 )
@@ -18,12 +19,13 @@ $installerPath = Join-Path $RepoRoot "dist\windows-installer\OralVideoAgentSetup
 $rootInstallerPath = Join-Path $RepoRoot "dist\OralVideoAgentSetup.exe"
 
 if (-not $SkipFlutterBuild) {
-    if (-not (Test-Path -LiteralPath $FlutterExe)) {
-        throw "Flutter executable not found: $FlutterExe"
+    if ([string]::IsNullOrWhiteSpace($CloudApiBase) -or $CloudApiBase -eq "https://api.example.com") {
+        throw "Set -CloudApiBase or CLOUD_API_BASE to your own cloud API URL."
     }
+    $FlutterExe = (Get-Command $FlutterExe -ErrorAction Stop).Source
     Push-Location $clientDir
     try {
-        & $FlutterExe build windows --release --dart-define=API_BASE=http://127.0.0.1:8000
+        & $FlutterExe build windows --release --dart-define=API_BASE=http://127.0.0.1:8000 "--dart-define=CLOUD_API_BASE=$CloudApiBase"
         if ($LASTEXITCODE -ne 0) {
             throw "Flutter Windows release build failed with exit code: $LASTEXITCODE"
         }

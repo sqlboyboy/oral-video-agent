@@ -1,17 +1,9 @@
-# oral_video_agent_client
+# Oral Video Agent 客户端
 
-A new Flutter project.
+基于 Flutter 的 Windows 与 Android 客户端。
 
-## Getting Started
+- [项目介绍与快速开始](../../README.md)
+- [服务部署与账号配置](../../docs/self-hosting.md)
+- [开发与验证](../../CONTRIBUTING.md)
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Windows 使用 `codex/pc` 分支，Android 使用 `codex/android-apk-no-activation` 分支。运行前请按根目录文档配置对应 API 地址。

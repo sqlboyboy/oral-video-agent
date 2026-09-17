@@ -7,7 +7,7 @@
 | `codex/pc` | GitHub 默认分支，维护 Flutter Windows、配套本地 FastAPI、发布自动化和云端任务能力 |
 | `codex/android-apk-no-activation` | 维护 Flutter Android、移动端登录、素材与成品管理、签名 APK 和配套云端能力 |
 
-只保留这两个长期分支。原 master、iOS、Web、Harmony、旧安卓修复及历史实验分支退出维护；其已提交历史在清理前另行备份。删除分支不等于清理历史工作目录，旧目录中未提交的文件需单独整理。
+项目维护以上两个长期产品分支。请根据目标平台选择对应分支。
 
 ## 开发与同步
 
@@ -22,8 +22,8 @@
 客户端在对应分支的 `apps/client` 下执行：
 
 ```powershell
-<workspace>\flutter\bin\flutter.bat analyze lib test
-<workspace>\flutter\bin\flutter.bat test
+flutter analyze lib test
+flutter test
 ```
 
 两个后端分别在 `services/api` 和 `services/cloud` 下执行：

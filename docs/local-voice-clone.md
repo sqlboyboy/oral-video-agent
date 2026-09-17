@@ -12,8 +12,8 @@
 ## 推荐目录
 
 ```powershell
-<workspace>\engines\CosyVoice
-<workspace>\models\CosyVoice-300M-25Hz
+<workspace>/engines\CosyVoice
+<workspace>/models\CosyVoice-300M-25Hz
 ```
 
 如果你放在别的位置，启动 API 前设置：
@@ -29,7 +29,7 @@ $env:COSYVOICE_MODEL="D:\your\CosyVoice-300M-25Hz"
 
 ```env
 VOICE_PROVIDER=local-command
-VOICE_CLONE_COMMAND=uv run --python <workspace>\engines\CosyVoice\.venv\Scripts\python.exe <repo>\services\api\tools\cosyvoice_clone.py --reference {reference} --script {script} --output {output}
+VOICE_CLONE_COMMAND=uv run --python <workspace>/engines\CosyVoice\.venv\Scripts\python.exe <repo>\services\api\tools\cosyvoice_clone.py --reference {reference} --script {script} --output {output}
 ```
 
 ## uv 安装
@@ -42,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File <repo>\scripts\setup_cosyvoice_uv.ps1
 
 这个脚本会：
 
-- 下载/更新 `<workspace>\engines\CosyVoice`
+- 下载/更新 `<workspace>/engines\CosyVoice`
 - 用 `uv` 创建 Python 3.10 虚拟环境
 - 用 `uv pip` 安装 CosyVoice 依赖
 - 打印 PyTorch 和 CUDA 状态

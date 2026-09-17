@@ -35,7 +35,7 @@ Key env vars:
 
 ## Flutter Client (apps/client)
 
-**Flutter path on this machine**: `<workspace>\flutter\bin\flutter.bat`
+**Flutter path on this machine**: `flutter`
 
 ```bash
 cd apps/client

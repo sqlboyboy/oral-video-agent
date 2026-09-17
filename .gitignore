@@ -77,3 +77,21 @@ storage/subtitle_previews/
 !storage/outputs/.gitkeep
 !storage/tasks/.gitkeep
 !storage/assets/.gitkeep
+
+# Private configuration, credentials, and internal notes
+.env.*
+!**/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+**/cookies.txt
+**/storage_state.json
+/docs/codex-handoff-*.md
+/build_log*.txt
+/build_result.txt
+/pubget_*.txt
+.pub-cache/
+engines/
