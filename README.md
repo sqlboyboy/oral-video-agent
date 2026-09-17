@@ -1,5 +1,16 @@
 # 智能口播智能体
 
+## 维护分支
+
+仓库仅维护 Windows PC 和 Android 两个产品分支：
+
+| 分支 | 用途 |
+|---|---|
+| `codex/pc` | 默认分支；Windows 桌面客户端、本地 API 和配套云端服务 |
+| `codex/android-apk-no-activation` | 当前安卓产品分支；Android 客户端、签名 APK 构建和配套云端服务 |
+
+安卓构建入口为 `scripts/build_android_release.ps1`。维护与验证方式见 [分支管理说明](docs/branch-management.md)。下方早期 Windows 部署记录保留供参考，安卓默认直接连接云端服务。
+
 一个面向 Windows 的短视频口播生成工具。用户可以粘贴抖音分享链接或上传视频，系统完成文案提取、DeepSeek 仿写、声音克隆、HeyGem 数字人口型、字幕、背景音乐和最终 MP4 合成。
 
 ## 当前状态
