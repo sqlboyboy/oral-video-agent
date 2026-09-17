@@ -2,7 +2,9 @@
 
 # 智能口播智能体 · Oral Video Agent
 
-**从文案到配音、数字人和成片的开源创作工具。**
+**批量完成从文案、字幕、BGM、声音克隆、封面、发布到多平台全流程的开源短视频创作工具。**
+<img width="2558" height="1460" alt="image" src="https://github.com/user-attachments/assets/fc8ec478-d7e2-426d-b0cd-9e1c34e7e042" />
+
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Client: Flutter](https://img.shields.io/badge/Client-Flutter-02569B?logo=flutter)](apps/client)
