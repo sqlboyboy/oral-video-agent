@@ -1,6 +1,6 @@
 # 智能口播智能体：PC 与安卓技术架构
 
-> 根据本地仓库代码与部署配置整理，仅涵盖 Windows PC 和 Android。PC 以 `codex/pc` 为准，安卓以较新的 `codex/android-apk-no-activation` 为准。本文描述代码实现与部署方案，不代表已核验线上服务的实时运行状态。
+> 根据本地仓库代码与部署配置整理，仅涵盖 Windows PC 和 Android。PC 以 `pc` 为准，安卓以较新的 `Android` 为准。本文描述代码实现与部署方案，不代表已核验线上服务的实时运行状态。
 
 ## 1. 整体架构
 
@@ -30,7 +30,7 @@ flowchart TD
 
 ## 2. PC 分支：Windows 桌面端
 
-**分支：`codex/pc`**
+**分支：`pc`**
 
 ### 客户端技术
 
@@ -63,7 +63,7 @@ PC 配套 `services/api` 中的 **Python + FastAPI + Uvicorn** 服务，通过�
 
 ## 3. 安卓分支：Android 移动端
 
-**分支：`codex/android-apk-no-activation`**
+**分支：`Android`**
 
 ### 客户端技术
 

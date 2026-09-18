@@ -1,6 +1,6 @@
 # 安卓端的数据架构与软件工作流程
 
-> 依据本地 `codex/android-apk-no-activation` 分支代码整理。描述代码实现，不代表已经核验线上部署状态。
+> 依据本地 `Android` 分支代码整理。描述代码实现，不代表已经核验线上部署状态。
 
 ## 1. 整体分工
 
@@ -202,7 +202,7 @@ uploading → queued → running → completed
 
 ## 6. 代码入口
 
-以下路径均指 `codex/android-apk-no-activation` 分支中的文件：
+以下路径均指 `Android` 分支中的文件：
 
 | 路径 | 内容 |
 |---|---|

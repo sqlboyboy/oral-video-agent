@@ -51,8 +51,8 @@ flowchart LR
 
 | 分支 | 内容 | 开发入口 |
 |---|---|---|
-| [`codex/pc`](https://github.com/sqlboyboy/oral-video-agent/tree/codex/pc) | Windows 客户端、本地 API、发布模块和配套云端服务 | Flutter Windows |
-| [`codex/android-apk-no-activation`](https://github.com/sqlboyboy/oral-video-agent/tree/codex/android-apk-no-activation) | 安卓客户端、签名 APK 构建和配套云端服务 | Flutter Android |
+| [`pc`](https://github.com/sqlboyboy/oral-video-agent/tree/pc) | Windows 客户端、本地 API、发布模块和配套云端服务 | Flutter Windows |
+| [`Android`](https://github.com/sqlboyboy/oral-video-agent/tree/Android) | 安卓客户端、签名 APK 构建和配套云端服务 | Flutter Android |
 
 请从所选分支构建客户端和配套服务。共享修复按需同步，详见 [分支管理](docs/branch-management.md)。
 
@@ -70,14 +70,14 @@ flowchart LR
 Windows：
 
 ```bash
-git clone --branch codex/pc https://github.com/sqlboyboy/oral-video-agent.git
+git clone --branch pc https://github.com/sqlboyboy/oral-video-agent.git
 cd oral-video-agent
 ```
 
 安卓：
 
 ```bash
-git clone --branch codex/android-apk-no-activation https://github.com/sqlboyboy/oral-video-agent.git oral-video-agent-android
+git clone --branch Android https://github.com/sqlboyboy/oral-video-agent.git oral-video-agent-android
 cd oral-video-agent-android
 ```
 
@@ -180,7 +180,7 @@ uv run pytest tests/ -q
 本地 API 的实验性口型诊断测试需要额外的 PyTorch 环境，详见 [贡献指南](CONTRIBUTING.md)。
 
 - **Windows 安装包**：先运行 `scripts/build_windows_api_release.ps1`，再运行 `scripts/package_windows_client_release.ps1 -CloudApiBase https://api.example.com`。Flutter 需位于 PATH，也可传入 `-FlutterExe`。
-- **安卓 APK**：在安卓分支运行 `scripts/build_android_release.ps1 -CloudApiBase https://api.example.com`；正式签名配置见 [安卓发布文档](https://github.com/sqlboyboy/oral-video-agent/blob/codex/android-apk-no-activation/docs/android-release-and-updates.md)。
+- **安卓 APK**：在安卓分支运行 `scripts/build_android_release.ps1 -CloudApiBase https://api.example.com`；正式签名配置见 [安卓发布文档](https://github.com/sqlboyboy/oral-video-agent/blob/Android/docs/android-release-and-updates.md)。
 
 以上构建地址同样需要替换。仓库不包含签名私钥，也不代表已经提供可直接使用的公共云服务。
 
