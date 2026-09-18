@@ -6,4 +6,4 @@
 - [服务部署与账号配置](../../docs/self-hosting.md)
 - [开发与验证](../../CONTRIBUTING.md)
 
-Windows 使用 `codex/pc` 分支，Android 使用 `codex/android-apk-no-activation` 分支。运行前请按根目录文档配置对应 API 地址。
+Windows 使用 `pc` 分支，Android 使用 `Android` 分支。运行前请按根目录文档配置对应 API 地址。

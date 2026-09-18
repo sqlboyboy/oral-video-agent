@@ -4,14 +4,14 @@
 
 | 分支 | 职责 |
 |---|---|
-| `codex/pc` | GitHub 默认分支，维护 Flutter Windows、配套本地 FastAPI、发布自动化和云端任务能力 |
-| `codex/android-apk-no-activation` | 维护 Flutter Android、移动端登录、素材与成品管理、签名 APK 和配套云端能力 |
+| `pc` | GitHub 默认分支，维护 Flutter Windows、配套本地 FastAPI、发布自动化和云端任务能力 |
+| `Android` | 维护 Flutter Android、移动端登录、素材与成品管理、签名 APK 和配套云端能力 |
 
 项目维护以上两个长期产品分支。请根据目标平台选择对应分支。
 
 ## 开发与同步
 
-- PC 改动在 `codex/pc` 完成，安卓改动在 `codex/android-apk-no-activation` 完成。
+- PC 改动在 `pc` 完成，安卓改动在 `Android` 完成。
 - 两个分支包含各自配套后端，不把其中一个分支整体合并到另一个分支。
 - 共享后端修复按具体提交同步，并分别验证接口兼容性。
 - 发布前检查本地未提交改动；配置密钥、签名文件、生成素材和安装包不提交到源码仓库。

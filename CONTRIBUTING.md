@@ -2,8 +2,8 @@
 
 ## 选择产品分支
 
-- Windows 改动基于 `codex/pc`。
-- Android 改动基于 `codex/android-apk-no-activation`。
+- Windows 改动基于 `pc`。
+- Android 改动基于 `Android`。
 - 涉及共享后端时，说明影响的客户端和需要同步的改动。
 
 ## 提交前检查
